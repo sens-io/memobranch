@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
 import { OperationsTelemetry } from './audit.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { EncryptionManager, isConfidential, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { GitStore, type RemoteStatus } from './git-store.js';
+import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
@@ -24,6 +24,7 @@ import type {
   Sensitivity,
   VaultConfig,
 } from './types.js';
+import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
 
 export interface MemoryVaultOptions {
@@ -57,6 +58,16 @@ export interface ConsolidationResult {
   commit: string | null;
 }
 
+interface ErasureIntent {
+  version: 1;
+  id: string;
+  path: string;
+  scope: Scope;
+  createdAt: string;
+  requestedAt: string;
+  actor: Actor;
+}
+
 export class MemoryVault {
   readonly root: string;
   readonly git: GitStore;
@@ -67,6 +78,7 @@ export class MemoryVault {
   private readonly journalKey: string | undefined;
   private activeTransaction: VaultTransaction | null = null;
   private activePermission: Permission | null = null;
+  private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
 
   constructor(root = process.cwd(), options: MemoryVaultOptions | LlmClient = {}) {
     this.root = resolve(root);
@@ -82,38 +94,40 @@ export class MemoryVault {
   async initialize(name = basename(this.root)): Promise<{ created: boolean; commit: string | null }> {
     authorize(this.principal, 'maintain');
     await mkdir(this.root, { recursive: true });
-    const configPath = join(this.root, 'agent-memory.json');
-    if (existsSync(configPath)) {
-      await this.config();
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const configPath = join(this.root, 'agent-memory.json');
+      if (existsSync(configPath)) {
+        await this.config();
+        await this.git.initialize();
+        return { created: false, commit: null };
+      }
+      const timestamp = nowIso();
+      const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
+      await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
       await this.git.initialize();
-      return { created: false, commit: null };
-    }
-    const timestamp = nowIso();
-    const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
-    await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
-    await this.git.initialize();
-    const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
-    this.activeTransaction = transaction;
-    this.activePermission = 'maintain';
-    let ready = false;
-    let commit: string | null;
-    try {
-      await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
-      await this.installAgentInstructions();
-      await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
-      await this.rebuildGenerated(config);
-      await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
-      ready = true;
-      commit = await transaction.commit();
-    } catch (error) {
-      if (!ready) await transaction.rollback();
-      throw error;
-    } finally {
-      this.activeTransaction = null;
-      this.activePermission = null;
-    }
-    await this.reindex(false);
-    return { created: true, commit };
+      const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
+      this.activeTransaction = transaction;
+      this.activePermission = 'maintain';
+      let ready = false;
+      let commit: string | null;
+      try {
+        await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
+        await this.installAgentInstructions();
+        await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
+        await this.rebuildGenerated(config);
+        await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
+        ready = true;
+        commit = await transaction.commit();
+      } catch (error) {
+        if (!ready) await transaction.rollback();
+        throw error;
+      } finally {
+        this.activeTransaction = null;
+        this.activePermission = null;
+      }
+      await this.reindex(false);
+      return { created: true, commit };
+    });
   }
 
   async config(): Promise<VaultConfig> {
@@ -196,6 +210,7 @@ export class MemoryVault {
 
   async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
     this.assertInitialized();
+    await this.config();
     authorize(this.principal, 'write');
     const evidence = await this.requireById<EvidenceMeta>('evidence', evidenceId);
     const proposals = await this.llm.extractMemories(evidence.body, { scope: evidence.meta.scope, sensitivity: evidence.meta.sensitivity });
@@ -218,6 +233,7 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     const normalizedEvidence: string[] = [];
+    const evidenceRestrictions: Array<{ scope: Scope; sensitivity: Sensitivity }> = [];
     for (const path of evidence) {
       const absolute = resolveInside(this.root, path);
       if (!existsSync(absolute)) throw new AgentMemoryError('NOT_FOUND', `Evidence path does not exist: ${path}`);
@@ -226,14 +242,16 @@ export class MemoryVault {
       const source = await this.readDocument<Record<string, unknown>>(rootPath);
       if (source.meta.type !== 'evidence' || source.meta.immutable !== true) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance is not immutable evidence: ${path}`);
       normalizedEvidence.push(rootPath);
+      evidenceRestrictions.push({ scope: scopeOf(source.meta), sensitivity: sensitivityOf(source.meta) });
     }
     const mutation = await this.withMutation('write', actor, 'propose', `memory: ${logDetail}`, async () => {
       const created: Array<{ id: string; path: string }> = [];
       const duplicates: string[] = [];
       for (const proposal of proposals) {
-        validateProposal(proposal, config.limits.maxContentCharacters);
-        authorize(this.principal, 'write', { scope: proposal.scope, sensitivity: proposal.sensitivity, tenantId: config.tenantId });
-        const signature = `${proposal.scope}\0${proposal.kind}\0${proposal.key}\0${proposal.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
+        const constrained = constrainToEvidence(proposal, evidenceRestrictions);
+        validateProposal(constrained, config.limits.maxContentCharacters);
+        authorize(this.principal, 'write', { scope: constrained.scope, sensitivity: constrained.sensitivity, tenantId: config.tenantId });
+        const signature = `${constrained.scope}\0${constrained.kind}\0${constrained.key}\0${constrained.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
         const id = `cand-${shortId(signature)}`;
         const path = `candidates/${id}.md`;
         if (existsSync(resolveInside(this.root, path))) {
@@ -247,20 +265,20 @@ export class MemoryVault {
           type: 'memory-candidate',
           createdAt: timestamp,
           updatedAt: timestamp,
-          kind: proposal.kind,
-          key: proposal.key.trim(),
-          scope: proposal.scope,
-          sensitivity: proposal.sensitivity,
-          confidence: proposal.confidence,
-          explicit: proposal.explicit,
+          kind: constrained.kind,
+          key: constrained.key.trim(),
+          scope: constrained.scope,
+          sensitivity: constrained.sensitivity,
+          confidence: constrained.confidence,
+          explicit: constrained.explicit,
           status: 'pending',
           evidence: unique(normalizedEvidence),
-          conditions: unique(proposal.conditions),
-          tags: unique(proposal.tags),
-          ...(proposal.expiresAt ? { expiresAt: proposal.expiresAt } : {}),
+          conditions: unique(constrained.conditions),
+          tags: unique(constrained.tags),
+          ...(constrained.expiresAt ? { expiresAt: constrained.expiresAt } : {}),
           conflictsWith: [],
         };
-        await this.writeDocument({ path, meta, body: candidateBody(meta, proposal.statement) });
+        await this.writeDocument({ path, meta, body: candidateBody(meta, constrained.statement) });
         created.push({ id, path });
       }
       if (created.length > duplicates.length) await this.appendLog('propose', actor, `source=${safeLogToken(logDetail)}; count=${created.length - duplicates.length}`);
@@ -320,7 +338,7 @@ export class MemoryVault {
         }
         const enoughConfidence = candidate.meta.confidence >= config.minimumConfidence;
         const enoughEvidence = candidate.meta.kind !== 'procedure' || unique(candidate.meta.evidence).length >= config.minimumProcedureEvidence;
-        if (!candidate.meta.explicit && (!enoughConfidence || !enoughEvidence)) {
+        if (!enoughEvidence || (!candidate.meta.explicit && !enoughConfidence)) {
           result.deferred.push(candidate.meta.id);
           continue;
         }
@@ -384,6 +402,23 @@ export class MemoryVault {
       candidate.meta.rejectionReason = reason.trim();
       candidate.meta.updatedAt = nowIso();
       await this.writeDocument(candidate);
+      const memories = (await this.readDirectory<MemoryMeta>('wiki')).filter((memory) =>
+        memory.meta.type === 'memory' && memory.meta.status === 'conflicted' &&
+        memory.meta.scope === candidate.meta.scope && memory.meta.kind === candidate.meta.kind &&
+        normalizeKey(memory.meta.key) === normalizeKey(candidate.meta.key));
+      const remaining = (await this.readDirectory<CandidateMeta>('candidates')).filter((other) =>
+        other.meta.id !== candidate.meta.id && other.meta.status === 'pending' &&
+        other.meta.scope === candidate.meta.scope && other.meta.kind === candidate.meta.kind &&
+        normalizeKey(other.meta.key) === normalizeKey(candidate.meta.key));
+      if (remaining.length === 0) {
+        for (const memory of memories) {
+          memory.meta.status = 'active';
+          memory.meta.updatedAt = candidate.meta.updatedAt;
+          memory.meta.validatedAt = candidate.meta.updatedAt;
+          memory.meta.revision += 1;
+          await this.writeDocument(memory);
+        }
+      }
       await this.appendLog('reject', actor, `${candidateId}; reason-recorded=true`);
     });
     return { commit: mutation.commit };
@@ -409,35 +444,36 @@ export class MemoryVault {
 
   async erase(selector: string, reason: string, actor: Actor = this.principal): Promise<{ memoryId: string; keyErased: boolean; commit: string | null }> {
     this.assertInitialized();
+    const config = await this.config();
     authorize(this.principal, 'admin');
     if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'An erasure reason is required');
-    const memory = await this.findOneMemory(selector);
-    if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
-    const id = memory.meta.id;
-    const mutation = await this.withMutation('admin', actor, 'erase', `memory: cryptographically erase ${safeLogToken(id)}`, async () => {
-      const tombstone = {
-        id,
-        type: 'memory-erased',
+    authorize(this.principal, 'admin', { tenantId: config.tenantId });
+    return this.telemetry.operation('erase', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      await this.git.initialize();
+      await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
+      const memory = await this.findOneMemory(selector);
+      if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
+      const intent: ErasureIntent = {
+        version: 1,
+        id: memory.meta.id,
+        path: memory.path,
         scope: memory.meta.scope,
-        sensitivity: 'internal',
-        status: 'revoked',
         createdAt: memory.meta.createdAt,
-        updatedAt: nowIso(),
-        erasedAt: nowIso(),
-        reasonRecorded: true,
+        requestedAt: nowIso(),
+        actor,
       };
-      await this.writeManaged(memory.path, serializeMarkdown(tombstone, `# Erased memory ${id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
-      await this.appendLog('erase', actor, `${id}; cryptographic-erasure=true`);
-      return id;
-    }, [id]);
-    const keyErased = await this.encryption.erase(id);
-    await this.telemetry.gauge('wrapped_keys_last_erasure', keyErased ? 1 : 0);
-    return { memoryId: mutation.value, keyErased, commit: mutation.commit };
+      await this.persistErasureIntent(intent);
+      const commit = await this.completeErasureIntentLocked(intent);
+      await this.telemetry.gauge('wrapped_keys_last_erasure', 1);
+      return { memoryId: intent.id, keyErased: true, commit };
+    }), [selector]);
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
     this.assertInitialized();
-    authorize(this.principal, 'read');
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
     for (const directory of ['wiki', 'candidates', 'evidence']) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
       if (found && found.meta.type !== 'memory-erased') return found;
@@ -474,7 +510,16 @@ export class MemoryVault {
 
   async context(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
     const config = await this.config();
-    const resident = await readFile(join(this.root, 'MEMORY.md'), 'utf8');
+    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki'))
+      .filter((memory) => memory.meta.type === 'memory' && memory.meta.status === 'active')
+      .filter((memory) => !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now())
+      .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
+      .filter((memory) => memory.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
+      .filter((memory) => memory.meta.sensitivity !== 'secret' || options.includeSecret === true)
+      .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
+      .slice(0, config.residentBudget);
+    const residentLines = residentMemories.map((memory) => `- [${memory.meta.key}](${memory.path}): ${candidateStatement(memory.body)}`);
+    const resident = ['# Resident memory', '', ...(residentLines.length ? residentLines : ['_No authorized resident memories._'])].join('\n');
     const hits = await this.search(query, options);
     const sections = hits.map((hit) => `## [${hit.path}]\n${hit.snippet}`);
     const context = `${resident.trim()}\n\n# Retrieved memory\n\n${sections.join('\n\n')}`;
@@ -492,6 +537,7 @@ export class MemoryVault {
     await this.config();
     return this.telemetry.operation('recover', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       const result = await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
       if (result.rolledBack.length || result.replayed.length) {
         try { await this.reconcileAfterSync(); } catch (error) {
           if (!(error instanceof AgentMemoryError && error.code === 'CONFIG_VERSION_UNSUPPORTED')) throw error;
@@ -526,16 +572,33 @@ export class MemoryVault {
     this.assertInitialized();
     authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_configure', this.principal, async () => {
+      if (remote) validateRemote(remote.name, remote.url);
       const current = await this.config();
-      if (remote) await this.git.configureRemote(remote.name, remote.url);
-      if (!remote && current.remote) await this.git.removeRemote(current.remote.name);
-      const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
-        const next = { ...(await this.config()), remote };
-        await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
-        await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
-        return Boolean(remote);
-      });
-      return { configured: mutation.value, commit: mutation.commit };
+      const snapshots = new Map<string, string | null>();
+      let remoteChanged = false;
+      try {
+        const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
+          for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
+            snapshots.set(name, await this.git.getRemoteUrl(name));
+          }
+          remoteChanged = true;
+          if (remote) await this.git.configureRemote(remote.name, remote.url);
+          if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
+          const next = { ...(await this.config()), remote };
+          await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+          await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
+          return Boolean(remote);
+        });
+        return { configured: mutation.value, commit: mutation.commit };
+      } catch (error) {
+        if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
+          for (const [name, url] of snapshots) {
+            if (url) await this.git.configureRemote(name, url);
+            else await this.git.removeRemote(name);
+          }
+        }
+        throw error;
+      }
     });
   }
 
@@ -587,16 +650,18 @@ export class MemoryVault {
         ...(version === undefined ? {} : { configVersion: version }),
         git,
         index: { healthy: false, documents: 0, error: 'Index validation skipped because configuration is invalid' },
+        evidence: { healthy: false, errors: ['Evidence validation skipped because configuration is invalid'] },
         recovery: { pending },
         configuration: { healthy: false, error: error.message },
       };
     }
-    const [evidence, candidates, memories, git, pending] = await Promise.all([
+    const [evidence, candidates, memories, git, pending, evidenceIntegrity] = await Promise.all([
       this.readDirectory<EvidenceMeta>('evidence'),
       this.readDirectory<CandidateMeta>('candidates'),
       this.readDirectory<MemoryMeta>('wiki').then((documents) => documents.filter((document) => document.meta.type === 'memory')),
       this.git.integrity(),
       pendingTransactionCount(this.root),
+      this.verifyEvidenceIntegrity(),
     ]);
     const documents = [...evidence, ...candidates, ...memories];
     const known = new Set(documents.map((document) => document.path));
@@ -620,7 +685,7 @@ export class MemoryVault {
     } catch (error) {
       indexHealth = { healthy: false, documents: 0, error: error instanceof Error ? error.message : String(error) };
     }
-    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy;
+    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy && evidenceIntegrity.errors.length === 0;
     return {
       healthy,
       counts: { evidence: evidence.length, candidates: candidates.length, activeMemories: memories.filter((item) => item.meta.status === 'active').length },
@@ -632,6 +697,7 @@ export class MemoryVault {
       configVersion: config.version,
       git,
       index: indexHealth,
+      evidence: { healthy: evidenceIntegrity.errors.length === 0, errors: evidenceIntegrity.errors },
       recovery: { pending },
       configuration: { healthy: true },
     };
@@ -639,7 +705,8 @@ export class MemoryVault {
 
   async history(limit = 20, path?: string): Promise<Array<Record<string, string>>> {
     this.assertInitialized();
-    authorize(this.principal, 'read');
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
     const safePath = path ? toPosix(relative(this.root, resolveInside(this.root, path))) : undefined;
     return this.git.history(Math.max(1, Math.min(limit, 100)), safePath);
   }
@@ -649,6 +716,11 @@ export class MemoryVault {
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
       await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
+      const evidenceIntegrity = await this.verifyEvidenceIntegrity();
+      if (evidenceIntegrity.errors.length > 0) {
+        throw new AgentMemoryError('VALIDATION_FAILED', 'Immutable evidence failed integrity validation', { errors: evidenceIntegrity.errors.slice(0, 20) });
+      }
       const transaction = await VaultTransaction.begin(this.root, this.git, actor, message, this.journalKey);
       this.activeTransaction = transaction;
       this.activePermission = permission;
@@ -673,7 +745,11 @@ export class MemoryVault {
   }
 
   private searchIndex(config: VaultConfig): PersistentSearchIndex {
-    return new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    const signature = JSON.stringify({ index: config.index, limits: config.limits });
+    if (this.cachedSearchIndex?.signature === signature) return this.cachedSearchIndex.value;
+    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    this.cachedSearchIndex = { signature, value };
+    return value;
   }
 
   private async reconcileAfterSync(): Promise<void> {
@@ -694,6 +770,115 @@ export class MemoryVault {
       this.activePermission = null;
     }
     await this.searchIndex(await this.config()).refresh();
+  }
+
+  private async persistErasureIntent(intent: ErasureIntent): Promise<void> {
+    await writeText(this.erasureIntentPath(intent.id), `${JSON.stringify(intent, null, 2)}\n`);
+  }
+
+  private async remoteConfigMatches(expected: VaultConfig['remote']): Promise<boolean> {
+    try {
+      const actual = (await readVaultConfig(this.root)).remote;
+      return JSON.stringify(actual) === JSON.stringify(expected);
+    } catch {
+      return false;
+    }
+  }
+
+  private async recoverErasureIntentsLocked(): Promise<string[]> {
+    const directory = join(this.root, '.amem', 'erasures');
+    if (!existsSync(directory)) return [];
+    const completed: string[] = [];
+    for (const name of (await readdir(directory)).filter((entry) => entry.endsWith('.json')).sort()) {
+      let intent: ErasureIntent;
+      try {
+        intent = JSON.parse(await readFile(join(directory, name), 'utf8')) as ErasureIntent;
+        if (intent.version !== 1 || !intent.id || !intent.path || !intent.scope || !intent.createdAt || !intent.actor?.id) throw new Error('Malformed erasure intent');
+        resolveInside(this.root, intent.path);
+      } catch (error) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', `Invalid erasure intent: ${name}`, {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await this.completeErasureIntentLocked(intent);
+      completed.push(intent.id);
+    }
+    return completed;
+  }
+
+  private async completeErasureIntentLocked(intent: ErasureIntent): Promise<string | null> {
+    await this.encryption.erase(intent.id);
+    if (await this.encryption.hasKey(intent.id)) {
+      throw new AgentMemoryError('ENCRYPTION_FAILED', `Unable to destroy the wrapped key for ${intent.id}`);
+    }
+    const transaction = await VaultTransaction.begin(this.root, this.git, intent.actor, `memory: cryptographically erase ${safeLogToken(intent.id)}`, this.journalKey);
+    this.activeTransaction = transaction;
+    this.activePermission = 'admin';
+    let ready = false;
+    try {
+      const timestamp = nowIso();
+      const tombstone = {
+        id: intent.id,
+        type: 'memory-erased',
+        scope: intent.scope,
+        sensitivity: 'internal',
+        status: 'revoked',
+        createdAt: intent.createdAt,
+        updatedAt: timestamp,
+        erasedAt: timestamp,
+        reasonRecorded: true,
+      };
+      await this.writeManaged(intent.path, serializeMarkdown(tombstone, `# Erased memory ${intent.id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
+      await this.appendLog('erase', intent.actor, `${intent.id}; cryptographic-erasure=true`);
+      await this.rebuildGenerated(await this.config());
+      ready = true;
+      const commit = await transaction.commit();
+      await rm(this.erasureIntentPath(intent.id), { force: true });
+      return commit;
+    } catch (error) {
+      if (!ready) await transaction.rollback();
+      throw error;
+    } finally {
+      this.activeTransaction = null;
+      this.activePermission = null;
+    }
+  }
+
+  private erasureIntentPath(id: string): string {
+    return join(this.root, '.amem', 'erasures', `${safeLogToken(id)}.json`);
+  }
+
+  private async verifyEvidenceIntegrity(): Promise<{ errors: string[] }> {
+    const errors: string[] = [];
+    for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+      const path = toPosix(relative(this.root, file));
+      try {
+        const outer = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+        let document: MarkdownDocument<Record<string, unknown>>;
+        if (isEncryptedEnvelope(outer.meta)) {
+          // A process without the master key cannot inspect confidential evidence,
+          // but it also cannot use the cache as authority. Git cleanliness still
+          // protects the encrypted envelope until a keyed doctor run verifies AEAD.
+          if (!this.encryption.available) continue;
+          const logical = await this.encryption.decrypt<Record<string, unknown>>(outer.meta, outer.body);
+          document = { path, meta: logical.meta, body: logical.body };
+        } else {
+          document = { path, meta: outer.meta, body: outer.body };
+        }
+        const id = typeof document.meta.id === 'string' ? document.meta.id : '';
+        const prefix = `# Evidence ${id}\n\n`;
+        if (document.meta.type !== 'evidence' || document.meta.immutable !== true || !id || !document.body.startsWith(prefix)) {
+          errors.push(`${path}: invalid evidence schema`);
+          continue;
+        }
+        const sourceUri = typeof document.meta.sourceUri === 'string' ? document.meta.sourceUri : '';
+        const digest = sha256(`${scopeOf(document.meta)}\0${sourceUri}\0${document.body.slice(prefix.length)}`);
+        if (document.meta.sha256 !== digest || id !== `ev-${digest.slice(0, 12)}`) errors.push(`${path}: evidence hash mismatch`);
+      } catch (error) {
+        errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { errors };
   }
 
   private async validateManagedState(): Promise<void> {
@@ -762,8 +947,8 @@ export class MemoryVault {
   }
 
   private async rebuildGenerated(config: VaultConfig): Promise<void> {
-    const memories = existsSync(join(this.root, 'wiki')) ? (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory') : [];
-    const candidates = existsSync(join(this.root, 'candidates')) ? await this.readDirectory<CandidateMeta>('candidates') : [];
+    const memories = existsSync(join(this.root, 'wiki')) ? (await this.readProjectionDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory') : [];
+    const candidates = existsSync(join(this.root, 'candidates')) ? await this.readProjectionDirectory<CandidateMeta>('candidates') : [];
     const now = Date.now();
     const safeMemories = memories.filter((memory) => !isConfidential(memory.meta.sensitivity));
     const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now));
@@ -823,6 +1008,8 @@ export class MemoryVault {
   }
 
   private async readDocument<T extends object>(rootPath: string): Promise<MarkdownDocument<T>> {
+    const config = await readVaultConfig(this.root);
+    assertTenant(this.principal, config.tenantId);
     const normalized = toPosix(relative(this.root, resolveInside(this.root, rootPath)));
     const parsed = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, normalized), 'utf8'));
     const scope = scopeOf(parsed.meta);
@@ -838,6 +1025,18 @@ export class MemoryVault {
       return { path: normalized, meta: logical.meta, body: logical.body };
     }
     return { path: normalized, meta: parsed.meta as T, body: parsed.body };
+  }
+
+  private async readProjectionDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
+    const documents: Array<MarkdownDocument<T>> = [];
+    for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+      const path = toPosix(relative(this.root, file));
+      const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+      // Confidential documents are excluded before their body is used by generated
+      // projections, so the minimal envelope is sufficient and needs no key.
+      documents.push({ path, meta: parsed.meta as T, body: parsed.body });
+    }
+    return documents;
   }
 
   private async readDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
@@ -884,6 +1083,18 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
   if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
   if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
   if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
+}
+
+function constrainToEvidence(
+  proposal: ProposedMemory,
+  evidence: Array<{ scope: Scope; sensitivity: Sensitivity }>,
+): ProposedMemory {
+  if (evidence.length === 0) return proposal;
+  const maximumScope = evidence.reduce((current, item) => Math.min(current, scopes.indexOf(item.scope)), scopes.length - 1);
+  const minimumSensitivity = evidence.reduce((current, item) => Math.max(current, sensitivities.indexOf(item.sensitivity)), 0);
+  const scope = scopes[Math.min(scopes.indexOf(proposal.scope), maximumScope)] ?? evidence[0]!.scope;
+  const sensitivity = sensitivities[Math.max(sensitivities.indexOf(proposal.sensitivity), minimumSensitivity)] ?? evidence[0]!.sensitivity;
+  return { ...proposal, scope, sensitivity };
 }
 
 function candidateBody(meta: CandidateMeta, statement: string): string {

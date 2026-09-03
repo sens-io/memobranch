@@ -12,7 +12,7 @@ export interface Principal extends Actor {
   tenantId?: string;
 }
 
-const sensitivityRank: Record<Sensitivity, number> = {
+export const sensitivityRank: Record<Sensitivity, number> = {
   public: 0,
   internal: 1,
   sensitive: 2,

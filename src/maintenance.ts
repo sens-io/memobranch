@@ -81,8 +81,9 @@ export class MaintenanceService {
         return;
       }
       if (request.url === '/healthz') {
+        const unavailable = Boolean(this.lastError) || !this.lastResult || this.lastResult.doctor.healthy !== true;
         const payload = {
-          status: this.lastError ? 'degraded' : 'ok',
+          status: unavailable ? 'unavailable' : 'ok',
           running: Boolean(this.running),
           lastFinishedAt: this.lastResult?.finishedAt ?? null,
           configuration: this.lastResult?.doctor.configuration ?? null,
@@ -92,7 +93,7 @@ export class MaintenanceService {
           maintenance: this.lastResult ? { startedAt: this.lastResult.startedAt, finishedAt: this.lastResult.finishedAt } : null,
           error: this.lastError?.toJSON().error ?? null,
         };
-        response.writeHead(this.lastError ? 503 : 200, { 'content-type': 'application/json; charset=utf-8' });
+        response.writeHead(unavailable ? 503 : 200, { 'content-type': 'application/json; charset=utf-8' });
         response.end(`${JSON.stringify(payload)}\n`);
         return;
       }
@@ -123,7 +124,16 @@ export class MaintenanceService {
     this.timer = null;
     this.watchers = [];
     this.server = null;
-    if (this.running) await this.running.catch(() => undefined);
+    this.vault.llm.cancelPending();
+    if (this.running) {
+      await Promise.race([
+        this.running.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 5_000);
+          timeout.unref();
+        }),
+      ]);
+    }
     await rm(this.leasePath, { force: true });
   }
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { open, readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { readVaultConfig } from './config.js';
 import { isConfidential, isEncryptedEnvelope } from './encryption.js';
@@ -9,7 +9,7 @@ import { canAccess, localAdminPrincipal, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
-const INDEX_VERSION = 2 as const;
+const INDEX_VERSION = 3 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
 
 export interface IndexedDocument {
@@ -25,6 +25,9 @@ export interface IndexedDocument {
   status?: string;
   expiresAt?: string;
   contentHash: string;
+  sourceSize: number;
+  sourceMtimeMs: number;
+  cacheHash: string;
 }
 
 interface StoredIndex {
@@ -76,6 +79,7 @@ export type SecureDocumentReader = (relativePath: string) => Promise<MarkdownDoc
 export class PersistentSearchIndex {
   private readonly indexPath: string;
   private readonly embeddingPath: string;
+  private trustedIndex: StoredIndex | null = null;
 
   constructor(
     readonly root: string,
@@ -88,12 +92,16 @@ export class PersistentSearchIndex {
   }
 
   async refresh(options: { semantic?: boolean } = {}): Promise<ReindexResult> {
-    const rebuilt = !(await this.indexIsValid());
+    let rebuilt = !(await this.indexIsValid());
     const files = await listMarkdown(join(this.root, 'wiki'));
     if (files.length > this.config.index.maxDocuments) {
       throw new Error(`Vault contains ${files.length} documents; configured index maximum is ${this.config.index.maxDocuments}`);
     }
-    const previous = await this.readIndex();
+    let previous = await this.readIndex();
+    if (!rebuilt && !this.trustedIndex && !(await this.health()).healthy) {
+      rebuilt = true;
+      previous = { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
+    }
     const byPath = new Map(previous.documents.map((document) => [document.path, document]));
     const documents: IndexedDocument[] = [];
     let updated = 0;
@@ -101,6 +109,12 @@ export class PersistentSearchIndex {
     for (const file of files) {
       const relativePath = toPosix(relative(this.root, file));
       try {
+        const source = await stat(file);
+        const cached = byPath.get(relativePath);
+        if (cached?.sourceSize === source.size && cached.sourceMtimeMs === source.mtimeMs) {
+          documents.push(cached);
+          continue;
+        }
         const outer = await readOuterMeta(file);
         const sensitivity = sensitivityOf(outer);
         if (isConfidential(sensitivity) || isEncryptedEnvelope(outer)) {
@@ -109,12 +123,12 @@ export class PersistentSearchIndex {
         }
         const raw = await readFile(file, 'utf8');
         const contentHash = sha256(raw);
-        const cached = byPath.get(relativePath);
         if (cached?.contentHash === contentHash) {
-          documents.push(cached);
+          documents.push(withSourceState(cached, source.size, source.mtimeMs));
+          updated += 1;
           continue;
         }
-        documents.push(indexDocument(relativePath, raw, contentHash));
+        documents.push(indexDocument(relativePath, raw, contentHash, source.size, source.mtimeMs));
         updated += 1;
       } catch {
         // Malformed files are omitted here and reported by doctor.
@@ -123,7 +137,8 @@ export class PersistentSearchIndex {
     const currentPaths = new Set(documents.map((document) => document.path));
     const removed = previous.documents.filter((document) => !currentPaths.has(document.path)).length;
     const index: StoredIndex = { version: INDEX_VERSION, updatedAt: new Date().toISOString(), documents };
-    await writeText(this.indexPath, `${JSON.stringify(index)}\n`);
+    if (rebuilt || updated > 0 || removed > 0) await writeText(this.indexPath, `${JSON.stringify(index)}\n`);
+    this.trustedIndex = index;
 
     let semanticStatus: ReindexResult['semanticStatus'] = 'disabled';
     if (options.semantic && this.config.index.embeddingModel) {
@@ -140,12 +155,11 @@ export class PersistentSearchIndex {
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult> {
     const principal = options.principal ?? localAdminPrincipal();
     let semanticStatus: SearchResult['semanticStatus'] = 'disabled';
-    const refreshed = await this.refresh(options.semantic === undefined ? {} : { semantic: options.semantic });
+    const refreshed = await this.ensureTrusted(Boolean(options.semantic));
     semanticStatus = refreshed.semanticStatus;
-    const index = await this.readIndex();
+    const index = this.trustedIndex!;
     const documents = index.documents.filter((document) =>
-      isActive(document) && canAccess(principal, document.scope, document.sensitivity) && selectedArea(document.path, options),
-    );
+      isActive(document) && canAccess(principal, document.scope, document.sensitivity) && selectedArea(document.path, options));
     documents.push(...(await this.loadEphemeralSelected(principal, options)));
 
     const queryTerms = tokenize(query);
@@ -191,19 +205,22 @@ export class PersistentSearchIndex {
       }
     }
 
-    const hits = selected.slice(0, limit).map(({ document, score, lexicalScore, semanticScore }) => ({
-      path: document.path,
-      id: document.id,
-      title: document.title,
-      kind: document.kind,
-      scope: document.scope,
-      sensitivity: document.sensitivity,
-      score: Number(score.toFixed(4)),
-      lexicalScore: Number(lexicalScore.toFixed(4)),
-      semanticScore: Number(semanticScore.toFixed(4)),
-      snippet: makeSnippet(document.body, queryTerms),
-      links: document.links,
-      backlinks: backlinkMap.get(document.path) ?? [],
+    const hits = await Promise.all(selected.slice(0, limit).map(async ({ document, score, lexicalScore, semanticScore }) => {
+      return {
+        path: document.path,
+        id: document.id,
+        title: document.title,
+        kind: document.kind,
+        scope: document.scope,
+        sensitivity: document.sensitivity,
+        ...(document.status ? { status: document.status } : {}),
+        score: Number(score.toFixed(4)),
+        lexicalScore: Number(lexicalScore.toFixed(4)),
+        semanticScore: Number(semanticScore.toFixed(4)),
+        snippet: makeSnippet(document.body, queryTerms),
+        links: document.links,
+        backlinks: backlinkMap.get(document.path) ?? [],
+      };
     }));
     return { hits, semanticStatus, indexRebuilt: refreshed.rebuilt };
   }
@@ -217,15 +234,29 @@ export class PersistentSearchIndex {
         const outer = await readOuterMeta(file);
         if (isConfidential(sensitivityOf(outer)) || isEncryptedEnvelope(outer)) continue;
         const raw = await readFile(file, 'utf8');
-        expected.set(toPosix(relative(this.root, file)), sha256(raw));
+        const source = await stat(file);
+        const path = toPosix(relative(this.root, file));
+        expected.set(path, JSON.stringify(indexDocument(path, raw, sha256(raw), source.size, source.mtimeMs)));
       } catch {
         return { healthy: false, documents: index.documents.length, error: 'A canonical Wiki document is malformed' };
       }
     }
-    if (expected.size !== index.documents.length || index.documents.some((document) => expected.get(document.path) !== document.contentHash)) {
+    if (expected.size !== index.documents.length || index.documents.some((document) => expected.get(document.path) !== JSON.stringify(document))) {
       return { healthy: false, documents: index.documents.length, error: 'Search index is stale' };
     }
     return { healthy: true, documents: index.documents.length };
+  }
+
+  private async ensureTrusted(semantic: boolean): Promise<ReindexResult> {
+    if (this.trustedIndex && !semantic) {
+      return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
+    }
+    if (!this.trustedIndex && await this.indexIsValid()) {
+      const health = await this.health();
+      if (health.healthy) this.trustedIndex = await this.readIndex();
+    }
+    if (!this.trustedIndex || semantic) return this.refresh(semantic ? { semantic: true } : {});
+    return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
   }
 
   private async loadEphemeralSelected(principal: Principal, options: SearchOptions): Promise<IndexedDocument[]> {
@@ -244,7 +275,7 @@ export class PersistentSearchIndex {
         if (!canAccess(principal, scope, sensitivity)) continue;
         const logical = await this.secureReader(relativePath);
         const raw = `---\nplaceholder: true\n---\n${logical.body}`;
-        documents.push(indexParts(relativePath, logical.meta, logical.body, sha256(raw)));
+        documents.push(indexParts(relativePath, logical.meta, logical.body, sha256(raw), 0, 0));
       } catch {
         // Authorization and key failures do not reveal the document through search.
       }
@@ -292,10 +323,8 @@ export class PersistentSearchIndex {
   private async readIndex(): Promise<StoredIndex> {
     if (!existsSync(this.indexPath)) return { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
     try {
-      const value = JSON.parse(await readFile(this.indexPath, 'utf8')) as StoredIndex;
-      return value.version === INDEX_VERSION && Array.isArray(value.documents)
-        ? value
-        : { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
+      const value = JSON.parse(await readFile(this.indexPath, 'utf8')) as unknown;
+      return isStoredIndex(value) ? value : { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
     } catch {
       return { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
     }
@@ -304,8 +333,7 @@ export class PersistentSearchIndex {
   private async indexIsValid(): Promise<boolean> {
     if (!existsSync(this.indexPath)) return false;
     try {
-      const value = JSON.parse(await readFile(this.indexPath, 'utf8')) as Partial<StoredIndex>;
-      return value.version === INDEX_VERSION && Array.isArray(value.documents);
+      return isStoredIndex(JSON.parse(await readFile(this.indexPath, 'utf8')) as unknown);
     } catch {
       return false;
     }
@@ -331,18 +359,18 @@ export async function searchVault(root: string, query: string, options: SearchOp
   return (await index.search(query, { ...options, principal: options.principal ?? localAdminPrincipal() })).hits;
 }
 
-function indexDocument(relativePath: string, raw: string, contentHash: string): IndexedDocument {
+function indexDocument(relativePath: string, raw: string, contentHash: string, sourceSize: number, sourceMtimeMs: number): IndexedDocument {
   const parsed = parseMarkdown<Record<string, unknown>>(raw);
-  return indexParts(relativePath, parsed.meta, parsed.body, contentHash);
+  return indexParts(relativePath, parsed.meta, parsed.body, contentHash, sourceSize, sourceMtimeMs);
 }
 
-function indexParts(relativePath: string, meta: Record<string, unknown>, body: string, contentHash: string): IndexedDocument {
+function indexParts(relativePath: string, meta: Record<string, unknown>, body: string, contentHash: string, sourceSize: number, sourceMtimeMs: number): IndexedDocument {
   const title = titleFromBody(body, relativePath);
   const links = extractMarkdownLinks(body)
     .map((target) => resolveLink(relativePath, target))
     .filter((target): target is string => target !== null);
   const tags = Array.isArray(meta.tags) ? meta.tags.filter((value): value is string => typeof value === 'string') : [];
-  return {
+  const document: Omit<IndexedDocument, 'cacheHash'> = {
     path: relativePath,
     id: typeof meta.id === 'string' ? meta.id : relativePath,
     title,
@@ -355,7 +383,40 @@ function indexParts(relativePath: string, meta: Record<string, unknown>, body: s
     ...(typeof meta.status === 'string' ? { status: meta.status } : {}),
     ...(typeof meta.expiresAt === 'string' ? { expiresAt: meta.expiresAt } : {}),
     contentHash,
+    sourceSize,
+    sourceMtimeMs,
   };
+  return { ...document, cacheHash: sha256(JSON.stringify(document)) };
+}
+
+function withSourceState(document: IndexedDocument, sourceSize: number, sourceMtimeMs: number): IndexedDocument {
+  const { cacheHash: _cacheHash, ...rest } = document;
+  const updated = { ...rest, sourceSize, sourceMtimeMs };
+  return { ...updated, cacheHash: sha256(JSON.stringify(updated)) };
+}
+
+function isStoredIndex(value: unknown): value is StoredIndex {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const index = value as Partial<StoredIndex>;
+  if (index.version !== INDEX_VERSION || typeof index.updatedAt !== 'string' || !Array.isArray(index.documents)) return false;
+  return index.documents.every((document) => {
+    if (!document || typeof document !== 'object') return false;
+    const candidate = document as Partial<IndexedDocument>;
+    if (
+      typeof candidate.path !== 'string' || !candidate.path.startsWith('wiki/') ||
+      typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || typeof candidate.kind !== 'string' ||
+      !['user', 'project', 'team', 'public'].includes(String(candidate.scope)) ||
+      !['public', 'internal', 'sensitive', 'secret'].includes(String(candidate.sensitivity)) ||
+      typeof candidate.body !== 'string' || !Array.isArray(candidate.terms) || candidate.terms.some((term) => typeof term !== 'string') ||
+      !Array.isArray(candidate.links) || candidate.links.some((link) => typeof link !== 'string') ||
+      typeof candidate.contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.contentHash) ||
+      typeof candidate.sourceSize !== 'number' || !Number.isFinite(candidate.sourceSize) || candidate.sourceSize < 0 ||
+      typeof candidate.sourceMtimeMs !== 'number' || !Number.isFinite(candidate.sourceMtimeMs) ||
+      typeof candidate.cacheHash !== 'string'
+    ) return false;
+    const { cacheHash, ...payload } = candidate as IndexedDocument;
+    return cacheHash === sha256(JSON.stringify(payload));
+  });
 }
 
 async function readOuterMeta(file: string): Promise<Record<string, unknown>> {
@@ -463,7 +524,7 @@ function sensitivityOf(meta: Record<string, unknown>): Sensitivity {
 }
 
 function isActive(document: IndexedDocument): boolean {
-  if (['revoked', 'superseded', 'rejected'].includes(document.status ?? '')) return false;
+  if (['revoked', 'superseded', 'rejected', 'conflicted'].includes(document.status ?? '')) return false;
   return !document.expiresAt || Date.parse(document.expiresAt) > Date.now();
 }
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { AgentMemoryError } from './errors.js';
 
@@ -66,6 +66,7 @@ export function resolveInside(root: string, requested = '.'): string {
 export async function withFileLock<T>(lockPath: string, action: () => Promise<T>, timeoutMs = 5_000): Promise<T> {
   await mkdir(dirname(lockPath), { recursive: true });
   const deadline = Date.now() + Math.max(1, timeoutMs);
+  const ownerToken = randomUUID();
   let handle;
   for (;;) {
     try {
@@ -82,21 +83,20 @@ export async function withFileLock<T>(lockPath: string, action: () => Promise<T>
     }
   }
   try {
-    await handle.writeFile(`${process.pid}\n${nowIso()}\n`, 'utf8');
+    await handle.writeFile(`${JSON.stringify({ version: 1, pid: process.pid, ownerToken, createdAt: nowIso() })}\n`, 'utf8');
     return await action();
   } finally {
     await handle.close();
-    await rm(lockPath, { force: true });
+    if (await lockBelongsTo(lockPath, ownerToken)) await rm(lockPath, { force: true });
   }
 }
 
 async function isStaleLock(lockPath: string): Promise<boolean> {
   try {
-    const [pidLine = '', timestampLine = ''] = (await readFile(lockPath, 'utf8')).split('\n');
-    const timestamp = Date.parse(timestampLine);
-    if (Number.isFinite(timestamp) && Date.now() - timestamp > 30_000) return true;
-    const pid = Number(pidLine);
-    if (!Number.isInteger(pid) || pid <= 0) return true;
+    const raw = await readFile(lockPath, 'utf8');
+    const parsed = parseLock(raw);
+    if (!parsed) return Date.now() - (await stat(lockPath)).mtimeMs > 30_000;
+    const pid = parsed.pid;
     try {
       process.kill(pid, 0);
       return false;
@@ -105,6 +105,26 @@ async function isStaleLock(lockPath: string): Promise<boolean> {
     }
   } catch {
     return true;
+  }
+}
+
+function parseLock(raw: string): { pid: number; ownerToken?: string } | null {
+  try {
+    const value = JSON.parse(raw) as { pid?: unknown; ownerToken?: unknown };
+    if (!Number.isInteger(value.pid) || Number(value.pid) <= 0) return null;
+    return { pid: Number(value.pid), ...(typeof value.ownerToken === 'string' ? { ownerToken: value.ownerToken } : {}) };
+  } catch {
+    const [pidLine = ''] = raw.split('\n');
+    const pid = Number(pidLine);
+    return Number.isInteger(pid) && pid > 0 ? { pid } : null;
+  }
+}
+
+async function lockBelongsTo(lockPath: string, ownerToken: string): Promise<boolean> {
+  try {
+    return parseLock(await readFile(lockPath, 'utf8'))?.ownerToken === ownerToken;
+  } catch {
+    return false;
   }
 }
 

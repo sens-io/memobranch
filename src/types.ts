@@ -133,6 +133,7 @@ export interface SearchHit {
   kind: string;
   scope?: Scope;
   sensitivity?: Sensitivity;
+  status?: string;
   score: number;
   snippet: string;
   links: string[];
@@ -156,6 +157,7 @@ export interface DoctorReport {
   configVersion?: number;
   git?: { healthy: boolean; head: string | null; dirty: boolean; error?: string };
   index?: { healthy: boolean; documents: number; error?: string };
+  evidence?: { healthy: boolean; errors: string[] };
   recovery?: { pending: number };
   configuration?: { healthy: boolean; error?: string };
 }
