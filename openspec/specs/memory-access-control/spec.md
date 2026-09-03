@@ -3,9 +3,7 @@
 ## Purpose
 
 Define authoritative identity, pre-access authorization, envelope encryption, and auditable cryptographic erasure.
-
 ## Requirements
-
 ### Requirement: Server identity is authoritative
 The MCP server MUST derive principal identity and permissions from server configuration and MUST NOT accept actor identity or permissions from tool arguments.
 
@@ -41,3 +39,17 @@ An administrator SHALL be able to destroy the local wrapped data key for an encr
 #### Scenario: Administrator erases an encrypted memory
 - **WHEN** an authorized administrator confirms cryptographic erasure
 - **THEN** current and historical ciphertext can no longer be decrypted with the vault key store, normal retrieval returns no record, and the audit entry identifies the record ID but not its plaintext
+
+### Requirement: Derived knowledge preserves provenance restrictions
+An extracted or proposed memory that cites evidence MUST NOT have a broader scope or lower sensitivity than that evidence, regardless of model output.
+
+#### Scenario: Model attempts to downgrade secret evidence
+- **WHEN** an extractor returns a public candidate from secret evidence
+- **THEN** the persisted candidate remains secret and no plaintext enters Git or generated artifacts
+
+### Requirement: Every read is tenant-bound
+Every document, history, resident-context, search, and answer operation MUST validate the configured vault tenant before returning or sending content.
+
+#### Scenario: Principal belongs to another tenant
+- **WHEN** a principal with otherwise sufficient permissions calls get, history, context, or answer
+- **THEN** the request fails with an authorization error before content is returned or sent to a provider

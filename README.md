@@ -445,11 +445,11 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 | 1,000 文档索引性能门禁 | ✅ PASS |
 | npm package dry-run | ✅ PASS |
 | 依赖漏洞审计 | ✅ 0 known vulnerabilities |
-| OpenSpec strict validation | ✅ 7 / 7 items |
+| OpenSpec strict validation | ✅ 6 / 6 specs |
 
 测试覆盖权限与租户拒绝、LLM 机密降级、机密信封与可恢复擦除、事务回滚/重放、长时活锁、索引篡改、证据改写、冲突闭环、CJK 检索、热查询、provider 超时/取消/响应上限、远端配置补偿、同步失败回滚，以及维护服务端点与优雅关闭。
 
-规格与归档记录位于 [`openspec/`](./openspec)，本轮独立审计修复及验证证据见 [`production-audit-remediation`](./openspec/changes/production-audit-remediation)。
+规格与归档记录位于 [`openspec/`](./openspec)，本轮独立审计修复及验证证据见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)。
 
 ## 🧱 威胁模型与边界
 

@@ -3,9 +3,7 @@
 ## Purpose
 
 Define reliable one-shot and daemon maintenance, lifecycle controls, health reporting, and bounded observability.
-
 ## Requirements
-
 ### Requirement: Maintenance is available as one-shot and daemon execution
 The system SHALL run recovery, expiry processing, incremental reindexing, health checks, and configured synchronization as an idempotent maintenance cycle, either once or on a bounded interval.
 
@@ -37,3 +35,17 @@ The service SHALL expose a JSON health snapshot and Prometheus-compatible metric
 #### Scenario: Metrics endpoint is requested
 - **WHEN** an operator calls `/metrics`
 - **THEN** it receives bounded counters and gauges without memory bodies, keys, source URIs, credentials, or unbounded record IDs
+
+### Requirement: HTTP health reflects doctor health
+The health endpoint MUST return an unavailable status when the latest completed doctor result is unhealthy, the cycle failed, or no completed health snapshot is available.
+
+#### Scenario: The latest doctor run is unhealthy
+- **WHEN** a health request follows a completed doctor cycle that reported an integrity failure
+- **THEN** the endpoint returns an unavailable status and does not claim the service is healthy
+
+### Requirement: Provider work is bounded and cancellable
+Maintenance shutdown MUST cancel pending provider requests and complete within a configured bound without leaking credentials or partial managed state.
+
+#### Scenario: Shutdown interrupts a pending provider request
+- **WHEN** maintenance stops while a provider request is still waiting
+- **THEN** the request is cancelled and shutdown completes within the configured bound
