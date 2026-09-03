@@ -471,7 +471,7 @@ export class MemoryVault {
       const commit = await this.completeErasureIntentLocked(intent);
       await this.telemetry.gauge('wrapped_keys_last_erasure', 1);
       return { memoryId: intent.id, keyErased: true, commit };
-    }), [`selector-sha256:${sha256(selector).slice(0, 16)}`]);
+    }), [auditSelector(selector)]);
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
@@ -1127,6 +1127,10 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
 
 function isCanonicalDocumentPath(path: string): boolean {
   return path.endsWith('.md') && ['evidence/', 'candidates/', 'wiki/'].some((prefix) => path.startsWith(prefix));
+}
+
+function auditSelector(selector: string): string {
+  return /^mem-[a-f0-9]{12}$/.test(selector) ? selector : `selector-sha256:${sha256(selector).slice(0, 16)}`;
 }
 
 function constrainToEvidence(
