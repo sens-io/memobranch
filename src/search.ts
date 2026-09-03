@@ -3,9 +3,10 @@ import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { readVaultConfig } from './config.js';
 import { isConfidential, isEncryptedEnvelope } from './encryption.js';
+import { assertEvidenceDocument } from './evidence.js';
 import type { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
-import { canAccess, localAdminPrincipal, type Principal } from './policy.js';
+import { assertTenant, canAccess, localAdminPrincipal, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
@@ -156,6 +157,7 @@ export class PersistentSearchIndex {
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult> {
     const principal = options.principal ?? localAdminPrincipal();
+    assertTenant(principal, this.config.tenantId);
     let semanticStatus: SearchResult['semanticStatus'] = 'disabled';
     const refreshed = await this.ensureTrusted(Boolean(options.semantic));
     semanticStatus = refreshed.semanticStatus;
@@ -361,11 +363,18 @@ export class PersistentSearchIndex {
 
 export async function searchVault(root: string, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
   const config = await readVaultConfig(root);
+  const principal = options.principal ?? localAdminPrincipal();
+  assertTenant(principal, config.tenantId);
   const index = new PersistentSearchIndex(root, config, undefined, async (relativePath) => {
     const parsed = parseMarkdown<Record<string, unknown>>(await readFile(join(root, relativePath), 'utf8'));
-    return { path: relativePath, meta: parsed.meta, body: parsed.body };
+    if (isConfidential(sensitivityOf(parsed.meta)) || isEncryptedEnvelope(parsed.meta)) {
+      throw new Error('Confidential documents require a keyed vault reader');
+    }
+    const document = { path: relativePath, meta: parsed.meta, body: parsed.body };
+    if (relativePath.startsWith('evidence/')) assertEvidenceDocument(document);
+    return document;
   });
-  return (await index.search(query, { ...options, principal: options.principal ?? localAdminPrincipal() })).hits;
+  return (await index.search(query, { ...options, principal })).hits;
 }
 
 function indexDocument(relativePath: string, raw: string, contentHash: string, sourceSize: number, sourceMtimeMs: number): IndexedDocument {

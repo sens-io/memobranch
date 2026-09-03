@@ -158,6 +158,7 @@ export interface DoctorReport {
   git?: { healthy: boolean; head: string | null; dirty: boolean; error?: string };
   index?: { healthy: boolean; documents: number; error?: string };
   evidence?: { healthy: boolean; errors: string[] };
+  documents?: { healthy: boolean; errors: string[] };
   recovery?: { pending: number };
   configuration?: { healthy: boolean; error?: string };
 }

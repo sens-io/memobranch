@@ -11,11 +11,12 @@ test('MCP server negotiates, lists tools, and calls the vault', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amem-mcp-test-'));
   const vault = new MemoryVault(root);
   await vault.initialize('mcp-test');
+  const tenantId = (await vault.config()).tenantId;
   const client = new Client({ name: 'memobranch-test', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['--import', 'tsx', join(process.cwd(), 'src', 'mcp.ts'), root],
-    env: { ...process.env, AMEM_PERMISSIONS: 'read,write,maintain', AMEM_MAX_SENSITIVITY: 'internal', AMEM_ACTOR_ID: 'server-test', AMEM_ACTOR_NAME: 'Server Test' },
+    env: { ...process.env, AMEM_PERMISSIONS: 'read,write,maintain', AMEM_MAX_SENSITIVITY: 'internal', AMEM_TENANT_ID: tenantId, AMEM_ACTOR_ID: 'server-test', AMEM_ACTOR_NAME: 'Server Test' },
     stderr: 'pipe',
   });
   try {

@@ -81,6 +81,7 @@ test('policy rejects unauthorized scope without a managed or Git change', async 
 
 test('authorization filters secret graph neighbors before expansion and snippets', async () => {
   const admin = await freshVault({ masterKey });
+  const config = await admin.config();
   await admin.propose({ kind: 'fact', key: 'graph secret', statement: 'NEBULA SECRET PAYLOAD', scope: 'project', sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [] });
   await admin.consolidate();
   const [secret] = await admin.search('NEBULA SECRET PAYLOAD', { includeSecret: true });
@@ -89,7 +90,7 @@ test('authorization filters secret graph neighbors before expansion and snippets
   await mkdir(publicDirectory, { recursive: true });
   const timestamp = new Date().toISOString();
   await writeFile(join(publicDirectory, 'bridge.md'), serializeMarkdown({ id: 'public-bridge', type: 'memory', createdAt: timestamp, updatedAt: timestamp, validatedAt: timestamp, kind: 'fact', key: 'public bridge', scope: 'public', sensitivity: 'public', confidence: 1, status: 'active', evidence: [], conditions: [], tags: [], revision: 1 }, `# public bridge\n\nPublic information. See [restricted neighbor](/${secret.path}).`));
-  const restricted: Principal = { id: 'reader', name: 'Public reader', permissions: ['read'], scopes: ['public'], maxSensitivity: 'internal' };
+  const restricted: Principal = { id: 'reader', name: 'Public reader', permissions: ['read'], scopes: ['public'], maxSensitivity: 'internal', tenantId: config.tenantId };
   const reader = new MemoryVault(admin.root, { principal: restricted });
   const bridge = await reader.search('public bridge', { includeSecret: true, expandLinks: true });
   assert.deepEqual(bridge.map((hit) => hit.id), ['public-bridge']);
