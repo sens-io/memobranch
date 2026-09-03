@@ -35,6 +35,6 @@
 
 ## 6. Release evidence
 
-- [ ] 6.1 Add CI release gates.
-- [ ] 6.2 Run build, full tests, coverage, dependency audit, package dry-run, and diff checks.
-- [ ] 6.3 Record current package identity, commit-bound verification evidence, and remaining non-goals.
+- [x] 6.1 Add CI release gates.
+- [x] 6.2 Run build, full tests, coverage, dependency audit, package dry-run, and diff checks.
+- [x] 6.3 Record current package identity, commit-bound verification evidence, and remaining non-goals.
