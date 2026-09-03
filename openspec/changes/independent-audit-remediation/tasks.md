@@ -3,7 +3,7 @@
 ## 1. Specify and reproduce
 
 - [x] 1.1 Record all seven independent findings as fail-closed requirements.
-- [ ] 1.2 Add boundary regressions for multi-process stale-lock recovery, plaintext remote secrets, evidence sensitivity downgrade, cross-process revocation, confidential Git metadata, tenant omission, and erasure reason commitment.
+- [x] 1.2 Add boundary regressions for multi-process stale-lock recovery, plaintext remote secrets, evidence sensitivity downgrade, cross-process revocation, confidential Git metadata, tenant omission, and erasure reason commitment.
 
 ## 2. Concurrency and retrieval
 
@@ -12,11 +12,11 @@
 
 ## 3. Confidentiality and identity
 
-- [ ] 3.1 Reject plaintext confidential documents at canonical read and synchronization boundaries.
-- [ ] 3.2 Bind evidence sensitivity into capture identity and verify evidence on every direct read.
-- [ ] 3.3 Remove confidential keys from Git paths and commit messages; redact non-admin history subjects.
-- [ ] 3.4 Require tenant binding for all non-admin principals.
-- [ ] 3.5 Persist a SHA-256 erasure-reason commitment and handle legacy intents truthfully.
+- [x] 3.1 Reject plaintext confidential documents at canonical read and synchronization boundaries.
+- [x] 3.2 Bind evidence sensitivity into capture identity and verify evidence on every direct read.
+- [x] 3.3 Remove confidential keys from Git paths and commit messages; redact non-admin history subjects.
+- [x] 3.4 Require tenant binding for all non-admin principals.
+- [x] 3.5 Persist a SHA-256 erasure-reason commitment and handle legacy intents truthfully.
 
 ## 4. Release evidence
 
