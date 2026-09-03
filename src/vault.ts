@@ -471,7 +471,7 @@ export class MemoryVault {
       const commit = await this.completeErasureIntentLocked(intent);
       await this.telemetry.gauge('wrapped_keys_last_erasure', 1);
       return { memoryId: intent.id, keyErased: true, commit };
-    }), [selector]);
+    }), [`selector-sha256:${sha256(selector).slice(0, 16)}`]);
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {

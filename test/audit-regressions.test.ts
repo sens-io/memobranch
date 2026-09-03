@@ -196,12 +196,14 @@ test('successful erasure commits only a digest of the normalized reason', async 
   await vault.consolidate();
   const memory = (await vault.search('ERASURE_DIGEST_PAYLOAD_994A', { includeSecret: true }))[0]!;
   const reason = '  legal deletion request 2026-09  ';
-  await vault.erase(memory.id, reason);
+  await vault.erase('digest erasure target', reason);
   const raw = await readFile(join(vault.root, memory.path), 'utf8');
   const tombstone = parseMarkdown<Record<string, unknown>>(raw);
   assert.equal(tombstone.meta.reasonRecorded, true);
   assert.equal(tombstone.meta.reasonSha256, sha256(reason.trim()));
   assert.doesNotMatch(raw, /legal deletion request 2026-09/);
+  const audit = await readFile(join(vault.root, '.amem', 'audit.jsonl'), 'utf8');
+  assert.doesNotMatch(audit, /digest erasure target|legal deletion request 2026-09/);
 });
 
 test('index metadata tampering is unhealthy and cannot lower canonical authorization', async () => {
