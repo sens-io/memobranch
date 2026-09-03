@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
 import { LlmClient } from '../src/llm.js';
@@ -13,6 +15,7 @@ import { withFileLock } from '../src/utils.js';
 
 const roots: string[] = [];
 const masterKey = '51'.repeat(32);
+const exec = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -205,6 +208,85 @@ test('explicit procedures still require the configured evidence threshold', asyn
   assert.deepEqual((await vault.consolidate()).deferred, [candidate.id]);
 });
 
+test('credential-bearing URL variants are rejected before config or Git changes', async () => {
+  const vault = await freshVault();
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  for (const url of [
+    'https://example.test/repo.git?X-Amz-Signature=SECRET123',
+    'https://example.test/repo.git#credential=SECRET123',
+    'ghp_SECRET123@example.test:org/repo.git',
+  ]) {
+    await assert.rejects(vault.configureRemote({ name: 'origin', url, branch: 'main', push: false }), remoteInvalid);
+  }
+  assert.equal((await vault.config()).remote, null);
+  assert.equal(await vault.git.getRemoteUrl('origin'), null);
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('failed remote configuration restores Git and tracked configuration together', async () => {
+  const vault = await freshVault();
+  const remote = await mkdtemp(join(tmpdir(), 'memobranch-config-remote-'));
+  roots.push(remote);
+  await exec('git', ['init', '--bare', remote]);
+  const configure = vault.git.configureRemote.bind(vault.git);
+  vault.git.configureRemote = async (name, url) => {
+    await configure(name, url);
+    throw new Error('simulated post-config failure');
+  };
+  await assert.rejects(vault.configureRemote({ name: 'origin', url: remote, branch: 'main', push: false }), /simulated post-config failure/);
+  vault.git.configureRemote = configure;
+  assert.equal((await vault.config()).remote, null);
+  assert.equal(await vault.git.getRemoteUrl('origin'), null);
+});
+
+test('invalid remote fast-forward is rolled back to the exact pre-sync revision', async () => {
+  const { vault, remote, clone } = await remoteFixture();
+  await mkdir(join(clone, 'wiki', 'project', 'fact'), { recursive: true });
+  await writeFile(join(clone, 'wiki', 'project', 'fact', 'malformed.md'), '---\nid: malformed\ntype: memory\n---\n# malformed\n');
+  await exec('git', ['add', 'wiki/project/fact/malformed.md'], { cwd: clone });
+  await exec('git', ['commit', '-m', 'remote: malformed state'], { cwd: clone });
+  await exec('git', ['push', 'origin', 'main'], { cwd: clone });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.sync({ push: false }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(existsSync(join(vault.root, 'wiki', 'project', 'fact', 'malformed.md')), false);
+  assert.ok(remote);
+});
+
+test('push failure after a remote pull restores local history and managed files', async () => {
+  const { vault, clone } = await remoteFixture();
+  await writeFile(join(clone, 'log.md'), `${await readFile(join(clone, 'log.md'), 'utf8')}\nREMOTE_PUSH_FAILURE_CANARY\n`);
+  await exec('git', ['add', 'log.md'], { cwd: clone });
+  await exec('git', ['commit', '-m', 'remote: update before push failure'], { cwd: clone });
+  await exec('git', ['push', 'origin', 'main'], { cwd: clone });
+  await vault.git.run(['remote', 'set-url', '--add', '--push', 'origin', join(tmpdir(), `missing-push-${Date.now()}`)]);
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  const log = await readFile(join(vault.root, 'log.md'), 'utf8');
+  await assert.rejects(vault.sync({ push: true }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_TRANSPORT');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(await readFile(join(vault.root, 'log.md'), 'utf8'), log);
+});
+
+async function remoteFixture(): Promise<{ vault: MemoryVault; remote: string; clone: string }> {
+  const remote = await mkdtemp(join(tmpdir(), 'memobranch-audit-remote-'));
+  roots.push(remote);
+  await exec('git', ['init', '--bare', remote]);
+  const vault = await freshVault();
+  await vault.configureRemote({ name: 'origin', url: remote, branch: 'main', push: false });
+  await vault.sync({ push: true });
+  const cloneParent = await mkdtemp(join(tmpdir(), 'memobranch-audit-clone-'));
+  roots.push(cloneParent);
+  const clone = join(cloneParent, 'clone');
+  await exec('git', ['clone', remote, clone]);
+  await exec('git', ['config', 'user.name', 'Audit remote'], { cwd: clone });
+  await exec('git', ['config', 'user.email', 'audit@example.test'], { cwd: clone });
+  return { vault, remote, clone };
+}
+
 function authorizationDenied(error: unknown): boolean {
   return error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED';
+}
+
+function remoteInvalid(error: unknown): boolean {
+  return error instanceof AgentMemoryError && error.code === 'REMOTE_INVALID';
 }

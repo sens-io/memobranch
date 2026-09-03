@@ -5,7 +5,7 @@ import { OperationsTelemetry } from './audit.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { EncryptionManager, isConfidential, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { GitStore, type RemoteStatus } from './git-store.js';
+import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
@@ -571,16 +571,33 @@ export class MemoryVault {
     this.assertInitialized();
     authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_configure', this.principal, async () => {
+      if (remote) validateRemote(remote.name, remote.url);
       const current = await this.config();
-      if (remote) await this.git.configureRemote(remote.name, remote.url);
-      if (!remote && current.remote) await this.git.removeRemote(current.remote.name);
-      const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
-        const next = { ...(await this.config()), remote };
-        await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
-        await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
-        return Boolean(remote);
-      });
-      return { configured: mutation.value, commit: mutation.commit };
+      const snapshots = new Map<string, string | null>();
+      let remoteChanged = false;
+      try {
+        const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
+          for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
+            snapshots.set(name, await this.git.getRemoteUrl(name));
+          }
+          remoteChanged = true;
+          if (remote) await this.git.configureRemote(remote.name, remote.url);
+          if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
+          const next = { ...(await this.config()), remote };
+          await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+          await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
+          return Boolean(remote);
+        });
+        return { configured: mutation.value, commit: mutation.commit };
+      } catch (error) {
+        if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
+          for (const [name, url] of snapshots) {
+            if (url) await this.git.configureRemote(name, url);
+            else await this.git.removeRemote(name);
+          }
+        }
+        throw error;
+      }
     });
   }
 
@@ -752,6 +769,15 @@ export class MemoryVault {
 
   private async persistErasureIntent(intent: ErasureIntent): Promise<void> {
     await writeText(this.erasureIntentPath(intent.id), `${JSON.stringify(intent, null, 2)}\n`);
+  }
+
+  private async remoteConfigMatches(expected: VaultConfig['remote']): Promise<boolean> {
+    try {
+      const actual = (await readVaultConfig(this.root)).remote;
+      return JSON.stringify(actual) === JSON.stringify(expected);
+    } catch {
+      return false;
+    }
   }
 
   private async recoverErasureIntentsLocked(): Promise<string[]> {

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { AgentMemoryError, redactSecrets } from './errors.js';
@@ -102,6 +102,11 @@ export class GitStore {
     else await this.run(['remote', 'add', name, url]);
   }
 
+  async getRemoteUrl(name: string): Promise<string | null> {
+    validateRemoteName(name);
+    return (await this.run(['remote', 'get-url', name], { allowFailure: true })) || null;
+  }
+
   async removeRemote(name: string): Promise<void> {
     validateRemoteName(name);
     const existing = await this.run(['remote', 'get-url', name], { allowFailure: true });
@@ -131,41 +136,57 @@ export class GitStore {
     branch: string,
     options: { push?: boolean; actor?: Actor; reconcile?: () => Promise<void>; validate?: () => Promise<void> } = {},
   ): Promise<RemoteStatus & { pushed: boolean; merged: boolean }> {
-    const before = await this.remoteStatus(name, branch, true);
-    if (!before.configured) throw new AgentMemoryError('REMOTE_INVALID', `Remote ${name} is not configured`);
-    let merged = false;
-    if (before.behind > 0) {
-      if (before.ahead === 0) {
-        await this.run(['merge', '--ff-only', `${name}/${branch}`], options.actor ? { actor: options.actor } : {});
-      } else {
-        try {
-          await this.run(['merge', '--no-edit', '--no-gpg-sign', `${name}/${branch}`], options.actor ? { actor: options.actor } : {});
-        } catch (error) {
-          const conflicts = (await this.run(['diff', '--name-only', '--diff-filter=U'], { allowFailure: true })).split('\n').filter(Boolean);
-          await this.run(['merge', '--abort'], { allowFailure: true });
-          throw new AgentMemoryError('REMOTE_CONFLICT', 'Remote synchronization produced conflicts; the merge was aborted', {
-            cause: error instanceof Error ? redactSecrets(error.message) : 'Git merge failed',
-            conflicts,
-          });
-        }
-      }
-      merged = true;
-      await options.reconcile?.();
-    }
+    const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
+    const syncStatePath = join(this.root, '.amem', 'sync-state.json');
+    const originalSyncState = existsSync(syncStatePath) ? await readFile(syncStatePath, 'utf8') : null;
     try {
+      const before = await this.remoteStatus(name, branch, true);
+      if (!before.configured) throw new AgentMemoryError('REMOTE_INVALID', `Remote ${name} is not configured`);
+      let merged = false;
+      if (before.behind > 0) {
+        if (before.ahead === 0) {
+          await this.run(['merge', '--ff-only', `${name}/${branch}`], options.actor ? { actor: options.actor } : {});
+        } else {
+          try {
+            await this.run(['merge', '--no-edit', '--no-gpg-sign', `${name}/${branch}`], options.actor ? { actor: options.actor } : {});
+          } catch (error) {
+            const conflicts = (await this.run(['diff', '--name-only', '--diff-filter=U'], { allowFailure: true })).split('\n').filter(Boolean);
+            throw new AgentMemoryError('REMOTE_CONFLICT', 'Remote synchronization produced conflicts; the merge was aborted', {
+              cause: error instanceof Error ? redactSecrets(error.message) : 'Git merge failed',
+              conflicts,
+            });
+          }
+        }
+        merged = true;
+        await options.reconcile?.();
+      }
       await options.validate?.();
+      let pushed = false;
+      if (options.push) {
+        await this.run(['push', name, `HEAD:${branch}`], options.actor ? { actor: options.actor } : {});
+        pushed = true;
+      }
+      const status = await this.remoteStatus(name, branch, true);
+      const lastSuccessfulSync = nowIso();
+      await writeText(syncStatePath, `${JSON.stringify({ lastSuccessfulSync }, null, 2)}\n`);
+      return { ...status, lastSuccessfulSync, pushed, merged };
     } catch (error) {
+      await this.restoreSyncSnapshot(originalHead, syncStatePath, originalSyncState);
+      if (error instanceof AgentMemoryError) throw error;
       throw new AgentMemoryError('REMOTE_CONFLICT', 'Local synchronized state failed vault validation', {
         cause: error instanceof Error ? redactSecrets(error.message) : String(error),
       });
     }
-    let pushed = false;
-    if (options.push) {
-      await this.run(['push', name, `HEAD:${branch}`], options.actor ? { actor: options.actor } : {});
-      pushed = true;
+  }
+
+  private async restoreSyncSnapshot(head: string, syncStatePath: string, syncState: string | null): Promise<void> {
+    await this.run(['merge', '--abort'], { allowFailure: true });
+    if (head) {
+      await this.run(['reset', '--hard', head], { allowFailure: true });
+      await this.run(['clean', '-fd', '--', ...trackedPaths], { allowFailure: true });
     }
-    await writeText(join(this.root, '.amem', 'sync-state.json'), `${JSON.stringify({ lastSuccessfulSync: nowIso() }, null, 2)}\n`);
-    return { ...(await this.remoteStatus(name, branch, true)), pushed, merged };
+    if (syncState === null) await rm(syncStatePath, { force: true });
+    else await writeText(syncStatePath, syncState);
   }
 
   async integrity(): Promise<GitIntegrity> {
@@ -231,13 +252,16 @@ export function validateRemote(name: string, url: string): void {
   if (!url.trim() || /[\r\n]/.test(url)) throw new AgentMemoryError('REMOTE_INVALID', 'Remote URL is invalid');
   try {
     const parsed = new URL(url);
-    const secretParameter = [...parsed.searchParams.keys()].find((key) => /^(?:access_?token|auth|api_?key|password|token)$/i.test(key));
-    if (parsed.username || parsed.password || secretParameter) throw new AgentMemoryError('REMOTE_INVALID', 'Credential-bearing remote URLs are not allowed');
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new AgentMemoryError('REMOTE_INVALID', 'Credential-bearing remote URLs are not allowed');
     if (!['https:', 'ssh:', 'file:'].includes(parsed.protocol)) throw new AgentMemoryError('REMOTE_INVALID', `Unsupported remote protocol: ${parsed.protocol}`);
   } catch (error) {
     if (error instanceof AgentMemoryError) throw error;
     if (url.includes('://')) throw new AgentMemoryError('REMOTE_INVALID', 'Remote URL is invalid');
-    if (/^[^/\\]+@[^:]+:/.test(url)) return;
+    const scp = url.match(/^([^/\\:@]+)@([^:]+):(.+)$/);
+    if (scp) {
+      if (scp[1] !== 'git' || /[?#]/.test(scp[3] ?? '')) throw new AgentMemoryError('REMOTE_INVALID', 'Credential-bearing SCP remote URLs are not allowed');
+      return;
+    }
     if (!url.startsWith('/') && !url.startsWith('./') && !url.startsWith('../')) {
       throw new AgentMemoryError('REMOTE_INVALID', 'Remote must be an HTTPS, SSH, file, SCP-style, or local path URL');
     }

@@ -22,9 +22,9 @@
 
 ## 4. Remote consistency
 
-- [ ] 4.1 Reject query, fragment, userinfo, and unsafe SCP credential forms.
-- [ ] 4.2 Compensate remote configuration failures.
-- [ ] 4.3 Restore pre-sync state after reconcile, validation, status, or push failure.
+- [x] 4.1 Reject query, fragment, userinfo, and unsafe SCP credential forms.
+- [x] 4.2 Compensate remote configuration failures.
+- [x] 4.3 Restore pre-sync state after reconcile, validation, status, or push failure.
 
 ## 5. Operations and contracts
 
