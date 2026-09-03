@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
@@ -113,6 +114,19 @@ test('an old lock owned by a live process is never stolen', async () => {
   await handle.close();
   await assert.rejects(withFileLock(lock, async () => undefined, 75), (error: unknown) =>
     error instanceof AgentMemoryError && error.code === 'LOCK_TIMEOUT');
+});
+
+test('concurrent stale-lock observers never overlap critical sections', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-lock-race-audit-'));
+  roots.push(root);
+  const lock = join(root, 'write.lock');
+  const critical = join(root, 'critical');
+  const violations = join(root, 'violations');
+  await writeFile(lock, `${JSON.stringify({ version: 1, pid: 2147483647, ownerToken: 'dead', createdAt: '2000-01-01T00:00:00.000Z' })}\n`);
+  const worker = fileURLToPath(new URL('./fixtures/lock-worker.ts', import.meta.url));
+  const start = String(Date.now() + 750);
+  await Promise.all(Array.from({ length: 12 }, () => exec(process.execPath, ['--import', 'tsx', worker, lock, critical, violations, start])));
+  assert.equal(existsSync(violations), false);
 });
 
 test('concurrent initialization is serialized and idempotent', async () => {
