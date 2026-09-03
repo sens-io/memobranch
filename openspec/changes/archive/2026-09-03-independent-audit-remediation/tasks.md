@@ -21,4 +21,4 @@
 ## 4. Release evidence
 
 - [x] 4.1 Run build, boundary tests, retention tests, coverage, dependency audit, package dry-run, strict OpenSpec validation, and diff checks.
-- [ ] 4.2 Record commit-bound verification evidence and archive the completed change.
+- [x] 4.2 Record commit-bound verification evidence and archive the completed change.

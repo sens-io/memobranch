@@ -452,7 +452,7 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 
 测试覆盖租户缺失拒绝、机密明文同步回滚、证据敏感度降级与远端不可变性、机密 Git 元数据、删除理由承诺、多进程锁竞争、跨进程缓存失效、事务回滚/重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
 
-规格与归档记录位于 [`openspec/`](./openspec)；上一轮生产审计见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)，本轮独立复审修复完成后将归档到 `independent-audit-remediation`。
+规格与归档记录位于 [`openspec/`](./openspec)；生产审计见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)，本轮独立复审与验证证据见 [`independent-audit-remediation`](./openspec/changes/archive/2026-09-03-independent-audit-remediation)。
 
 ## 🧱 威胁模型与边界
 

@@ -60,3 +60,10 @@ Health, mutation preflight, and remote validation MUST verify captured evidence 
 #### Scenario: Captured evidence is modified out of band
 - **WHEN** a canonical evidence file no longer matches its recorded hash
 - **THEN** doctor reports the mismatch and subsequent mutations or remote validation fail closed
+
+### Requirement: Lock reclamation is race-free
+Dead-owner recovery MUST NOT remove a successor's lock, and concurrent stale-lock observers MUST elect only one process to acquire or reclaim the conventional writer lock.
+
+#### Scenario: Many processes observe the same dead lock
+- **WHEN** multiple writers concurrently encounter one stale lock
+- **THEN** exactly one writer enters the critical section at any time and every live successor retains ownership until it exits
