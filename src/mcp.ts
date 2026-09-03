@@ -16,7 +16,7 @@ function createServer(): McpServer {
   const principal = principalFromEnv();
   const vault = new MemoryVault(vaultRoot, { principal });
   const server = new McpServer(
-    { name: 'agent-memory-wiki', version: VERSION },
+    { name: 'memobranch', version: VERSION },
     { instructions: 'Call memory_context before using durable context. Identity and authorization are server-owned. Pending candidates are not truth; confidential retrieval requires both policy authorization and an encryption key.' },
   );
 
@@ -234,4 +234,4 @@ function result(value: unknown) {
 }
 
 void serveStdio(createServer);
-process.stderr.write(`agent-memory-wiki MCP ${VERSION} serving ${vaultRoot}\n`);
+process.stderr.write(`memobranch MCP ${VERSION} serving ${vaultRoot}\n`);

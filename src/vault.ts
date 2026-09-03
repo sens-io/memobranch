@@ -863,7 +863,7 @@ export class MemoryVault {
   }
 
   private assertInitialized(): void {
-    if (!existsSync(join(this.root, 'agent-memory.json'))) throw new AgentMemoryError('VAULT_NOT_INITIALIZED', `Not an Agent Memory Wiki vault: ${this.root}. Run "amem init" first.`);
+    if (!existsSync(join(this.root, 'agent-memory.json'))) throw new AgentMemoryError('VAULT_NOT_INITIALIZED', `Not a MemoBranch vault: ${this.root}. Run "amem init" first.`);
   }
 }
 
@@ -951,7 +951,7 @@ function safeLogToken(value: string): string {
 
 function agentInstructions(): string {
   return `<!-- AGENT_MEMORY_WIKI_START -->
-# Agent Memory Wiki instructions
+# MemoBranch instructions
 
 This folder is a durable, Git-versioned memory vault. Read \`MEMORY.md\` first, then use search for long-tail details.
 

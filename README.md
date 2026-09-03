@@ -1,10 +1,12 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="Agent Memory Wiki Logo" width="156">
+<img src="assets/logo.png" alt="MemoBranch Logo" width="156">
 
-# Agent Memory Wiki
+# MemoBranch
 
-### 让 AI Agent 拥有可审计、可检索、可迁移的长期记忆
+### Memory that branches with your agents.
+
+让 AI Agent 拥有可审计、可检索、可迁移的长期记忆
 
 **Markdown 是事实源 · Git 记录每次演化 · LLM 只做可选增强**
 
@@ -16,6 +18,7 @@
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
   <img src="https://img.shields.io/badge/tests-21%20passed-22C55E?style=flat-square" alt="21 tests passed">
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
+  <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
 
 <p>
@@ -31,7 +34,7 @@
 
 ---
 
-Agent Memory Wiki 是一个面向 AI Agent 的生产级、本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
+MemoBranch 是一个面向 AI Agent 的生产级、本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
 
 它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。生产版采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流完成。
 
@@ -42,7 +45,7 @@ Agent Memory Wiki 是一个面向 AI Agent 的生产级、本地优先长期记�
 
 普通 Agent 记忆常常只有一个向量库：内容从哪里来、为什么可信、谁修改过、冲突如何处理，都很难回答。
 
-Agent Memory Wiki 把记忆变成一条可治理的知识链：
+MemoBranch 把记忆变成一条可治理的知识链：
 
 ```mermaid
 flowchart LR
@@ -55,7 +58,7 @@ flowchart LR
     D --> H[Git History<br/>归因 / 回滚 / 同步]
 ```
 
-| 常见问题 | Agent Memory Wiki 的处理方式 |
+| 常见问题 | MemoBranch 的处理方式 |
 | --- | --- |
 | “这条记忆从哪里来？” | 每条正式记忆保留证据引用和 Git 历史 |
 | “新信息和旧信息冲突怎么办？” | 进入审核队列，不静默覆盖 |
@@ -92,7 +95,8 @@ flowchart LR
 ### 安装
 
 ```bash
-cd agent-memory-wiki
+git clone https://github.com/sens-io/memobranch.git
+cd memobranch
 npm ci
 npm run build
 npm link
@@ -276,7 +280,7 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
     "agent-memory": {
       "command": "node",
       "args": [
-        "/absolute/path/to/agent-memory-wiki/dist/mcp.js",
+        "/absolute/path/to/memobranch/dist/mcp.js",
         "/absolute/path/to/memory-vault"
       ],
       "env": {

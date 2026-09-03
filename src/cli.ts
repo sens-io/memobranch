@@ -279,7 +279,7 @@ function print(value: unknown): void {
 }
 
 function help(): string {
-  return `Agent Memory Wiki ${VERSION}
+  return `MemoBranch ${VERSION}
 
 Usage:
   amem init [path] [--name NAME]

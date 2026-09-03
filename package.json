@@ -1,7 +1,7 @@
 {
-  "name": "agent-memory-wiki",
+  "name": "memobranch",
   "version": "1.0.0",
-  "description": "A Git-native, LLM-wiki memory layer for AI agents",
+  "description": "Git-native, auditable long-term memory for AI agents",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,6 +12,8 @@
     }
   },
   "bin": {
+    "memobranch": "dist/cli.js",
+    "memobranch-mcp": "dist/mcp.js",
     "amem": "dist/cli.js",
     "amem-mcp": "dist/mcp.js"
   },
@@ -32,6 +34,15 @@
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sens-io/memobranch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sens-io/memobranch/issues"
+  },
+  "homepage": "https://github.com/sens-io/memobranch#readme",
+  "author": "sens-io",
   "keywords": [
     "agent-memory",
     "llm-wiki",

@@ -11,7 +11,7 @@ test('MCP server negotiates, lists tools, and calls the vault', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amem-mcp-test-'));
   const vault = new MemoryVault(root);
   await vault.initialize('mcp-test');
-  const client = new Client({ name: 'agent-memory-wiki-test', version: '1.0.0' });
+  const client = new Client({ name: 'memobranch-test', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['--import', 'tsx', join(process.cwd(), 'src', 'mcp.ts'), root],

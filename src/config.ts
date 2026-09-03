@@ -74,7 +74,7 @@ export async function migrateVaultConfig(
 
 async function readRawConfig(root: string): Promise<Record<string, unknown>> {
   const path = join(root, 'agent-memory.json');
-  if (!existsSync(path)) throw new AgentMemoryError('VAULT_NOT_INITIALIZED', `Not an Agent Memory Wiki vault: ${root}`);
+  if (!existsSync(path)) throw new AgentMemoryError('VAULT_NOT_INITIALIZED', `Not a MemoBranch vault: ${root}`);
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Configuration must be an object');
