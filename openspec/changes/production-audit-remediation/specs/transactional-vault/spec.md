@@ -18,3 +18,7 @@ Cryptographic erasure MUST persist a non-secret intent and complete key destruct
 
 ### Requirement: Evidence immutability is verified
 Health, mutation preflight, and remote validation MUST verify captured evidence identity against its canonical hash and MUST NOT sweep unrelated managed changes into an operation commit.
+
+#### Scenario: Captured evidence is modified out of band
+- **WHEN** a canonical evidence file no longer matches its recorded hash
+- **THEN** doctor reports the mismatch and subsequent mutations or remote validation fail closed

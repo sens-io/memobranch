@@ -16,7 +16,8 @@
   <img src="https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
-  <img src="https://img.shields.io/badge/tests-21%20passed-22C55E?style=flat-square" alt="21 tests passed">
+  <a href="https://github.com/sens-io/memobranch/actions/workflows/ci.yml"><img src="https://github.com/sens-io/memobranch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/tests-38%20passed-22C55E?style=flat-square" alt="38 tests passed">
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
   <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
@@ -197,6 +198,8 @@ vault/
 - `wiki/` 只保存审核后的正式记忆，是检索和上下文生成的权威来源。
 - `procedure` 默认至少需要两份证据。
 - 同一 `scope + kind + key` 的不同内容会形成显式冲突。
+- 普通检索不会返回 `conflicted` 记录；拒绝最后一个冲突候选会恢复原正式记忆。
+- LLM 提炼结果继承 evidence 的 scope，且敏感级别只能提高、不能降低。
 - `forget` 是保留历史的可审计撤销；`erase` 额外销毁本地 wrapped data key。
 
 ## 🔍 搜索与 LLM 增强
@@ -310,7 +313,7 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
 
 ## 🌐 远端 Git 同步
 
-远端认证完全委托给 Git credential helper 或 SSH agent。CLI 和 MCP 不接受 token 参数，带 userinfo 的 URL 会被拒绝。
+远端认证完全委托给 Git credential helper 或 SSH agent。CLI 和 MCP 不接受 token 参数；带 userinfo、query、fragment 或非 `git` SCP 用户名的 URL 都会被拒绝。
 
 ```bash
 amem remote set git@github.com:org/memory-vault.git \
@@ -325,7 +328,7 @@ amem remote sync --root ~/my-agent-memory --push --json
 
 同步顺序：恢复未完成事务 → 检查工作树 → fetch → 计算 ahead/behind → 快进或常规 merge → 重建派生状态 → 健康校验 → 可选 push。
 
-发生内容冲突时，系统会列出冲突路径、执行 `git merge --abort` 并保留同步前本地状态，不会自动强推。
+发生内容冲突、后置校验失败或 push 失败时，系统会保留错误信息并恢复同步前的本地 HEAD、受管工作树和同步状态，不会自动强推。
 
 ## 🩺 生产运维
 
@@ -353,6 +356,7 @@ curl http://127.0.0.1:9464/metrics
 - `.amem/service.json` 维护单实例租约，存活进程不会被抢占。
 - 受管目录变更会防抖后触发增量索引；原生文件监听不可用时自动降级为有界轮询。
 - `SIGTERM` / `SIGINT` 会等待正在执行的事务安全结束。
+- 最近一次 `doctor` 不健康或维护周期失败时，`/healthz` 返回 HTTP 503 和 `status: "unavailable"`。
 - 指标采用固定名称和有界标签，不包含正文、密钥、凭据或源 URI。
 
 建议使用 systemd、launchd 或容器编排器管理进程，并通过安全环境注入配置。
@@ -376,6 +380,9 @@ curl http://127.0.0.1:9464/metrics
 | `AMEM_LLM_MODEL` | 提炼与问答模型 | `gpt-4.1-mini` |
 | `AMEM_LLM_BASE_URL` | OpenAI 兼容 API 根地址 | `https://api.openai.com/v1` |
 | `AMEM_EMBEDDING_MODEL` | 可选向量模型 | 空，仅词法检索 |
+| `AMEM_LLM_TIMEOUT_MS` | 单次 provider 请求总超时 | `30000` |
+| `AMEM_LLM_MAX_RESPONSE_BYTES` | provider 最大响应字节数 | `2000000` |
+| `AMEM_LLM_MAX_RETRIES` | 429/5xx/网络失败的有限重试次数 | `1` |
 
 完整示例见 [`.env.example`](./.env.example)。
 
@@ -434,15 +441,15 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 | Gate | 当前状态 |
 | --- | :---: |
 | TypeScript build | ✅ PASS |
-| CLI / MCP / Vault tests | ✅ 21 / 21 |
+| CLI / MCP / Vault tests | ✅ 38 / 38 |
 | 1,000 文档索引性能门禁 | ✅ PASS |
 | npm package dry-run | ✅ PASS |
 | 依赖漏洞审计 | ✅ 0 known vulnerabilities |
-| OpenSpec strict validation | ✅ 6 / 6 specs |
+| OpenSpec strict validation | ✅ 7 / 7 items |
 
-测试覆盖权限拒绝、机密信封与擦除、事务回滚/重放、活锁/陈旧锁、CJK 检索、索引损坏、代表性规模性能、裸远端推拉/分叉/冲突，以及维护服务端点与优雅关闭。
+测试覆盖权限与租户拒绝、LLM 机密降级、机密信封与可恢复擦除、事务回滚/重放、长时活锁、索引篡改、证据改写、冲突闭环、CJK 检索、热查询、provider 超时/取消/响应上限、远端配置补偿、同步失败回滚，以及维护服务端点与优雅关闭。
 
-规格与归档记录位于 [`openspec/`](./openspec)，生产验证证据见 [`verification.md`](./openspec/changes/archive/2026-09-03-production-hardening/verification.md)。
+规格与归档记录位于 [`openspec/`](./openspec)，本轮独立审计修复及验证证据见 [`production-audit-remediation`](./openspec/changes/production-audit-remediation)。
 
 ## 🧱 威胁模型与边界
 
