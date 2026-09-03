@@ -209,8 +209,13 @@ test('persistent lexical index remains bounded on a representative corpus', asyn
   const elapsed = performance.now() - started;
   assert.equal(result.documents, 1_000);
   assert.ok(elapsed < 15_000, `indexing took ${elapsed}ms`);
-  assert.equal((await vault.search('payload number 777'))[0]?.id, 'perf-777');
   const indexPath = join(vault.root, '.amem', 'search-index.json');
+  const indexModifiedAt = (await stat(indexPath)).mtimeMs;
+  const queryStarted = performance.now();
+  assert.equal((await vault.search('payload number 777'))[0]?.id, 'perf-777');
+  const queryElapsed = performance.now() - queryStarted;
+  assert.ok(queryElapsed < 3_000, `hot query took ${queryElapsed}ms`);
+  assert.equal((await stat(indexPath)).mtimeMs, indexModifiedAt, 'an unchanged hot query must not rewrite the index');
   const before = JSON.parse(await readFile(indexPath, 'utf8')) as { documents: Array<{ id: string; contentHash: string }> };
   const unchangedHash = before.documents.find((document) => document.id === 'perf-1')?.contentHash;
   const changedRaw = await readFile(join(directory, 'item-777.md'), 'utf8');

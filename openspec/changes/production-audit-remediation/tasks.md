@@ -28,10 +28,10 @@
 
 ## 5. Operations and contracts
 
-- [ ] 5.1 Add provider timeout, response-size, retry, and cancellation bounds.
-- [ ] 5.2 Return unavailable health for unhealthy or unavailable snapshots.
-- [ ] 5.3 Correct MCP side-effect and destructive annotations.
-- [ ] 5.4 Avoid rewriting an unchanged index and add meaningful performance gates.
+- [x] 5.1 Add provider timeout, response-size, retry, and cancellation bounds.
+- [x] 5.2 Return unavailable health for unhealthy or unavailable snapshots.
+- [x] 5.3 Correct MCP side-effect and destructive annotations.
+- [x] 5.4 Avoid rewriting an unchanged index and add meaningful performance gates.
 
 ## 6. Release evidence
 

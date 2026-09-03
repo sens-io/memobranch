@@ -30,7 +30,7 @@ function createServer(): McpServer {
       sensitivity: z.enum(sensitivities).default('internal'),
       extract: z.boolean().default(false),
     }),
-    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
   }, async (input) => execute(() => vault.capture({
     content: input.content,
     ...(input.sourceUri ? { sourceUri: input.sourceUri } : {}),
@@ -81,7 +81,7 @@ function createServer(): McpServer {
       expandLinks: z.boolean().default(true),
       semantic: z.boolean().default(false),
     }),
-    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input) => execute(() => vault.searchDetailed(input.query, input)));
 
   server.registerTool('memory_version', {
@@ -116,7 +116,7 @@ function createServer(): McpServer {
       includeSecret: z.boolean().default(false),
       semantic: z.boolean().default(false),
     }),
-    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input) => executeText(() => vault.context(input.query, input)));
 
   server.registerTool('memory_get', {
@@ -177,7 +177,7 @@ function createServer(): McpServer {
     title: 'Recover transactions',
     description: 'Roll back incomplete writes and replay commit-ready transactions.',
     inputSchema: z.object({}),
-    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
   }, async () => execute(() => vault.recover()));
 
   server.registerTool('memory_reindex', {
@@ -205,7 +205,7 @@ function createServer(): McpServer {
     title: 'Run maintenance cycle',
     description: 'Recover, expire, reindex, diagnose, and optionally synchronize once.',
     inputSchema: z.object({}),
-    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
   }, async () => execute(() => new MaintenanceService(vault).runOnce()));
 
   return server;

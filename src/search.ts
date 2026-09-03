@@ -79,6 +79,7 @@ export type SecureDocumentReader = (relativePath: string) => Promise<MarkdownDoc
 export class PersistentSearchIndex {
   private readonly indexPath: string;
   private readonly embeddingPath: string;
+  private trustedIndex: StoredIndex | null = null;
 
   constructor(
     readonly root: string,
@@ -91,12 +92,16 @@ export class PersistentSearchIndex {
   }
 
   async refresh(options: { semantic?: boolean } = {}): Promise<ReindexResult> {
-    const rebuilt = !(await this.indexIsValid());
+    let rebuilt = !(await this.indexIsValid());
     const files = await listMarkdown(join(this.root, 'wiki'));
     if (files.length > this.config.index.maxDocuments) {
       throw new Error(`Vault contains ${files.length} documents; configured index maximum is ${this.config.index.maxDocuments}`);
     }
-    const previous = await this.readIndex();
+    let previous = await this.readIndex();
+    if (!rebuilt && !this.trustedIndex && !(await this.health()).healthy) {
+      rebuilt = true;
+      previous = { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), documents: [] };
+    }
     const byPath = new Map(previous.documents.map((document) => [document.path, document]));
     const documents: IndexedDocument[] = [];
     let updated = 0;
@@ -133,6 +138,7 @@ export class PersistentSearchIndex {
     const removed = previous.documents.filter((document) => !currentPaths.has(document.path)).length;
     const index: StoredIndex = { version: INDEX_VERSION, updatedAt: new Date().toISOString(), documents };
     if (rebuilt || updated > 0 || removed > 0) await writeText(this.indexPath, `${JSON.stringify(index)}\n`);
+    this.trustedIndex = index;
 
     let semanticStatus: ReindexResult['semanticStatus'] = 'disabled';
     if (options.semantic && this.config.index.embeddingModel) {
@@ -149,30 +155,11 @@ export class PersistentSearchIndex {
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult> {
     const principal = options.principal ?? localAdminPrincipal();
     let semanticStatus: SearchResult['semanticStatus'] = 'disabled';
-    const refreshed = await this.refresh(options.semantic === undefined ? {} : { semantic: options.semantic });
+    const refreshed = await this.ensureTrusted(Boolean(options.semantic));
     semanticStatus = refreshed.semanticStatus;
-    const index = await this.readIndex();
-    const documents: IndexedDocument[] = [];
-    for (const cached of index.documents) {
-      try {
-        const outer = await readOuterMeta(join(this.root, cached.path));
-        const authoritative: IndexedDocument = {
-          ...cached,
-          id: typeof outer.id === 'string' ? outer.id : cached.path,
-          scope: scopeOf(outer),
-          sensitivity: sensitivityOf(outer),
-          ...(typeof outer.status === 'string' ? { status: outer.status } : {}),
-          ...(typeof outer.expiresAt === 'string' ? { expiresAt: outer.expiresAt } : {}),
-        };
-        if (typeof outer.status !== 'string') delete authoritative.status;
-        if (typeof outer.expiresAt !== 'string') delete authoritative.expiresAt;
-        if (isActive(authoritative) && canAccess(principal, authoritative.scope, authoritative.sensitivity) && selectedArea(authoritative.path, options)) {
-          documents.push(authoritative);
-        }
-      } catch {
-        // Missing or malformed canonical files never become searchable through cache state.
-      }
-    }
+    const index = this.trustedIndex!;
+    const documents = index.documents.filter((document) =>
+      isActive(document) && canAccess(principal, document.scope, document.sensitivity) && selectedArea(document.path, options));
     documents.push(...(await this.loadEphemeralSelected(principal, options)));
 
     const queryTerms = tokenize(query);
@@ -219,21 +206,19 @@ export class PersistentSearchIndex {
     }
 
     const hits = await Promise.all(selected.slice(0, limit).map(async ({ document, score, lexicalScore, semanticScore }) => {
-      const canonical = this.secureReader ? await this.secureReader(document.path) : { meta: {}, body: document.body };
-      const meta = canonical.meta as Record<string, unknown>;
       return {
         path: document.path,
-        id: typeof meta.id === 'string' ? meta.id : document.id,
-        title: titleFromBody(canonical.body, document.path),
-        kind: typeof meta.kind === 'string' ? meta.kind : document.kind,
-        scope: scopeOf(meta),
-        sensitivity: sensitivityOf(meta),
-        ...(typeof meta.status === 'string' ? { status: meta.status } : {}),
+        id: document.id,
+        title: document.title,
+        kind: document.kind,
+        scope: document.scope,
+        sensitivity: document.sensitivity,
+        ...(document.status ? { status: document.status } : {}),
         score: Number(score.toFixed(4)),
         lexicalScore: Number(lexicalScore.toFixed(4)),
         semanticScore: Number(semanticScore.toFixed(4)),
-        snippet: makeSnippet(canonical.body, queryTerms),
-        links: extractMarkdownLinks(canonical.body).map((target) => resolveLink(document.path, target)).filter((target): target is string => target !== null),
+        snippet: makeSnippet(document.body, queryTerms),
+        links: document.links,
         backlinks: backlinkMap.get(document.path) ?? [],
       };
     }));
@@ -260,6 +245,18 @@ export class PersistentSearchIndex {
       return { healthy: false, documents: index.documents.length, error: 'Search index is stale' };
     }
     return { healthy: true, documents: index.documents.length };
+  }
+
+  private async ensureTrusted(semantic: boolean): Promise<ReindexResult> {
+    if (this.trustedIndex && !semantic) {
+      return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
+    }
+    if (!this.trustedIndex && await this.indexIsValid()) {
+      const health = await this.health();
+      if (health.healthy) this.trustedIndex = await this.readIndex();
+    }
+    if (!this.trustedIndex || semantic) return this.refresh(semantic ? { semantic: true } : {});
+    return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
   }
 
   private async loadEphemeralSelected(principal: Principal, options: SearchOptions): Promise<IndexedDocument[]> {

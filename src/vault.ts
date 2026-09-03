@@ -78,6 +78,7 @@ export class MemoryVault {
   private readonly journalKey: string | undefined;
   private activeTransaction: VaultTransaction | null = null;
   private activePermission: Permission | null = null;
+  private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
 
   constructor(root = process.cwd(), options: MemoryVaultOptions | LlmClient = {}) {
     this.root = resolve(root);
@@ -744,7 +745,11 @@ export class MemoryVault {
   }
 
   private searchIndex(config: VaultConfig): PersistentSearchIndex {
-    return new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    const signature = JSON.stringify({ index: config.index, limits: config.limits });
+    if (this.cachedSearchIndex?.signature === signature) return this.cachedSearchIndex.value;
+    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    this.cachedSearchIndex = { signature, value };
+    return value;
   }
 
   private async reconcileAfterSync(): Promise<void> {

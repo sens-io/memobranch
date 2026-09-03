@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
 import { LlmClient } from '../src/llm.js';
+import { MaintenanceService } from '../src/maintenance.js';
 import type { Principal } from '../src/policy.js';
 import type { ProposedMemory, Scope, Sensitivity } from '../src/types.js';
 import { MemoryVault } from '../src/vault.js';
@@ -265,6 +266,29 @@ test('push failure after a remote pull restores local history and managed files'
   await assert.rejects(vault.sync({ push: true }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_TRANSPORT');
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
   assert.equal(await readFile(join(vault.root, 'log.md'), 'utf8'), log);
+});
+
+test('health endpoint returns unavailable when doctor reports an unhealthy vault', async () => {
+  const vault = await freshVault();
+  await vault.propose({
+    kind: 'fact', key: 'health conflict', statement: 'HEALTH_VALUE_ONE', scope: 'project', sensitivity: 'internal',
+    confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  await vault.propose({
+    kind: 'fact', key: 'health conflict', statement: 'HEALTH_VALUE_TWO', scope: 'project', sensitivity: 'internal',
+    confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const service = new MaintenanceService(vault);
+  const handle = await service.start({ port: 0 });
+  try {
+    const response = await fetch(`http://${handle.host}:${handle.port}/healthz`);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json() as { status: string }).status, 'unavailable');
+  } finally {
+    await handle.stop();
+  }
 });
 
 async function remoteFixture(): Promise<{ vault: MemoryVault; remote: string; clone: string }> {
