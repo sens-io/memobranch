@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🧠 Agent Memory Wiki
+<img src="assets/logo.png" alt="Agent Memory Wiki Logo" width="156">
+
+# Agent Memory Wiki
 
 ### 让 AI Agent 拥有可审计、可检索、可迁移的长期记忆
 
