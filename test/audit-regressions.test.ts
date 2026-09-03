@@ -4,15 +4,17 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
 import { LlmClient } from '../src/llm.js';
 import { MaintenanceService } from '../src/maintenance.js';
+import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
 import type { Principal } from '../src/policy.js';
 import type { ProposedMemory, Scope, Sensitivity } from '../src/types.js';
 import { MemoryVault } from '../src/vault.js';
-import { withFileLock } from '../src/utils.js';
+import { sha256, withFileLock } from '../src/utils.js';
 
 const roots: string[] = [];
 const masterKey = '51'.repeat(32);
@@ -61,6 +63,24 @@ test('context, get, and history enforce principal scope, sensitivity, and tenant
   await assert.rejects(otherTenant.get(String(memory.meta.id)), authorizationDenied);
   await assert.rejects(otherTenant.history(), authorizationDenied);
   assert.ok(proposed.id);
+});
+
+test('non-admin principals without a tenant fail closed while local admins remain usable', async () => {
+  const admin = await freshVault();
+  const unbound: Principal = {
+    id: 'unbound', name: 'Unbound reader', permissions: ['read'], scopes: ['user', 'project', 'team', 'public'], maxSensitivity: 'secret',
+  };
+  const limited = new MemoryVault(admin.root, { principal: unbound });
+  await assert.rejects(limited.config(), authorizationDenied);
+  await assert.rejects(limited.search('anything'), authorizationDenied);
+  await assert.rejects(limited.history(), authorizationDenied);
+  assert.equal((await admin.config()).version, 2);
+
+  const newRoot = await mkdtemp(join(tmpdir(), 'memobranch-unbound-init-'));
+  roots.push(newRoot);
+  const unboundMaintainer = new MemoryVault(newRoot, { principal: { ...unbound, permissions: ['maintain'] } });
+  await assert.rejects(unboundMaintainer.initialize('denied'), authorizationDenied);
+  assert.equal(existsSync(join(newRoot, 'agent-memory.json')), false);
 });
 
 class DowngradingLlm extends LlmClient {
@@ -115,6 +135,19 @@ test('an old lock owned by a live process is never stolen', async () => {
     error instanceof AgentMemoryError && error.code === 'LOCK_TIMEOUT');
 });
 
+test('concurrent stale-lock observers never overlap critical sections', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-lock-race-audit-'));
+  roots.push(root);
+  const lock = join(root, 'write.lock');
+  const critical = join(root, 'critical');
+  const violations = join(root, 'violations');
+  await writeFile(lock, `${JSON.stringify({ version: 1, pid: 2147483647, ownerToken: 'dead', createdAt: '2000-01-01T00:00:00.000Z' })}\n`);
+  const worker = fileURLToPath(new URL('./fixtures/lock-worker.ts', import.meta.url));
+  const start = String(Date.now() + 750);
+  await Promise.all(Array.from({ length: 12 }, () => exec(process.execPath, ['--import', 'tsx', worker, lock, critical, violations, start])));
+  assert.equal(existsSync(violations), false);
+});
+
 test('concurrent initialization is serialized and idempotent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'memobranch-init-audit-'));
   roots.push(root);
@@ -141,10 +174,36 @@ test('erasure failure makes no success commit and a durable intent can recover',
   assert.equal(eraseEvents.at(-1)?.outcome, 'error');
 
   vault.encryption.erase = originalErase;
+  const intentPath = join(vault.root, '.amem', 'erasures', `${memory.id}.json`);
+  const legacyIntent = JSON.parse(await readFile(intentPath, 'utf8')) as Record<string, unknown>;
+  delete legacyIntent.reasonSha256;
+  await writeFile(intentPath, `${JSON.stringify(legacyIntent, null, 2)}\n`);
   await vault.recover();
   assert.equal(await vault.encryption.hasKey(memory.id), false);
   assert.equal((await vault.search('ERASURE_HISTORY_CANARY', { includeSecret: true })).length, 0);
   await assert.rejects(vault.get(memory.id), (error: unknown) => error instanceof AgentMemoryError && error.code === 'NOT_FOUND');
+  const tombstone = parseMarkdown<Record<string, unknown>>(await readFile(join(vault.root, memory.path), 'utf8'));
+  assert.equal(tombstone.meta.reasonRecorded, false);
+  assert.equal(tombstone.meta.reasonSha256, undefined);
+});
+
+test('successful erasure commits only a digest of the normalized reason', async () => {
+  const vault = await freshVault({ masterKey });
+  await vault.propose({
+    kind: 'fact', key: 'digest erasure target', statement: 'ERASURE_DIGEST_PAYLOAD_994A', scope: 'project',
+    sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const memory = (await vault.search('ERASURE_DIGEST_PAYLOAD_994A', { includeSecret: true }))[0]!;
+  const reason = '  legal deletion request 2026-09  ';
+  await vault.erase('digest erasure target', reason);
+  const raw = await readFile(join(vault.root, memory.path), 'utf8');
+  const tombstone = parseMarkdown<Record<string, unknown>>(raw);
+  assert.equal(tombstone.meta.reasonRecorded, true);
+  assert.equal(tombstone.meta.reasonSha256, sha256(reason.trim()));
+  assert.doesNotMatch(raw, /legal deletion request 2026-09/);
+  const audit = await readFile(join(vault.root, '.amem', 'audit.jsonl'), 'utf8');
+  assert.doesNotMatch(audit, /digest erasure target|legal deletion request 2026-09/);
 });
 
 test('index metadata tampering is unhealthy and cannot lower canonical authorization', async () => {
@@ -166,6 +225,21 @@ test('index metadata tampering is unhealthy and cannot lower canonical authoriza
   assert.equal((await limited.search('INDEX_AUTH_CANARY')).length, 0);
 });
 
+test('a long-lived search cache observes revocation completed by another process', async () => {
+  const longLived = await freshVault();
+  await longLived.propose({
+    kind: 'fact', key: 'cross process revocation', statement: 'CROSS_PROCESS_REVOCATION_77C1', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await longLived.consolidate();
+  const warmed = await longLived.search('CROSS_PROCESS_REVOCATION_77C1');
+  assert.equal(warmed.length, 1);
+
+  const secondProcess = new MemoryVault(longLived.root);
+  await secondProcess.forget(warmed[0]!.id, 'revoked by another process');
+  assert.equal((await longLived.search('CROSS_PROCESS_REVOCATION_77C1')).length, 0);
+});
+
 test('evidence hash changes make health fail and cannot be swept into another commit', async () => {
   const vault = await freshVault();
   const captured = await vault.capture({ content: 'ORIGINAL_EVIDENCE_C82A', scope: 'project', sensitivity: 'internal' });
@@ -180,6 +254,89 @@ test('evidence hash changes make health fail and cannot be swept into another co
     confidence: 1, explicit: true, conditions: [], tags: [],
   }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'VALIDATION_FAILED');
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('evidence sensitivity downgrade fails integrity and cannot become publicly searchable', async () => {
+  const admin = await freshVault();
+  const config = await admin.config();
+  const captured = await admin.capture({ content: 'EVIDENCE_DOWNGRADE_CANARY_38B1', scope: 'user', sensitivity: 'internal' });
+  const absolute = join(admin.root, captured.evidencePath);
+  await writeFile(absolute, (await readFile(absolute, 'utf8')).replace('sensitivity: internal', 'sensitivity: public'));
+  await admin.git.commit('audit: simulate unauthorized evidence downgrade', admin.principal, [captured.evidencePath]);
+  const report = await admin.doctor();
+  assert.equal(report.healthy, false);
+  assert.equal(report.evidence?.healthy, false);
+
+  const publicReader = new MemoryVault(admin.root, { principal: principal(config.tenantId) });
+  assert.equal((await publicReader.search('EVIDENCE_DOWNGRADE_CANARY_38B1', { includeEvidence: true })).length, 0);
+  await assert.rejects(publicReader.get(captured.evidenceId), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'VALIDATION_FAILED');
+});
+
+test('plaintext confidential documents are unhealthy and rejected during remote synchronization', async () => {
+  const local = await freshVault();
+  const plaintextPath = 'wiki/project/fact/plaintext-secret.md';
+  await mkdir(join(local.root, 'wiki', 'project', 'fact'), { recursive: true });
+  await writeFile(join(local.root, plaintextPath), serializeMarkdown({
+    id: 'mem-plaintext-secret', type: 'memory', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    validatedAt: new Date().toISOString(), kind: 'fact', key: 'plaintext secret', scope: 'project', sensitivity: 'secret',
+    confidence: 1, status: 'active', evidence: [], conditions: [], tags: [], revision: 1,
+  }, '# Plaintext secret\n\nPLAINTEXT_SECRET_CANARY_76E4'));
+  const localReport = await local.doctor();
+  assert.equal(localReport.healthy, false);
+  assert.equal(localReport.documents?.healthy, false);
+
+  const { vault, clone } = await remoteFixture();
+  const remotePath = join(clone, plaintextPath);
+  await mkdir(join(clone, 'wiki', 'project', 'fact'), { recursive: true });
+  await writeFile(remotePath, await readFile(join(local.root, plaintextPath), 'utf8'));
+  await exec('git', ['add', plaintextPath], { cwd: clone });
+  await exec('git', ['commit', '-m', 'remote: add plaintext secret'], { cwd: clone });
+  await exec('git', ['push', 'origin', 'main'], { cwd: clone });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.sync({ push: false }), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(existsSync(join(vault.root, plaintextPath)), false);
+});
+
+test('remote synchronization cannot modify or delete committed evidence', async () => {
+  const { vault, clone } = await remoteFixture();
+  const captured = await vault.capture({ content: 'REMOTE_IMMUTABLE_EVIDENCE_922F', scope: 'project', sensitivity: 'internal' });
+  await vault.sync({ push: true });
+  await exec('git', ['pull', '--ff-only'], { cwd: clone });
+  const evidencePath = join(clone, captured.evidencePath);
+  await writeFile(evidencePath, (await readFile(evidencePath, 'utf8')).replace('sensitivity: internal', 'sensitivity: public'));
+  await exec('git', ['add', captured.evidencePath], { cwd: clone });
+  await exec('git', ['commit', '-m', 'remote: rewrite evidence metadata'], { cwd: clone });
+  await exec('git', ['push', 'origin', 'main'], { cwd: clone });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.sync({ push: false }), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.match(await readFile(join(vault.root, captured.evidencePath), 'utf8'), /sensitivity: internal/);
+});
+
+test('secret logical keys remain absent from Git paths, content, and visible history subjects', async () => {
+  const vault = await freshVault({ masterKey });
+  const config = await vault.config();
+  const secretKey = 'SECRET_KEY_GIT_CANARY_4FD2';
+  await vault.propose({
+    kind: 'fact', key: secretKey, statement: 'SECRET_GIT_PAYLOAD_1B94', scope: 'project', sensitivity: 'secret',
+    confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const paths = await vault.git.run(['ls-tree', '-r', '--name-only', 'HEAD']);
+  const subjects = await vault.git.run(['log', '--format=%s']);
+  const content = await vault.git.run(['grep', '-n', secretKey, 'HEAD'], { allowFailure: true });
+  assert.doesNotMatch(paths.toLowerCase(), /secret-key-git-canary-4fd2/);
+  assert.doesNotMatch(subjects, new RegExp(secretKey));
+  assert.equal(content, '');
+
+  const publicReader = new MemoryVault(vault.root, { principal: principal(config.tenantId) });
+  const history = await publicReader.history();
+  assert.ok(history.length > 0);
+  assert.ok(history.every((entry) => entry.subject === '[redacted]'));
 });
 
 test('conflicts are excluded from ordinary retrieval and rejection restores the prior fact', async () => {

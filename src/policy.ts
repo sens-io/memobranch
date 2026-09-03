@@ -68,7 +68,7 @@ export function authorize(
   if (resource?.sensitivity && sensitivityRank[resource.sensitivity] > sensitivityRank[principal.maxSensitivity]) {
     deny(principal, permission, 'sensitivity');
   }
-  if (principal.tenantId && resource?.tenantId && principal.tenantId !== resource.tenantId) {
+  if (resource?.tenantId && !isUnboundLocalAdmin(principal) && principal.tenantId !== resource.tenantId) {
     deny(principal, permission, 'tenant');
   }
 }
@@ -83,7 +83,11 @@ export function canAccess(principal: Principal, scope: Scope, sensitivity: Sensi
 }
 
 export function assertTenant(principal: Principal, tenantId: string): void {
-  if (principal.tenantId && principal.tenantId !== tenantId) deny(principal, 'read', 'tenant');
+  if (!isUnboundLocalAdmin(principal) && principal.tenantId !== tenantId) deny(principal, 'read', 'tenant');
+}
+
+function isUnboundLocalAdmin(principal: Principal): boolean {
+  return !principal.tenantId && principal.permissions.includes('admin');
 }
 
 function deny(principal: Principal, permission: Permission, reason: string): never {

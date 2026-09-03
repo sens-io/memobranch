@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
   <a href="https://github.com/sens-io/memobranch/actions/workflows/ci.yml"><img src="https://github.com/sens-io/memobranch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-38%20passed-22C55E?style=flat-square" alt="38 tests passed">
+  <img src="https://img.shields.io/badge/tests-46%20passed-22C55E?style=flat-square" alt="46 tests passed">
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
   <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
@@ -64,7 +64,7 @@ flowchart LR
 | “这条记忆从哪里来？” | 每条正式记忆保留证据引用和 Git 历史 |
 | “新信息和旧信息冲突怎么办？” | 进入审核队列，不静默覆盖 |
 | “Agent 能不能自己声明管理员权限？” | 不能，身份与权限由服务端配置决定 |
-| “秘密会不会进 Git 或向量库？” | 敏感内容信封加密，并排除出持久化索引和生成文件 |
+| “秘密会不会进 Git 或向量库？” | 敏感内容信封加密，逻辑键使用不透明路径，并排除出索引与生成文件 |
 | “写到一半进程崩了怎么办？” | 写前事务日志支持精确回滚或完整重放 |
 | “模型 API 挂了还能搜索吗？” | 自动降级到确定性的中英文词法检索 |
 
@@ -245,7 +245,7 @@ amem capture "仅授权 Agent 可见的机密内容" \
   --json
 ```
 
-每条机密记录使用独立数据密钥，完整逻辑元数据和正文都经过 AES-256-GCM 认证加密。Git 跟踪文件只保留最小非敏感信封。
+每条机密记录使用独立数据密钥，完整逻辑元数据和正文都经过 AES-256-GCM 认证加密。Git 跟踪文件只保留最小非敏感信封，文件名使用不透明 ID，提交主题也不会包含逻辑键。
 
 > [!WARNING]
 > 不要把 `AMEM_MASTER_KEY` 写进仓库、配置、远端 URL 或 shell 历史。生产环境应通过操作系统密钥链、secret manager 或安全的进程注入提供。
@@ -256,7 +256,9 @@ amem capture "仅授权 Agent 可见的机密内容" \
 - 跨主机读取机密记忆时，需要单独、安全地迁移 master key 与 `.amem/keys.json`。
 - 丢失任意一项都会使对应历史密文不可恢复。
 - `erase` 只能保证本 vault 不再具备解密能力，不能删除外部备份、已导出明文或第三方副本。
+- `erase` 的理由会规范化后保存 SHA-256 承诺值，Git 中不会出现理由明文；旧版无理由摘要的恢复记录会如实标记为未记录。
 - 机密记录不会进入 `MEMORY.md`、`INDEX.md`、持久化索引、向量 API、审计正文或指标标签。
+- 证据 ID 同时绑定 scope、sensitivity、来源 URI 与正文；远端只能追加证据，不能改写或删除既有证据。
 
 ### 权限模型
 
@@ -271,7 +273,7 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
 | `maintain` | 恢复、索引、健康检查与守护服务 |
 | `admin` | 包含全部权限，并允许密码学擦除 |
 
-授权会同时检查 `scope`、最高 `sensitivity` 与可选 `tenantId`，并且发生在解密、评分、图扩展、摘要生成和 embedding 请求之前。
+授权会同时检查 `scope`、最高 `sensitivity` 与 `tenantId`，并且发生在解密、评分、图扩展、摘要生成和 embedding 请求之前。所有非管理员主体都必须绑定 vault 配置中的 `tenantId`；仅本地隐式管理员可以省略。
 
 ## 🔌 MCP 接入
 
@@ -291,7 +293,8 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
         "AMEM_ACTOR_NAME": "Workspace Agent",
         "AMEM_PERMISSIONS": "read,write,review",
         "AMEM_ALLOWED_SCOPES": "user,project",
-        "AMEM_MAX_SENSITIVITY": "internal"
+        "AMEM_MAX_SENSITIVITY": "internal",
+        "AMEM_TENANT_ID": "copy-from-agent-memory-json"
       }
     }
   }
@@ -326,7 +329,7 @@ amem remote status --root ~/my-agent-memory --json
 amem remote sync --root ~/my-agent-memory --push --json
 ```
 
-同步顺序：恢复未完成事务 → 检查工作树 → fetch → 计算 ahead/behind → 快进或常规 merge → 重建派生状态 → 健康校验 → 可选 push。
+同步顺序：恢复未完成事务 → 检查工作树 → fetch → 计算 ahead/behind → 快进或常规 merge → 证据只追加校验 → 重建派生状态 → 机密编码与健康校验 → 可选 push。
 
 发生内容冲突、后置校验失败或 push 失败时，系统会保留错误信息并恢复同步前的本地 HEAD、受管工作树和同步状态，不会自动强推。
 
@@ -373,7 +376,7 @@ curl http://127.0.0.1:9464/metrics
 | `AMEM_PERMISSIONS` | 权限列表 | MCP 默认为 `read` |
 | `AMEM_ALLOWED_SCOPES` | 允许的 scope 列表 | 全部 |
 | `AMEM_MAX_SENSITIVITY` | 最高敏感级别 | `internal` |
-| `AMEM_TENANT_ID` | 可选 vault 租户绑定 | 空 |
+| `AMEM_TENANT_ID` | 非管理员必填；复制 vault 配置中的 `tenantId` | 无，缺失时拒绝访问 |
 | `AMEM_MASTER_KEY` | 信封加密 master key | 空，机密操作失败关闭 |
 | `AMEM_LLM_API_KEY` | OpenAI 兼容 API 凭据 | 空 |
 | `OPENAI_API_KEY` | `AMEM_LLM_API_KEY` 的兼容来源 | 空 |
@@ -441,15 +444,15 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 | Gate | 当前状态 |
 | --- | :---: |
 | TypeScript build | ✅ PASS |
-| CLI / MCP / Vault tests | ✅ 38 / 38 |
+| CLI / MCP / Vault tests | ✅ 46 / 46 |
 | 1,000 文档索引性能门禁 | ✅ PASS |
 | npm package dry-run | ✅ PASS |
 | 依赖漏洞审计 | ✅ 0 known vulnerabilities |
 | OpenSpec strict validation | ✅ 6 / 6 specs |
 
-测试覆盖权限与租户拒绝、LLM 机密降级、机密信封与可恢复擦除、事务回滚/重放、长时活锁、索引篡改、证据改写、冲突闭环、CJK 检索、热查询、provider 超时/取消/响应上限、远端配置补偿、同步失败回滚，以及维护服务端点与优雅关闭。
+测试覆盖租户缺失拒绝、机密明文同步回滚、证据敏感度降级与远端不可变性、机密 Git 元数据、删除理由承诺、多进程锁竞争、跨进程缓存失效、事务回滚/重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
 
-规格与归档记录位于 [`openspec/`](./openspec)，本轮独立审计修复及验证证据见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)。
+规格与归档记录位于 [`openspec/`](./openspec)；生产审计见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)，本轮独立复审与验证证据见 [`independent-audit-remediation`](./openspec/changes/archive/2026-09-03-independent-audit-remediation)。
 
 ## 🧱 威胁模型与边界
 

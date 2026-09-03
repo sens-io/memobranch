@@ -5,6 +5,7 @@ import { OperationsTelemetry } from './audit.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { EncryptionManager, isConfidential, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
+import { asEvidenceDocument, assertEvidenceDocument, evidenceDigest } from './evidence.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
@@ -66,6 +67,7 @@ interface ErasureIntent {
   createdAt: string;
   requestedAt: string;
   actor: Actor;
+  reasonSha256?: string;
 }
 
 export class MemoryVault {
@@ -92,7 +94,7 @@ export class MemoryVault {
   }
 
   async initialize(name = basename(this.root)): Promise<{ created: boolean; commit: string | null }> {
-    authorize(this.principal, 'maintain');
+    authorize(this.principal, 'maintain', { tenantId: this.principal.tenantId ?? 'local-admin' });
     await mkdir(this.root, { recursive: true });
     return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       const configPath = join(this.root, 'agent-memory.json');
@@ -103,6 +105,7 @@ export class MemoryVault {
       }
       const timestamp = nowIso();
       const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
+      if (this.principal.tenantId) config.tenantId = this.principal.tenantId;
       await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
       await this.git.initialize();
       const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
@@ -172,7 +175,7 @@ export class MemoryVault {
     const scope = options.scope ?? 'user';
     const sensitivity = options.sensitivity ?? 'internal';
     authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
-    const digest = sha256(`${scope}\0${options.sourceUri ?? ''}\0${content}`);
+    const digest = evidenceDigest(scope, sensitivity, options.sourceUri ?? '', content);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
     const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
@@ -218,7 +221,7 @@ export class MemoryVault {
   }
 
   async propose(proposal: ProposedMemory, evidence: string[] = [], actor: Actor = this.principal): Promise<{ id: string; path: string; duplicate: boolean; commit: string | null }> {
-    const result = await this.proposeMany([proposal], evidence, actor, `propose ${proposal.key}`);
+    const result = await this.proposeMany([proposal], evidence, actor, 'propose candidate');
     const first = result.candidates[0];
     if (!first) throw new AgentMemoryError('VALIDATION_FAILED', 'No candidate was created');
     return { ...first, duplicate: result.duplicates.includes(first.id), commit: result.commit };
@@ -427,7 +430,7 @@ export class MemoryVault {
   async forget(selector: string, reason: string, actor: Actor = this.principal): Promise<{ memoryId: string; commit: string | null }> {
     this.assertInitialized();
     if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'A revocation reason is required');
-    const mutation = await this.withMutation('review', actor, 'forget', `memory: revoke ${safeLogToken(selector)}`, async () => {
+    const mutation = await this.withMutation('review', actor, 'forget', 'memory: revoke record', async () => {
       const memory = await this.findOneMemory(selector);
       const timestamp = nowIso();
       memory.meta.status = 'revoked';
@@ -462,12 +465,13 @@ export class MemoryVault {
         createdAt: memory.meta.createdAt,
         requestedAt: nowIso(),
         actor,
+        reasonSha256: sha256(reason.trim()),
       };
       await this.persistErasureIntent(intent);
       const commit = await this.completeErasureIntentLocked(intent);
       await this.telemetry.gauge('wrapped_keys_last_erasure', 1);
       return { memoryId: intent.id, keyErased: true, commit };
-    }), [selector]);
+    }), [auditSelector(selector)]);
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
@@ -651,18 +655,22 @@ export class MemoryVault {
         git,
         index: { healthy: false, documents: 0, error: 'Index validation skipped because configuration is invalid' },
         evidence: { healthy: false, errors: ['Evidence validation skipped because configuration is invalid'] },
+        documents: { healthy: false, errors: ['Document validation skipped because configuration is invalid'] },
         recovery: { pending },
         configuration: { healthy: false, error: error.message },
       };
     }
-    const [evidence, candidates, memories, git, pending, evidenceIntegrity] = await Promise.all([
-      this.readDirectory<EvidenceMeta>('evidence'),
-      this.readDirectory<CandidateMeta>('candidates'),
-      this.readDirectory<MemoryMeta>('wiki').then((documents) => documents.filter((document) => document.meta.type === 'memory')),
+    const [candidateScan, memoryScan, git, pending, evidenceIntegrity] = await Promise.all([
+      this.scanDirectory<CandidateMeta>('candidates'),
+      this.scanDirectory<MemoryMeta>('wiki'),
       this.git.integrity(),
       pendingTransactionCount(this.root),
       this.verifyEvidenceIntegrity(),
     ]);
+    const evidence = evidenceIntegrity.documents;
+    const candidates = candidateScan.documents;
+    const memories = memoryScan.documents.filter((document) => document.meta.type === 'memory');
+    const documentErrors = [...candidateScan.errors, ...memoryScan.errors];
     const documents = [...evidence, ...candidates, ...memories];
     const known = new Set(documents.map((document) => document.path));
     const backlinks = new Map<string, string[]>();
@@ -685,7 +693,7 @@ export class MemoryVault {
     } catch (error) {
       indexHealth = { healthy: false, documents: 0, error: error instanceof Error ? error.message : String(error) };
     }
-    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy && evidenceIntegrity.errors.length === 0;
+    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy && evidenceIntegrity.errors.length === 0 && documentErrors.length === 0;
     return {
       healthy,
       counts: { evidence: evidence.length, candidates: candidates.length, activeMemories: memories.filter((item) => item.meta.status === 'active').length },
@@ -698,6 +706,7 @@ export class MemoryVault {
       git,
       index: indexHealth,
       evidence: { healthy: evidenceIntegrity.errors.length === 0, errors: evidenceIntegrity.errors },
+      documents: { healthy: documentErrors.length === 0, errors: documentErrors },
       recovery: { pending },
       configuration: { healthy: true },
     };
@@ -708,11 +717,17 @@ export class MemoryVault {
     const config = await this.config();
     authorize(this.principal, 'read', { tenantId: config.tenantId });
     const safePath = path ? toPosix(relative(this.root, resolveInside(this.root, path))) : undefined;
-    return this.git.history(Math.max(1, Math.min(limit, 100)), safePath);
+    const admin = this.principal.permissions.includes('admin');
+    if (safePath && !admin && isCanonicalDocumentPath(safePath) && existsSync(resolveInside(this.root, safePath))) {
+      await this.readDocument<Record<string, unknown>>(safePath);
+    }
+    const entries = await this.git.history(Math.max(1, Math.min(limit, 100)), safePath);
+    return admin ? entries : entries.map((entry) => ({ ...entry, subject: '[redacted]' }));
   }
 
   private async withMutation<T>(permission: Permission, actor: Actor, operation: string, message: string, action: () => Promise<T>, resourceIds?: string[]): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
+    await this.config();
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
       await recoverTransactions(this.root, this.git, this.journalKey);
@@ -794,6 +809,7 @@ export class MemoryVault {
       try {
         intent = JSON.parse(await readFile(join(directory, name), 'utf8')) as ErasureIntent;
         if (intent.version !== 1 || !intent.id || !intent.path || !intent.scope || !intent.createdAt || !intent.actor?.id) throw new Error('Malformed erasure intent');
+        if (intent.reasonSha256 !== undefined && !/^[a-f0-9]{64}$/.test(intent.reasonSha256)) throw new Error('Malformed erasure reason commitment');
         resolveInside(this.root, intent.path);
       } catch (error) {
         throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', `Invalid erasure intent: ${name}`, {
@@ -826,7 +842,8 @@ export class MemoryVault {
         createdAt: intent.createdAt,
         updatedAt: timestamp,
         erasedAt: timestamp,
-        reasonRecorded: true,
+        reasonRecorded: Boolean(intent.reasonSha256),
+        ...(intent.reasonSha256 ? { reasonSha256: intent.reasonSha256 } : {}),
       };
       await this.writeManaged(intent.path, serializeMarkdown(tombstone, `# Erased memory ${intent.id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
       await this.appendLog('erase', intent.actor, `${intent.id}; cryptographic-erasure=true`);
@@ -848,53 +865,43 @@ export class MemoryVault {
     return join(this.root, '.amem', 'erasures', `${safeLogToken(id)}.json`);
   }
 
-  private async verifyEvidenceIntegrity(): Promise<{ errors: string[] }> {
+  private async verifyEvidenceIntegrity(): Promise<{ errors: string[]; documents: Array<MarkdownDocument<EvidenceMeta>> }> {
     const errors: string[] = [];
+    const documents: Array<MarkdownDocument<EvidenceMeta>> = [];
     for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
       const path = toPosix(relative(this.root, file));
       try {
-        const outer = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
-        let document: MarkdownDocument<Record<string, unknown>>;
-        if (isEncryptedEnvelope(outer.meta)) {
-          // A process without the master key cannot inspect confidential evidence,
-          // but it also cannot use the cache as authority. Git cleanliness still
-          // protects the encrypted envelope until a keyed doctor run verifies AEAD.
-          if (!this.encryption.available) continue;
-          const logical = await this.encryption.decrypt<Record<string, unknown>>(outer.meta, outer.body);
-          document = { path, meta: logical.meta, body: logical.body };
-        } else {
-          document = { path, meta: outer.meta, body: outer.body };
-        }
-        const id = typeof document.meta.id === 'string' ? document.meta.id : '';
-        const prefix = `# Evidence ${id}\n\n`;
-        if (document.meta.type !== 'evidence' || document.meta.immutable !== true || !id || !document.body.startsWith(prefix)) {
-          errors.push(`${path}: invalid evidence schema`);
-          continue;
-        }
-        const sourceUri = typeof document.meta.sourceUri === 'string' ? document.meta.sourceUri : '';
-        const digest = sha256(`${scopeOf(document.meta)}\0${sourceUri}\0${document.body.slice(prefix.length)}`);
-        if (document.meta.sha256 !== digest || id !== `ev-${digest.slice(0, 12)}`) errors.push(`${path}: evidence hash mismatch`);
+        const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+        const document = await this.materializeDocument<Record<string, unknown>>(path, parsed);
+        documents.push(asEvidenceDocument(document));
       } catch (error) {
         errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    return { errors };
+    return { errors, documents };
   }
 
   private async validateManagedState(): Promise<void> {
-    const config = await readVaultConfig(this.root);
-    assertTenant(this.principal, config.tenantId);
-    for (const directory of ['evidence', 'candidates', 'wiki']) {
-      for (const file of await listMarkdown(resolveInside(this.root, directory))) {
-        await this.readDocument<Record<string, unknown>>(toPosix(relative(this.root, file)));
+    try {
+      const config = await readVaultConfig(this.root);
+      assertTenant(this.principal, config.tenantId);
+      for (const directory of ['evidence', 'candidates', 'wiki']) {
+        for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+          await this.readDocument<Record<string, unknown>>(toPosix(relative(this.root, file)));
+        }
       }
+      const report = await this.doctor();
+      if (!report.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronized vault failed health validation', {
+        conflicts: report.conflicts.length,
+        expired: report.expired.length,
+        deadLinks: report.deadLinks.length,
+      });
+    } catch (error) {
+      if (error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT') throw error;
+      throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronized vault failed canonical validation', {
+        causeCode: error instanceof AgentMemoryError ? error.code : 'VALIDATION_FAILED',
+      });
     }
-    const report = await this.doctor();
-    if (!report.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronized vault failed health validation', {
-      conflicts: report.conflicts.length,
-      expired: report.expired.length,
-      deadLinks: report.deadLinks.length,
-    });
   }
 
   private async findOneMemory(selector: string): Promise<MarkdownDocument<MemoryMeta>> {
@@ -908,7 +915,8 @@ export class MemoryVault {
   private async promoteCandidate(candidate: MarkdownDocument<CandidateMeta>, superseded: Array<MarkdownDocument<MemoryMeta>>, reviewed: boolean): Promise<MarkdownDocument<MemoryMeta>> {
     const statement = candidateStatement(candidate.body);
     const id = `mem-${shortId(`${candidate.meta.scope}\0${candidate.meta.kind}\0${candidate.meta.key}\0${statement}`)}`;
-    const path = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${slugify(candidate.meta.key)}-${id.slice(-6)}.md`;
+    const filename = isConfidential(candidate.meta.sensitivity) ? id : `${slugify(candidate.meta.key)}-${id.slice(-6)}`;
+    const path = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${filename}.md`;
     const timestamp = nowIso();
     for (const old of superseded) {
       old.meta.status = 'superseded';
@@ -1015,16 +1023,33 @@ export class MemoryVault {
     const scope = scopeOf(parsed.meta);
     const sensitivity = sensitivityOf(parsed.meta);
     authorize(this.principal, 'read', { scope, sensitivity });
-    if (isEncryptedEnvelope(parsed.meta)) {
-      const logical = await this.encryption.decrypt<T>(parsed.meta as EncryptedEnvelopeMeta, parsed.body);
-      const logicalMeta = logical.meta as Record<string, unknown>;
-      if (logicalMeta.id !== parsed.meta.id || logicalMeta.type !== parsed.meta.type || logicalMeta.scope !== parsed.meta.scope || logicalMeta.sensitivity !== parsed.meta.sensitivity) {
-        throw new AgentMemoryError('ENCRYPTION_FAILED', `Encrypted envelope metadata mismatch for ${parsed.meta.id}`);
-      }
-      authorize(this.principal, 'read', { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta) });
-      return { path: normalized, meta: logical.meta, body: logical.body };
+    const document = await this.materializeDocument<T>(normalized, parsed);
+    const logicalMeta = document.meta as Record<string, unknown>;
+    authorize(this.principal, 'read', { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta) });
+    return document;
+  }
+
+  private async materializeDocument<T extends object>(
+    path: string,
+    parsed: { meta: Record<string, unknown>; body: string },
+  ): Promise<MarkdownDocument<T>> {
+    const sensitivity = sensitivityOf(parsed.meta);
+    if (isConfidential(sensitivity) && !isEncryptedEnvelope(parsed.meta)) {
+      throw new AgentMemoryError('ENCRYPTION_FAILED', `Confidential document is not encrypted: ${path}`);
     }
-    return { path: normalized, meta: parsed.meta as T, body: parsed.body };
+    let document: MarkdownDocument<Record<string, unknown>>;
+    if (isEncryptedEnvelope(parsed.meta)) {
+      const logical = await this.encryption.decrypt<Record<string, unknown>>(parsed.meta as EncryptedEnvelopeMeta, parsed.body);
+      const logicalMeta = logical.meta;
+      if (logicalMeta.id !== parsed.meta.id || logicalMeta.type !== parsed.meta.type || logicalMeta.scope !== parsed.meta.scope || logicalMeta.sensitivity !== parsed.meta.sensitivity) {
+        throw new AgentMemoryError('ENCRYPTION_FAILED', `Encrypted envelope metadata mismatch for ${String(parsed.meta.id ?? 'unknown')}`);
+      }
+      document = { path, meta: logicalMeta, body: logical.body };
+    } else {
+      document = { path, meta: parsed.meta, body: parsed.body };
+    }
+    if (path.startsWith('evidence/')) assertEvidenceDocument(document);
+    return document as unknown as MarkdownDocument<T>;
   }
 
   private async readProjectionDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
@@ -1049,6 +1074,21 @@ export class MemoryVault {
       }
     }
     return documents;
+  }
+
+  private async scanDirectory<T extends object>(directory: string): Promise<{ documents: Array<MarkdownDocument<T>>; errors: string[] }> {
+    const documents: Array<MarkdownDocument<T>> = [];
+    const errors: string[] = [];
+    for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+      const path = toPosix(relative(this.root, file));
+      try {
+        documents.push(await this.readDocument<T>(path));
+      } catch (error) {
+        if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') continue;
+        errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { documents, errors };
   }
 
   private async findById<T extends object>(directory: string, id: string): Promise<MarkdownDocument<T> | null> {
@@ -1083,6 +1123,14 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
   if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
   if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
   if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
+}
+
+function isCanonicalDocumentPath(path: string): boolean {
+  return path.endsWith('.md') && ['evidence/', 'candidates/', 'wiki/'].some((prefix) => path.startsWith(prefix));
+}
+
+function auditSelector(selector: string): string {
+  return /^mem-[a-f0-9]{12}$/.test(selector) ? selector : `selector-sha256:${sha256(selector).slice(0, 16)}`;
 }
 
 function constrainToEvidence(

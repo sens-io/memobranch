@@ -158,6 +158,7 @@ export class GitStore {
           }
         }
         merged = true;
+        if (originalHead) await this.assertEvidenceAppendOnly(originalHead);
         await options.reconcile?.();
       }
       await options.validate?.();
@@ -187,6 +188,16 @@ export class GitStore {
     }
     if (syncState === null) await rm(syncStatePath, { force: true });
     else await writeText(syncStatePath, syncState);
+  }
+
+  private async assertEvidenceAppendOnly(originalHead: string): Promise<void> {
+    const changes = await this.run(['diff', '--name-status', '--find-renames', originalHead, 'HEAD', '--', 'evidence']);
+    const violations = changes.split('\n').filter(Boolean).filter((line) => !line.startsWith('A\t'));
+    if (violations.length > 0) {
+      throw new AgentMemoryError('REMOTE_CONFLICT', 'Remote synchronization attempted to modify or remove immutable evidence', {
+        violations: violations.slice(0, 20),
+      });
+    }
   }
 
   async integrity(): Promise<GitIntegrity> {
