@@ -8,7 +8,7 @@
 ## 2. Concurrency and retrieval
 
 - [x] 2.1 Implement uniquely owned lock contenders and single-winner stale recovery.
-- [ ] 2.2 Invalidate in-memory search state when another process atomically replaces the persistent index.
+- [x] 2.2 Invalidate in-memory search state when another process atomically replaces the persistent index.
 
 ## 3. Confidentiality and identity
 

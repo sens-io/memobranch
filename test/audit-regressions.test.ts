@@ -180,6 +180,21 @@ test('index metadata tampering is unhealthy and cannot lower canonical authoriza
   assert.equal((await limited.search('INDEX_AUTH_CANARY')).length, 0);
 });
 
+test('a long-lived search cache observes revocation completed by another process', async () => {
+  const longLived = await freshVault();
+  await longLived.propose({
+    kind: 'fact', key: 'cross process revocation', statement: 'CROSS_PROCESS_REVOCATION_77C1', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await longLived.consolidate();
+  const warmed = await longLived.search('CROSS_PROCESS_REVOCATION_77C1');
+  assert.equal(warmed.length, 1);
+
+  const secondProcess = new MemoryVault(longLived.root);
+  await secondProcess.forget(warmed[0]!.id, 'revoked by another process');
+  assert.equal((await longLived.search('CROSS_PROCESS_REVOCATION_77C1')).length, 0);
+});
+
 test('evidence hash changes make health fail and cannot be swept into another commit', async () => {
   const vault = await freshVault();
   const captured = await vault.capture({ content: 'ORIGINAL_EVIDENCE_C82A', scope: 'project', sensitivity: 'internal' });

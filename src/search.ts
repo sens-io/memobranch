@@ -80,6 +80,7 @@ export class PersistentSearchIndex {
   private readonly indexPath: string;
   private readonly embeddingPath: string;
   private trustedIndex: StoredIndex | null = null;
+  private trustedFileIdentity: string | null = null;
 
   constructor(
     readonly root: string,
@@ -139,6 +140,7 @@ export class PersistentSearchIndex {
     const index: StoredIndex = { version: INDEX_VERSION, updatedAt: new Date().toISOString(), documents };
     if (rebuilt || updated > 0 || removed > 0) await writeText(this.indexPath, `${JSON.stringify(index)}\n`);
     this.trustedIndex = index;
+    this.trustedFileIdentity = await fileIdentity(this.indexPath);
 
     let semanticStatus: ReindexResult['semanticStatus'] = 'disabled';
     if (options.semantic && this.config.index.embeddingModel) {
@@ -249,11 +251,18 @@ export class PersistentSearchIndex {
 
   private async ensureTrusted(semantic: boolean): Promise<ReindexResult> {
     if (this.trustedIndex && !semantic) {
-      return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
+      if (this.trustedFileIdentity === await fileIdentity(this.indexPath)) {
+        return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
+      }
+      this.trustedIndex = null;
+      this.trustedFileIdentity = null;
     }
     if (!this.trustedIndex && await this.indexIsValid()) {
       const health = await this.health();
-      if (health.healthy) this.trustedIndex = await this.readIndex();
+      if (health.healthy) {
+        this.trustedIndex = await this.readIndex();
+        this.trustedFileIdentity = await fileIdentity(this.indexPath);
+      }
     }
     if (!this.trustedIndex || semantic) return this.refresh(semantic ? { semantic: true } : {});
     return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
@@ -555,4 +564,14 @@ function cosine(left: number[], right: number[]): number {
 
 function toPosix(path: string): string {
   return path.split('\\').join('/');
+}
+
+async function fileIdentity(path: string): Promise<string | null> {
+  try {
+    const value = await stat(path);
+    return `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
 }
