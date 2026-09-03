@@ -163,8 +163,8 @@ flowchart TB
     Git --> Remote[(Optional Git Remote)]
 
     Vault --> Ops[Maintenance Service]
-    Ops --> Health[/healthz]
-    Ops --> Metrics[/metrics]
+    Ops --> Health["/healthz"]
+    Ops --> Metrics["/metrics"]
     Ops --> Audit[(Redacted Audit)]
 ```
 
