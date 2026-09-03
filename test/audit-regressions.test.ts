@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -141,6 +141,68 @@ test('erasure failure makes no success commit and a durable intent can recover',
   assert.equal(await vault.encryption.hasKey(memory.id), false);
   assert.equal((await vault.search('ERASURE_HISTORY_CANARY', { includeSecret: true })).length, 0);
   await assert.rejects(vault.get(memory.id), (error: unknown) => error instanceof AgentMemoryError && error.code === 'NOT_FOUND');
+});
+
+test('index metadata tampering is unhealthy and cannot lower canonical authorization', async () => {
+  const admin = await freshVault();
+  const config = await admin.config();
+  await admin.propose({
+    kind: 'fact', key: 'indexed restriction', statement: 'INDEX_AUTH_CANARY', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await admin.consolidate();
+  const indexPath = join(admin.root, '.amem', 'search-index.json');
+  const index = JSON.parse(await readFile(indexPath, 'utf8')) as { documents: Array<Record<string, unknown>> };
+  index.documents[0]!.scope = 'user';
+  index.documents[0]!.sensitivity = 'public';
+  await writeFile(indexPath, `${JSON.stringify(index)}\n`);
+  assert.equal((await admin.doctor()).index?.healthy, false);
+
+  const limited = new MemoryVault(admin.root, { principal: principal(config.tenantId) });
+  assert.equal((await limited.search('INDEX_AUTH_CANARY')).length, 0);
+});
+
+test('evidence hash changes make health fail and cannot be swept into another commit', async () => {
+  const vault = await freshVault();
+  const captured = await vault.capture({ content: 'ORIGINAL_EVIDENCE_C82A', scope: 'project', sensitivity: 'internal' });
+  const path = join(vault.root, captured.evidencePath);
+  await writeFile(path, (await readFile(path, 'utf8')).replace('ORIGINAL_EVIDENCE_C82A', 'TAMPERED_EVIDENCE_C82A'));
+  const report = await vault.doctor();
+  assert.equal(report.healthy, false);
+  assert.equal(report.evidence?.healthy, false);
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.propose({
+    kind: 'fact', key: 'unrelated', statement: 'unrelated proposal', scope: 'project', sensitivity: 'internal',
+    confidence: 1, explicit: true, conditions: [], tags: [],
+  }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'VALIDATION_FAILED');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('conflicts are excluded from ordinary retrieval and rejection restores the prior fact', async () => {
+  const vault = await freshVault();
+  await vault.propose({
+    kind: 'fact', key: 'conflict lifecycle', statement: 'ORIGINAL_CONFLICT_VALUE', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const replacement = await vault.propose({
+    kind: 'fact', key: 'conflict lifecycle', statement: 'REPLACEMENT_CONFLICT_VALUE', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  assert.equal((await vault.search('ORIGINAL_CONFLICT_VALUE')).length, 0);
+  await vault.reject(replacement.id, 'replacement was incorrect');
+  assert.equal((await vault.doctor()).conflicts.length, 0);
+  assert.equal((await vault.search('ORIGINAL_CONFLICT_VALUE')).length, 1);
+});
+
+test('explicit procedures still require the configured evidence threshold', async () => {
+  const vault = await freshVault();
+  const candidate = await vault.propose({
+    kind: 'procedure', key: 'unsafe shortcut', statement: 'Deploy without evidence.', scope: 'team',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  assert.deepEqual((await vault.consolidate()).deferred, [candidate.id]);
 });
 
 function authorizationDenied(error: unknown): boolean {

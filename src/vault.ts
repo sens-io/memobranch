@@ -337,7 +337,7 @@ export class MemoryVault {
         }
         const enoughConfidence = candidate.meta.confidence >= config.minimumConfidence;
         const enoughEvidence = candidate.meta.kind !== 'procedure' || unique(candidate.meta.evidence).length >= config.minimumProcedureEvidence;
-        if (!candidate.meta.explicit && (!enoughConfidence || !enoughEvidence)) {
+        if (!enoughEvidence || (!candidate.meta.explicit && !enoughConfidence)) {
           result.deferred.push(candidate.meta.id);
           continue;
         }
@@ -401,6 +401,23 @@ export class MemoryVault {
       candidate.meta.rejectionReason = reason.trim();
       candidate.meta.updatedAt = nowIso();
       await this.writeDocument(candidate);
+      const memories = (await this.readDirectory<MemoryMeta>('wiki')).filter((memory) =>
+        memory.meta.type === 'memory' && memory.meta.status === 'conflicted' &&
+        memory.meta.scope === candidate.meta.scope && memory.meta.kind === candidate.meta.kind &&
+        normalizeKey(memory.meta.key) === normalizeKey(candidate.meta.key));
+      const remaining = (await this.readDirectory<CandidateMeta>('candidates')).filter((other) =>
+        other.meta.id !== candidate.meta.id && other.meta.status === 'pending' &&
+        other.meta.scope === candidate.meta.scope && other.meta.kind === candidate.meta.kind &&
+        normalizeKey(other.meta.key) === normalizeKey(candidate.meta.key));
+      if (remaining.length === 0) {
+        for (const memory of memories) {
+          memory.meta.status = 'active';
+          memory.meta.updatedAt = candidate.meta.updatedAt;
+          memory.meta.validatedAt = candidate.meta.updatedAt;
+          memory.meta.revision += 1;
+          await this.writeDocument(memory);
+        }
+      }
       await this.appendLog('reject', actor, `${candidateId}; reason-recorded=true`);
     });
     return { commit: mutation.commit };
@@ -615,16 +632,18 @@ export class MemoryVault {
         ...(version === undefined ? {} : { configVersion: version }),
         git,
         index: { healthy: false, documents: 0, error: 'Index validation skipped because configuration is invalid' },
+        evidence: { healthy: false, errors: ['Evidence validation skipped because configuration is invalid'] },
         recovery: { pending },
         configuration: { healthy: false, error: error.message },
       };
     }
-    const [evidence, candidates, memories, git, pending] = await Promise.all([
+    const [evidence, candidates, memories, git, pending, evidenceIntegrity] = await Promise.all([
       this.readDirectory<EvidenceMeta>('evidence'),
       this.readDirectory<CandidateMeta>('candidates'),
       this.readDirectory<MemoryMeta>('wiki').then((documents) => documents.filter((document) => document.meta.type === 'memory')),
       this.git.integrity(),
       pendingTransactionCount(this.root),
+      this.verifyEvidenceIntegrity(),
     ]);
     const documents = [...evidence, ...candidates, ...memories];
     const known = new Set(documents.map((document) => document.path));
@@ -648,7 +667,7 @@ export class MemoryVault {
     } catch (error) {
       indexHealth = { healthy: false, documents: 0, error: error instanceof Error ? error.message : String(error) };
     }
-    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy;
+    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy && evidenceIntegrity.errors.length === 0;
     return {
       healthy,
       counts: { evidence: evidence.length, candidates: candidates.length, activeMemories: memories.filter((item) => item.meta.status === 'active').length },
@@ -660,6 +679,7 @@ export class MemoryVault {
       configVersion: config.version,
       git,
       index: indexHealth,
+      evidence: { healthy: evidenceIntegrity.errors.length === 0, errors: evidenceIntegrity.errors },
       recovery: { pending },
       configuration: { healthy: true },
     };
@@ -679,6 +699,10 @@ export class MemoryVault {
       await this.git.initialize();
       await recoverTransactions(this.root, this.git, this.journalKey);
       await this.recoverErasureIntentsLocked();
+      const evidenceIntegrity = await this.verifyEvidenceIntegrity();
+      if (evidenceIntegrity.errors.length > 0) {
+        throw new AgentMemoryError('VALIDATION_FAILED', 'Immutable evidence failed integrity validation', { errors: evidenceIntegrity.errors.slice(0, 20) });
+      }
       const transaction = await VaultTransaction.begin(this.root, this.git, actor, message, this.journalKey);
       this.activeTransaction = transaction;
       this.activePermission = permission;
@@ -791,6 +815,39 @@ export class MemoryVault {
 
   private erasureIntentPath(id: string): string {
     return join(this.root, '.amem', 'erasures', `${safeLogToken(id)}.json`);
+  }
+
+  private async verifyEvidenceIntegrity(): Promise<{ errors: string[] }> {
+    const errors: string[] = [];
+    for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+      const path = toPosix(relative(this.root, file));
+      try {
+        const outer = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+        let document: MarkdownDocument<Record<string, unknown>>;
+        if (isEncryptedEnvelope(outer.meta)) {
+          // A process without the master key cannot inspect confidential evidence,
+          // but it also cannot use the cache as authority. Git cleanliness still
+          // protects the encrypted envelope until a keyed doctor run verifies AEAD.
+          if (!this.encryption.available) continue;
+          const logical = await this.encryption.decrypt<Record<string, unknown>>(outer.meta, outer.body);
+          document = { path, meta: logical.meta, body: logical.body };
+        } else {
+          document = { path, meta: outer.meta, body: outer.body };
+        }
+        const id = typeof document.meta.id === 'string' ? document.meta.id : '';
+        const prefix = `# Evidence ${id}\n\n`;
+        if (document.meta.type !== 'evidence' || document.meta.immutable !== true || !id || !document.body.startsWith(prefix)) {
+          errors.push(`${path}: invalid evidence schema`);
+          continue;
+        }
+        const sourceUri = typeof document.meta.sourceUri === 'string' ? document.meta.sourceUri : '';
+        const digest = sha256(`${scopeOf(document.meta)}\0${sourceUri}\0${document.body.slice(prefix.length)}`);
+        if (document.meta.sha256 !== digest || id !== `ev-${digest.slice(0, 12)}`) errors.push(`${path}: evidence hash mismatch`);
+      } catch (error) {
+        errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { errors };
   }
 
   private async validateManagedState(): Promise<void> {

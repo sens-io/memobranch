@@ -81,11 +81,12 @@ export class GitStore {
     await this.run(['symbolic-ref', 'HEAD', 'refs/heads/main']);
   }
 
-  async commit(message: string, actor: Actor): Promise<string | null> {
+  async commit(message: string, actor: Actor, paths: string[] = trackedPaths): Promise<string | null> {
     const availablePaths: string[] = [];
-    for (const path of trackedPaths) {
+    for (const path of [...new Set(paths)]) {
       if (existsSync(join(this.root, path)) || await this.run(['ls-files', '--', path], { allowFailure: true })) availablePaths.push(path);
     }
+    if (availablePaths.length === 0) return null;
     await this.run(['add', '-A', '--', ...availablePaths], { actor });
     const hasChanges = await this.hasStagedChanges();
     if (!hasChanges) return null;

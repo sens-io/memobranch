@@ -86,7 +86,7 @@ export class VaultTransaction {
   async commit(): Promise<string | null> {
     this.manifest.phase = 'ready';
     await this.persist();
-    const commit = await this.git.commit(this.manifest.message, this.manifest.actor);
+    const commit = await this.git.commit(this.manifest.message, this.manifest.actor, Object.keys(this.manifest.writes));
     await rm(this.manifestPath, { force: true });
     return commit;
   }
@@ -129,7 +129,7 @@ export async function recoverTransactions(root: string, git: GitStore, encodedMa
       for (const [rootPath, state] of Object.entries(manifest.writes)) {
         await writeText(resolveInside(root, rootPath), decodeText(state.desired, rootPath, masterKey));
       }
-      const commit = await git.commit(manifest.message, manifest.actor);
+      const commit = await git.commit(manifest.message, manifest.actor, Object.keys(manifest.writes));
       if (commit) result.commits.push(commit);
       result.replayed.push(manifest.id);
     } else {

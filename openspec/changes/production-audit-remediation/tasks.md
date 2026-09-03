@@ -15,10 +15,10 @@
 
 ## 3. Canonical and derived integrity
 
-- [ ] 3.1 Strictly validate the index and authorize/return from canonical metadata and content.
-- [ ] 3.2 Verify evidence hashes and commit only transaction-declared paths.
-- [ ] 3.3 Exclude conflicts from ordinary search and restore state after rejection.
-- [ ] 3.4 Enforce procedure evidence independently of explicit confidence override.
+- [x] 3.1 Strictly validate the index and authorize/return from canonical metadata and content.
+- [x] 3.2 Verify evidence hashes and commit only transaction-declared paths.
+- [x] 3.3 Exclude conflicts from ordinary search and restore state after rejection.
+- [x] 3.4 Enforce procedure evidence independently of explicit confidence override.
 
 ## 4. Remote consistency
 
