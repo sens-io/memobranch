@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -9,6 +9,7 @@ import { LlmClient } from '../src/llm.js';
 import type { Principal } from '../src/policy.js';
 import type { ProposedMemory, Scope, Sensitivity } from '../src/types.js';
 import { MemoryVault } from '../src/vault.js';
+import { withFileLock } from '../src/utils.js';
 
 const roots: string[] = [];
 const masterKey = '51'.repeat(32);
@@ -97,6 +98,49 @@ test('limited writers cannot erase other scopes from generated projections', asy
   await writer.capture({ content: 'ordinary user evidence', scope: 'user', sensitivity: 'internal' });
   assert.match(await readFile(join(admin.root, 'MEMORY.md'), 'utf8'), /PROJECT_RESIDENT_CANARY/);
   assert.equal(existsSync(join(admin.root, 'agent-memory.json')), true);
+});
+
+test('an old lock owned by a live process is never stolen', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-lock-audit-'));
+  roots.push(root);
+  const lock = join(root, 'write.lock');
+  const handle = await open(lock, 'wx');
+  await handle.writeFile(`${process.pid}\n2000-01-01T00:00:00.000Z\n`);
+  await handle.close();
+  await assert.rejects(withFileLock(lock, async () => undefined, 75), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'LOCK_TIMEOUT');
+});
+
+test('concurrent initialization is serialized and idempotent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-init-audit-'));
+  roots.push(root);
+  const [first, second] = await Promise.all([new MemoryVault(root).initialize('concurrent'), new MemoryVault(root).initialize('concurrent')]);
+  assert.deepEqual([first.created, second.created].sort(), [false, true]);
+});
+
+test('erasure failure makes no success commit and a durable intent can recover', async () => {
+  const vault = await freshVault({ masterKey });
+  await vault.propose({
+    kind: 'fact', key: 'erasure target', statement: 'ERASURE_HISTORY_CANARY', scope: 'project',
+    sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const memory = (await vault.search('ERASURE_HISTORY_CANARY', { includeSecret: true }))[0]!;
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  const originalErase = vault.encryption.erase.bind(vault.encryption);
+  vault.encryption.erase = async () => { throw new Error('simulated key-store failure'); };
+  await assert.rejects(vault.erase(memory.id, 'test failure ordering'), /simulated key-store failure/);
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(await vault.encryption.hasKey(memory.id), true);
+  const audit = await readFile(join(vault.root, '.amem', 'audit.jsonl'), 'utf8');
+  const eraseEvents = audit.trim().split('\n').map((line) => JSON.parse(line) as { operation: string; outcome: string }).filter((event) => event.operation === 'erase');
+  assert.equal(eraseEvents.at(-1)?.outcome, 'error');
+
+  vault.encryption.erase = originalErase;
+  await vault.recover();
+  assert.equal(await vault.encryption.hasKey(memory.id), false);
+  assert.equal((await vault.search('ERASURE_HISTORY_CANARY', { includeSecret: true })).length, 0);
+  await assert.rejects(vault.get(memory.id), (error: unknown) => error instanceof AgentMemoryError && error.code === 'NOT_FOUND');
 });
 
 function authorizationDenied(error: unknown): boolean {

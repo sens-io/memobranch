@@ -9,9 +9,9 @@
 
 ## 2. Locks and cryptographic erasure
 
-- [ ] 2.1 Use owner tokens, live-PID checks, and owner-checked release; serialize initialization.
-- [ ] 2.2 Add durable erasure intents and idempotent recovery under the writer lock.
-- [ ] 2.3 Test old live locks, concurrent initialization, key-store failure, and interrupted erasure.
+- [x] 2.1 Use owner tokens, live-PID checks, and owner-checked release; serialize initialization.
+- [x] 2.2 Add durable erasure intents and idempotent recovery under the writer lock.
+- [x] 2.3 Test old live locks, concurrent initialization, key-store failure, and interrupted erasure.
 
 ## 3. Canonical and derived integrity
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
 import { OperationsTelemetry } from './audit.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
@@ -58,6 +58,16 @@ export interface ConsolidationResult {
   commit: string | null;
 }
 
+interface ErasureIntent {
+  version: 1;
+  id: string;
+  path: string;
+  scope: Scope;
+  createdAt: string;
+  requestedAt: string;
+  actor: Actor;
+}
+
 export class MemoryVault {
   readonly root: string;
   readonly git: GitStore;
@@ -83,38 +93,40 @@ export class MemoryVault {
   async initialize(name = basename(this.root)): Promise<{ created: boolean; commit: string | null }> {
     authorize(this.principal, 'maintain');
     await mkdir(this.root, { recursive: true });
-    const configPath = join(this.root, 'agent-memory.json');
-    if (existsSync(configPath)) {
-      await this.config();
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const configPath = join(this.root, 'agent-memory.json');
+      if (existsSync(configPath)) {
+        await this.config();
+        await this.git.initialize();
+        return { created: false, commit: null };
+      }
+      const timestamp = nowIso();
+      const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
+      await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
       await this.git.initialize();
-      return { created: false, commit: null };
-    }
-    const timestamp = nowIso();
-    const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
-    await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
-    await this.git.initialize();
-    const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
-    this.activeTransaction = transaction;
-    this.activePermission = 'maintain';
-    let ready = false;
-    let commit: string | null;
-    try {
-      await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
-      await this.installAgentInstructions();
-      await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
-      await this.rebuildGenerated(config);
-      await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
-      ready = true;
-      commit = await transaction.commit();
-    } catch (error) {
-      if (!ready) await transaction.rollback();
-      throw error;
-    } finally {
-      this.activeTransaction = null;
-      this.activePermission = null;
-    }
-    await this.reindex(false);
-    return { created: true, commit };
+      const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
+      this.activeTransaction = transaction;
+      this.activePermission = 'maintain';
+      let ready = false;
+      let commit: string | null;
+      try {
+        await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
+        await this.installAgentInstructions();
+        await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
+        await this.rebuildGenerated(config);
+        await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
+        ready = true;
+        commit = await transaction.commit();
+      } catch (error) {
+        if (!ready) await transaction.rollback();
+        throw error;
+      } finally {
+        this.activeTransaction = null;
+        this.activePermission = null;
+      }
+      await this.reindex(false);
+      return { created: true, commit };
+    });
   }
 
   async config(): Promise<VaultConfig> {
@@ -414,30 +426,30 @@ export class MemoryVault {
 
   async erase(selector: string, reason: string, actor: Actor = this.principal): Promise<{ memoryId: string; keyErased: boolean; commit: string | null }> {
     this.assertInitialized();
+    const config = await this.config();
     authorize(this.principal, 'admin');
     if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'An erasure reason is required');
-    const memory = await this.findOneMemory(selector);
-    if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
-    const id = memory.meta.id;
-    const mutation = await this.withMutation('admin', actor, 'erase', `memory: cryptographically erase ${safeLogToken(id)}`, async () => {
-      const tombstone = {
-        id,
-        type: 'memory-erased',
+    authorize(this.principal, 'admin', { tenantId: config.tenantId });
+    return this.telemetry.operation('erase', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      await this.git.initialize();
+      await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
+      const memory = await this.findOneMemory(selector);
+      if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
+      const intent: ErasureIntent = {
+        version: 1,
+        id: memory.meta.id,
+        path: memory.path,
         scope: memory.meta.scope,
-        sensitivity: 'internal',
-        status: 'revoked',
         createdAt: memory.meta.createdAt,
-        updatedAt: nowIso(),
-        erasedAt: nowIso(),
-        reasonRecorded: true,
+        requestedAt: nowIso(),
+        actor,
       };
-      await this.writeManaged(memory.path, serializeMarkdown(tombstone, `# Erased memory ${id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
-      await this.appendLog('erase', actor, `${id}; cryptographic-erasure=true`);
-      return id;
-    }, [id]);
-    const keyErased = await this.encryption.erase(id);
-    await this.telemetry.gauge('wrapped_keys_last_erasure', keyErased ? 1 : 0);
-    return { memoryId: mutation.value, keyErased, commit: mutation.commit };
+      await this.persistErasureIntent(intent);
+      const commit = await this.completeErasureIntentLocked(intent);
+      await this.telemetry.gauge('wrapped_keys_last_erasure', 1);
+      return { memoryId: intent.id, keyErased: true, commit };
+    }), [selector]);
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
@@ -507,6 +519,7 @@ export class MemoryVault {
     await this.config();
     return this.telemetry.operation('recover', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       const result = await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
       if (result.rolledBack.length || result.replayed.length) {
         try { await this.reconcileAfterSync(); } catch (error) {
           if (!(error instanceof AgentMemoryError && error.code === 'CONFIG_VERSION_UNSUPPORTED')) throw error;
@@ -665,6 +678,7 @@ export class MemoryVault {
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
       await recoverTransactions(this.root, this.git, this.journalKey);
+      await this.recoverErasureIntentsLocked();
       const transaction = await VaultTransaction.begin(this.root, this.git, actor, message, this.journalKey);
       this.activeTransaction = transaction;
       this.activePermission = permission;
@@ -710,6 +724,73 @@ export class MemoryVault {
       this.activePermission = null;
     }
     await this.searchIndex(await this.config()).refresh();
+  }
+
+  private async persistErasureIntent(intent: ErasureIntent): Promise<void> {
+    await writeText(this.erasureIntentPath(intent.id), `${JSON.stringify(intent, null, 2)}\n`);
+  }
+
+  private async recoverErasureIntentsLocked(): Promise<string[]> {
+    const directory = join(this.root, '.amem', 'erasures');
+    if (!existsSync(directory)) return [];
+    const completed: string[] = [];
+    for (const name of (await readdir(directory)).filter((entry) => entry.endsWith('.json')).sort()) {
+      let intent: ErasureIntent;
+      try {
+        intent = JSON.parse(await readFile(join(directory, name), 'utf8')) as ErasureIntent;
+        if (intent.version !== 1 || !intent.id || !intent.path || !intent.scope || !intent.createdAt || !intent.actor?.id) throw new Error('Malformed erasure intent');
+        resolveInside(this.root, intent.path);
+      } catch (error) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', `Invalid erasure intent: ${name}`, {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await this.completeErasureIntentLocked(intent);
+      completed.push(intent.id);
+    }
+    return completed;
+  }
+
+  private async completeErasureIntentLocked(intent: ErasureIntent): Promise<string | null> {
+    await this.encryption.erase(intent.id);
+    if (await this.encryption.hasKey(intent.id)) {
+      throw new AgentMemoryError('ENCRYPTION_FAILED', `Unable to destroy the wrapped key for ${intent.id}`);
+    }
+    const transaction = await VaultTransaction.begin(this.root, this.git, intent.actor, `memory: cryptographically erase ${safeLogToken(intent.id)}`, this.journalKey);
+    this.activeTransaction = transaction;
+    this.activePermission = 'admin';
+    let ready = false;
+    try {
+      const timestamp = nowIso();
+      const tombstone = {
+        id: intent.id,
+        type: 'memory-erased',
+        scope: intent.scope,
+        sensitivity: 'internal',
+        status: 'revoked',
+        createdAt: intent.createdAt,
+        updatedAt: timestamp,
+        erasedAt: timestamp,
+        reasonRecorded: true,
+      };
+      await this.writeManaged(intent.path, serializeMarkdown(tombstone, `# Erased memory ${intent.id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
+      await this.appendLog('erase', intent.actor, `${intent.id}; cryptographic-erasure=true`);
+      await this.rebuildGenerated(await this.config());
+      ready = true;
+      const commit = await transaction.commit();
+      await rm(this.erasureIntentPath(intent.id), { force: true });
+      return commit;
+    } catch (error) {
+      if (!ready) await transaction.rollback();
+      throw error;
+    } finally {
+      this.activeTransaction = null;
+      this.activePermission = null;
+    }
+  }
+
+  private erasureIntentPath(id: string): string {
+    return join(this.root, '.amem', 'erasures', `${safeLogToken(id)}.json`);
   }
 
   private async validateManagedState(): Promise<void> {
