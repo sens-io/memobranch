@@ -11,10 +11,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function freshVault(): Promise<MemoryVault> {
+async function freshVault(options: { masterKey?: string } = {}): Promise<MemoryVault> {
   const root = await mkdtemp(join(tmpdir(), 'amem-test-'));
   roots.push(root);
-  const vault = new MemoryVault(root);
+  const vault = new MemoryVault(root, options);
   await vault.initialize('test-vault');
   return vault;
 }
@@ -100,7 +100,7 @@ test('conflicting statements stay visible until approval supersedes the old memo
 });
 
 test('sensitive memories are filtered before retrieval', async () => {
-  const vault = await freshVault();
+  const vault = await freshVault({ masterKey: '11'.repeat(32) });
   await vault.propose({
     kind: 'fact', key: 'private codename', statement: 'The private codename is Blue Finch.', scope: 'project',
     sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: ['codename'],

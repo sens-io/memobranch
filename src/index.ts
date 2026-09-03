@@ -1,5 +1,14 @@
+export { AgentMemoryError, errorCodes, toAgentMemoryError } from './errors.js';
+export { CURRENT_VAULT_VERSION, defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 export { GitStore } from './git-store.js';
+export type { GitIntegrity, RemoteStatus } from './git-store.js';
 export { LlmClient } from './llm.js';
-export { searchVault } from './search.js';
+export { MaintenanceService } from './maintenance.js';
+export type { MaintenanceResult, ServiceHandle } from './maintenance.js';
+export { authorize, canAccess, localAdminPrincipal, permissions, principalFromEnv } from './policy.js';
+export type { Permission, Principal } from './policy.js';
+export { PersistentSearchIndex, searchVault } from './search.js';
+export type { ReindexResult, SearchIndexHealth, SearchOptions, SearchResult } from './search.js';
 export type * from './types.js';
 export { MemoryVault } from './vault.js';
+export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions } from './vault.js';

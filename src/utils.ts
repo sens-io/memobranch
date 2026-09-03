@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
+import { AgentMemoryError } from './errors.js';
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -62,16 +63,17 @@ export function resolveInside(root: string, requested = '.'): string {
   return target;
 }
 
-export async function withFileLock<T>(lockPath: string, action: () => Promise<T>): Promise<T> {
+export async function withFileLock<T>(lockPath: string, action: () => Promise<T>, timeoutMs = 5_000): Promise<T> {
   await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + Math.max(1, timeoutMs);
   let handle;
   for (;;) {
     try {
       handle = await open(lockPath, 'wx');
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) throw new AgentMemoryError('LOCK_TIMEOUT', `Timed out waiting for vault lock: ${lockPath}`);
       if (await isStaleLock(lockPath)) {
         await rm(lockPath, { force: true });
         continue;

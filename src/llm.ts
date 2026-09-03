@@ -1,10 +1,12 @@
 import type { MemoryKind, ProposedMemory, Scope, Sensitivity } from './types.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
+import { AgentMemoryError } from './errors.js';
 
 interface LlmOptions {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  embeddingModel?: string;
 }
 
 interface ExtractionDefaults {
@@ -16,20 +18,52 @@ export class LlmClient {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly model: string;
+  readonly embeddingModel: string;
 
   constructor(options: LlmOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.AMEM_LLM_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '');
     this.apiKey = options.apiKey ?? process.env.AMEM_LLM_API_KEY ?? process.env.OPENAI_API_KEY ?? '';
     this.model = options.model ?? process.env.AMEM_LLM_MODEL ?? 'gpt-4.1-mini';
+    this.embeddingModel = options.embeddingModel ?? process.env.AMEM_EMBEDDING_MODEL ?? '';
   }
 
   get configured(): boolean {
     return this.apiKey.length > 0 && this.model.length > 0;
   }
 
+  get embeddingConfigured(): boolean {
+    return this.apiKey.length > 0 && this.embeddingModel.length > 0;
+  }
+
+  canEmbed(model?: string | null): boolean {
+    return this.apiKey.length > 0 && Boolean(model || this.embeddingModel);
+  }
+
+  async embed(inputs: string[], model = this.embeddingModel): Promise<number[][]> {
+    if (!this.apiKey || !model) throw new Error('Embeddings are not configured. Set an embedding model and API key.');
+    if (inputs.length === 0) return [];
+    const response = await fetch(`${this.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model, input: inputs }),
+    });
+    if (!response.ok) throw new Error(`Embedding request failed (${response.status})`);
+    const payload = (await response.json()) as { data?: Array<{ index?: number; embedding?: number[] }> };
+    const ordered = [...(payload.data ?? [])].sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
+    if (ordered.length !== inputs.length || ordered.some((entry) =>
+      !Array.isArray(entry.embedding) || entry.embedding.length === 0 || entry.embedding.length > 32_768 || entry.embedding.some((value) => !Number.isFinite(value)),
+    )) {
+      throw new Error('Embedding response has an invalid vector count');
+    }
+    return ordered.map((entry) => entry.embedding!);
+  }
+
   async extractMemories(content: string, defaults: ExtractionDefaults): Promise<ProposedMemory[]> {
     if (!this.configured) {
-      throw new Error('LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
     }
 
     const system = [
@@ -60,8 +94,7 @@ export class LlmClient {
       }),
     });
     if (!response.ok) {
-      const details = (await response.text()).slice(0, 1_000);
-      throw new Error(`LLM request failed (${response.status}): ${details}`);
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request failed with HTTP ${response.status}`);
     }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
@@ -75,7 +108,7 @@ export class LlmClient {
 
   async answer(question: string, context: string): Promise<string> {
     if (!this.configured) {
-      throw new Error('LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
     }
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -97,8 +130,7 @@ export class LlmClient {
       }),
     });
     if (!response.ok) {
-      const details = (await response.text()).slice(0, 1_000);
-      throw new Error(`LLM request failed (${response.status}): ${details}`);
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request failed with HTTP ${response.status}`);
     }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;

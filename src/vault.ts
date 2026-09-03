@@ -1,10 +1,16 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
-import { GitStore } from './git-store.js';
+import { OperationsTelemetry } from './audit.js';
+import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
+import { EncryptionManager, isConfidential, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
+import { AgentMemoryError } from './errors.js';
+import { GitStore, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
-import { searchVault, type SearchOptions } from './search.js';
+import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
+import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
+import { pendingTransactionCount, recoverTransactions, type RecoveryResult, VaultTransaction } from './transaction.js';
 import type {
   Actor,
   CandidateMeta,
@@ -18,9 +24,13 @@ import type {
   Sensitivity,
   VaultConfig,
 } from './types.js';
-import { appendText, nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
+import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
 
-const SYSTEM_ACTOR: Actor = { id: 'system', name: 'Agent Memory' };
+export interface MemoryVaultOptions {
+  llm?: LlmClient;
+  principal?: Principal;
+  masterKey?: string;
+}
 
 export interface CaptureOptions {
   content: string;
@@ -50,66 +60,113 @@ export interface ConsolidationResult {
 export class MemoryVault {
   readonly root: string;
   readonly git: GitStore;
+  readonly llm: LlmClient;
+  readonly principal: Principal;
+  readonly encryption: EncryptionManager;
+  readonly telemetry: OperationsTelemetry;
+  private readonly journalKey: string | undefined;
+  private activeTransaction: VaultTransaction | null = null;
+  private activePermission: Permission | null = null;
 
-  constructor(root = process.cwd(), readonly llm = new LlmClient()) {
+  constructor(root = process.cwd(), options: MemoryVaultOptions | LlmClient = {}) {
     this.root = resolve(root);
+    const normalized = options instanceof LlmClient ? { llm: options } : options;
+    this.llm = normalized.llm ?? new LlmClient();
+    this.principal = normalized.principal ?? localAdminPrincipal();
     this.git = new GitStore(this.root);
+    this.journalKey = normalized.masterKey ?? process.env.AMEM_MASTER_KEY;
+    this.encryption = new EncryptionManager(this.root, this.journalKey);
+    this.telemetry = new OperationsTelemetry(this.root);
   }
 
   async initialize(name = basename(this.root)): Promise<{ created: boolean; commit: string | null }> {
+    authorize(this.principal, 'maintain');
     await mkdir(this.root, { recursive: true });
     const configPath = join(this.root, 'agent-memory.json');
     if (existsSync(configPath)) {
+      await this.config();
       await this.git.initialize();
       return { created: false, commit: null };
     }
     const timestamp = nowIso();
-    const config: VaultConfig = {
-      version: 1,
-      vaultId: `vault-${shortId()}`,
-      name,
-      createdAt: timestamp,
-      residentBudget: 24,
-      minimumConfidence: 0.75,
-      minimumProcedureEvidence: 2,
-    };
-    await Promise.all([
-      mkdir(join(this.root, '.amem'), { recursive: true }),
-      mkdir(join(this.root, 'evidence'), { recursive: true }),
-      mkdir(join(this.root, 'candidates'), { recursive: true }),
-      mkdir(join(this.root, 'wiki'), { recursive: true }),
-    ]);
-    await writeText(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    await this.installAgentInstructions();
-    await writeText(join(this.root, 'log.md'), '# Memory log\n\nAppend-only audit journal for memory operations.\n');
-    await this.rebuildGenerated(config);
-    await appendText(join(this.root, 'log.md'), `\n- ${timestamp} \`init\` by \`system\`: initialized vault ${config.vaultId}\n`);
+    const config = defaultVaultConfig(name, `vault-${shortId()}`, timestamp);
+    await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
     await this.git.initialize();
-    const commit = await this.git.commit('init: create agent memory vault', SYSTEM_ACTOR);
+    const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
+    this.activeTransaction = transaction;
+    this.activePermission = 'maintain';
+    let ready = false;
+    let commit: string | null;
+    try {
+      await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
+      await this.installAgentInstructions();
+      await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
+      await this.rebuildGenerated(config);
+      await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
+      ready = true;
+      commit = await transaction.commit();
+    } catch (error) {
+      if (!ready) await transaction.rollback();
+      throw error;
+    } finally {
+      this.activeTransaction = null;
+      this.activePermission = null;
+    }
+    await this.reindex(false);
     return { created: true, commit };
   }
 
   async config(): Promise<VaultConfig> {
     this.assertInitialized();
-    return JSON.parse(await readFile(join(this.root, 'agent-memory.json'), 'utf8')) as VaultConfig;
+    const config = await readVaultConfig(this.root);
+    assertTenant(this.principal, config.tenantId);
+    return config;
+  }
+
+  async migrate(): Promise<{ migrated: boolean; encrypted: number; commit: string | null }> {
+    this.assertInitialized();
+    const original = JSON.parse(await readFile(join(this.root, 'agent-memory.json'), 'utf8')) as { version?: unknown };
+    const result = await this.withMutation('maintain', this.principal, 'migrate', 'maintenance: migrate vault', async () => {
+      const migration = await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
+      let encrypted = 0;
+      for (const directory of ['evidence', 'candidates', 'wiki']) {
+        for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+          const path = toPosix(relative(this.root, file));
+          const raw = await readFile(file, 'utf8');
+          const outer = parseMarkdown<Record<string, unknown>>(raw);
+          const sensitivity = sensitivityOf(outer.meta);
+          if (isConfidential(sensitivity) && !isEncryptedEnvelope(outer.meta)) {
+            const document = { path, meta: outer.meta, body: outer.body };
+            await this.writeDocument(document);
+            encrypted += 1;
+          }
+        }
+      }
+      await this.appendLog('migrate', this.principal, `config=${migration.migrated}; encrypted=${encrypted}`);
+      return { migrated: migration.migrated || original.version === 1, encrypted };
+    });
+    return { ...result.value, commit: result.commit };
   }
 
   async capture(options: CaptureOptions): Promise<CaptureResult> {
     this.assertInitialized();
+    const config = await this.config();
     const content = options.content.trim();
-    if (!content) throw new Error('Evidence content cannot be empty');
-    const actor = options.actor ?? SYSTEM_ACTOR;
+    if (!content) throw new AgentMemoryError('VALIDATION_FAILED', 'Evidence content cannot be empty');
+    if (content.length > config.limits.maxContentCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Evidence exceeds the configured content limit');
+    const actor = options.actor ?? this.principal;
     const scope = options.scope ?? 'user';
     const sensitivity = options.sensitivity ?? 'internal';
+    authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
     const digest = sha256(`${scope}\0${options.sourceUri ?? ''}\0${content}`);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
-    const result = await withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
       const existing = await this.findById<EvidenceMeta>('evidence', evidenceId);
-      if (existing) return { evidence: existing, duplicate: true, commit: null };
+      if (existing) return { evidence: existing, duplicate: true };
       const timestamp = nowIso();
       const day = timestamp.slice(0, 10).replaceAll('-', '/');
-      const rootPath = `evidence/${day}/${timestamp.replaceAll(':', '').replaceAll('.', '')}-${evidenceId}.md`;
+      const path = `evidence/${day}/${timestamp.replaceAll(':', '').replaceAll('.', '')}-${evidenceId}.md`;
       const meta: EvidenceMeta = {
         id: evidenceId,
         type: 'evidence',
@@ -121,44 +178,34 @@ export class MemoryVault {
         sha256: digest,
         immutable: true,
       };
-      const body = `# Evidence ${evidenceId}\n\n${content}`;
-      await writeText(resolveInside(this.root, rootPath), serializeMarkdown(meta, body));
+      const evidence = { path, meta, body: `# Evidence ${evidenceId}\n\n${content}` };
+      await this.writeDocument(evidence);
       await this.appendLog('capture', actor, `${evidenceId} (${scope}/${sensitivity})`);
-      await this.rebuildGenerated(await this.config());
-      const commit = await this.git.commit(`memory: capture ${evidenceId}`, actor);
-      return { evidence: { path: rootPath, meta, body }, duplicate: false, commit };
+      return { evidence, duplicate: false };
     });
 
     let candidates: Array<{ id: string; path: string }> = [];
-    let commit = result.commit;
+    let commit = mutation.commit;
     if (options.extract) {
-      const extracted = await this.extract(result.evidence.meta.id, actor);
+      const extracted = await this.extract(mutation.value.evidence.meta.id, actor);
       candidates = extracted.candidates;
       commit = extracted.commit ?? commit;
     }
-    return {
-      evidenceId,
-      evidencePath: result.evidence.path,
-      duplicate: result.duplicate,
-      candidates,
-      commit,
-    };
+    return { evidenceId, evidencePath: mutation.value.evidence.path, duplicate: mutation.value.duplicate, candidates, commit };
   }
 
-  async extract(evidenceId: string, actor: Actor = SYSTEM_ACTOR): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
+  async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
     this.assertInitialized();
+    authorize(this.principal, 'write');
     const evidence = await this.requireById<EvidenceMeta>('evidence', evidenceId);
-    const proposals = await this.llm.extractMemories(evidence.body, {
-      scope: evidence.meta.scope,
-      sensitivity: evidence.meta.sensitivity,
-    });
+    const proposals = await this.llm.extractMemories(evidence.body, { scope: evidence.meta.scope, sensitivity: evidence.meta.sensitivity });
     return this.proposeMany(proposals, [evidence.path], actor, `extract ${evidenceId}`);
   }
 
-  async propose(proposal: ProposedMemory, evidence: string[] = [], actor: Actor = SYSTEM_ACTOR): Promise<{ id: string; path: string; duplicate: boolean; commit: string | null }> {
+  async propose(proposal: ProposedMemory, evidence: string[] = [], actor: Actor = this.principal): Promise<{ id: string; path: string; duplicate: boolean; commit: string | null }> {
     const result = await this.proposeMany([proposal], evidence, actor, `propose ${proposal.key}`);
     const first = result.candidates[0];
-    if (!first) throw new Error('No candidate was created');
+    if (!first) throw new AgentMemoryError('VALIDATION_FAILED', 'No candidate was created');
     return { ...first, duplicate: result.duplicates.includes(first.id), commit: result.commit };
   }
 
@@ -169,23 +216,23 @@ export class MemoryVault {
     logDetail: string,
   ): Promise<{ candidates: Array<{ id: string; path: string }>; duplicates: string[]; commit: string | null }> {
     this.assertInitialized();
+    const config = await this.config();
     const normalizedEvidence: string[] = [];
     for (const path of evidence) {
       const absolute = resolveInside(this.root, path);
-      if (!existsSync(absolute)) throw new Error(`Evidence path does not exist: ${path}`);
+      if (!existsSync(absolute)) throw new AgentMemoryError('NOT_FOUND', `Evidence path does not exist: ${path}`);
       const rootPath = toPosix(relative(this.root, absolute));
-      if (!rootPath.startsWith('evidence/')) throw new Error(`Provenance must point into evidence/: ${path}`);
+      if (!rootPath.startsWith('evidence/')) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance must point into evidence/: ${path}`);
       const source = await this.readDocument<Record<string, unknown>>(rootPath);
-      if (source.meta.type !== 'evidence' || source.meta.immutable !== true) {
-        throw new Error(`Provenance is not immutable evidence: ${path}`);
-      }
+      if (source.meta.type !== 'evidence' || source.meta.immutable !== true) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance is not immutable evidence: ${path}`);
       normalizedEvidence.push(rootPath);
     }
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    const mutation = await this.withMutation('write', actor, 'propose', `memory: ${logDetail}`, async () => {
       const created: Array<{ id: string; path: string }> = [];
       const duplicates: string[] = [];
       for (const proposal of proposals) {
-        validateProposal(proposal);
+        validateProposal(proposal, config.limits.maxContentCharacters);
+        authorize(this.principal, 'write', { scope: proposal.scope, sensitivity: proposal.sensitivity, tenantId: config.tenantId });
         const signature = `${proposal.scope}\0${proposal.kind}\0${proposal.key}\0${proposal.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
         const id = `cand-${shortId(signature)}`;
         const path = `candidates/${id}.md`;
@@ -213,24 +260,22 @@ export class MemoryVault {
           ...(proposal.expiresAt ? { expiresAt: proposal.expiresAt } : {}),
           conflictsWith: [],
         };
-        const body = candidateBody(meta, proposal.statement);
-        await writeText(resolveInside(this.root, path), serializeMarkdown(meta, body));
+        await this.writeDocument({ path, meta, body: candidateBody(meta, proposal.statement) });
         created.push({ id, path });
       }
-      if (created.length > duplicates.length) await this.appendLog('propose', actor, `${logDetail}; ${created.length - duplicates.length} candidate(s)`);
-      await this.rebuildGenerated(await this.config());
-      const commit = await this.git.commit(`memory: ${logDetail}`, actor);
-      return { candidates: created, duplicates, commit };
+      if (created.length > duplicates.length) await this.appendLog('propose', actor, `source=${safeLogToken(logDetail)}; count=${created.length - duplicates.length}`);
+      return { candidates: created, duplicates };
     });
+    return { ...mutation.value, commit: mutation.commit };
   }
 
-  async consolidate(actor: Actor = SYSTEM_ACTOR): Promise<ConsolidationResult> {
+  async consolidate(actor: Actor = this.principal): Promise<ConsolidationResult> {
     this.assertInitialized();
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    const mutation = await this.withMutation('review', actor, 'consolidate', 'memory: consolidate candidates', async () => {
       const config = await this.config();
-      const candidates = (await this.readDirectory<CandidateMeta>('candidates')).filter((doc) => doc.meta.status === 'pending');
-      const memories = await this.readDirectory<MemoryMeta>('wiki');
-      const result: ConsolidationResult = { promoted: [], merged: [], conflicts: [], deferred: [], commit: null };
+      const candidates = (await this.readDirectory<CandidateMeta>('candidates')).filter((document) => document.meta.status === 'pending');
+      const memories = (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory');
+      const result: Omit<ConsolidationResult, 'commit'> = { promoted: [], merged: [], conflicts: [], deferred: [] };
       let changed = false;
       for (const candidate of candidates) {
         const matching = memories.filter((memory) =>
@@ -284,34 +329,25 @@ export class MemoryVault {
         result.promoted.push(candidate.meta.id);
         changed = true;
       }
-      if (changed) {
-        await this.appendLog(
-          'consolidate',
-          actor,
-          `promoted=${result.promoted.length}, merged=${result.merged.length}, conflicts=${result.conflicts.length}, deferred=${result.deferred.length}`,
-        );
-      }
-      await this.rebuildGenerated(config);
-      result.commit = await this.git.commit('memory: consolidate candidates', actor);
+      if (changed) await this.appendLog('consolidate', actor, `promoted=${result.promoted.length}, merged=${result.merged.length}, conflicts=${result.conflicts.length}, deferred=${result.deferred.length}`);
       return result;
     });
+    return { ...mutation.value, commit: mutation.commit };
   }
 
-  async approve(candidateId: string, actor: Actor = SYSTEM_ACTOR): Promise<{ memoryId: string; memoryPath: string; commit: string | null }> {
+  async approve(candidateId: string, actor: Actor = this.principal): Promise<{ memoryId: string; memoryPath: string; commit: string | null }> {
     this.assertInitialized();
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    const mutation = await this.withMutation('review', actor, 'approve', `memory: approve ${safeLogToken(candidateId)}`, async () => {
       const candidate = await this.requireById<CandidateMeta>('candidates', candidateId);
-      if (candidate.meta.status === 'rejected') throw new Error(`Candidate ${candidateId} was rejected`);
+      if (candidate.meta.status === 'rejected') throw new AgentMemoryError('VALIDATION_FAILED', `Candidate ${candidateId} was rejected`);
       if (candidate.meta.status === 'promoted' && candidate.meta.promotedTo) {
         const existing = await this.readDocument<MemoryMeta>(candidate.meta.promotedTo);
-        return { memoryId: existing.meta.id, memoryPath: existing.path, commit: null };
+        return { memoryId: existing.meta.id, memoryPath: existing.path };
       }
-      const memories = await this.readDirectory<MemoryMeta>('wiki');
+      const memories = (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory');
       const conflicts = memories.filter((memory) =>
-        ['active', 'conflicted'].includes(memory.meta.status) &&
-        memory.meta.scope === candidate.meta.scope &&
-        memory.meta.kind === candidate.meta.kind &&
-        normalizeKey(memory.meta.key) === normalizeKey(candidate.meta.key),
+        ['active', 'conflicted'].includes(memory.meta.status) && memory.meta.scope === candidate.meta.scope &&
+        memory.meta.kind === candidate.meta.kind && normalizeKey(memory.meta.key) === normalizeKey(candidate.meta.key),
       );
       const same = conflicts.find((memory) => normalizeStatement(memory.body) === normalizeStatement(candidate.body));
       if (same) {
@@ -327,51 +363,37 @@ export class MemoryVault {
         candidate.meta.conflictsWith = [];
         await this.writeDocument(same);
         await this.writeDocument(candidate);
-        await this.appendLog('approve', actor, `${candidateId} -> ${same.meta.id}; merged duplicate`);
-        await this.rebuildGenerated(await this.config());
-        const commit = await this.git.commit(`memory: approve ${candidateId}`, actor);
-        return { memoryId: same.meta.id, memoryPath: same.path, commit };
+        await this.appendLog('approve', actor, `${candidateId} -> ${same.meta.id}; merged=true`);
+        return { memoryId: same.meta.id, memoryPath: same.path };
       }
       const memory = await this.promoteCandidate(candidate, conflicts, true);
       await this.appendLog('approve', actor, `${candidateId} -> ${memory.meta.id}; superseded=${conflicts.length}`);
-      await this.rebuildGenerated(await this.config());
-      const commit = await this.git.commit(`memory: approve ${candidateId}`, actor);
-      return { memoryId: memory.meta.id, memoryPath: memory.path, commit };
+      return { memoryId: memory.meta.id, memoryPath: memory.path };
     });
+    return { ...mutation.value, commit: mutation.commit };
   }
 
-  async reject(candidateId: string, reason: string, actor: Actor = SYSTEM_ACTOR): Promise<{ commit: string | null }> {
+  async reject(candidateId: string, reason: string, actor: Actor = this.principal): Promise<{ commit: string | null }> {
     this.assertInitialized();
-    if (!reason.trim()) throw new Error('A rejection reason is required');
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'A rejection reason is required');
+    const mutation = await this.withMutation('review', actor, 'reject', `memory: reject ${safeLogToken(candidateId)}`, async () => {
       const candidate = await this.requireById<CandidateMeta>('candidates', candidateId);
-      if (candidate.meta.status === 'promoted') throw new Error(`Candidate ${candidateId} was already promoted`);
-      if (candidate.meta.status === 'rejected' && candidate.meta.rejectionReason === reason.trim()) {
-        return { commit: null };
-      }
+      if (candidate.meta.status === 'promoted') throw new AgentMemoryError('VALIDATION_FAILED', `Candidate ${candidateId} was already promoted`);
+      if (candidate.meta.status === 'rejected' && candidate.meta.rejectionReason === reason.trim()) return;
       candidate.meta.status = 'rejected';
       candidate.meta.rejectionReason = reason.trim();
       candidate.meta.updatedAt = nowIso();
       await this.writeDocument(candidate);
-      await this.appendLog('reject', actor, `${candidateId}: ${reason.trim()}`);
-      await this.rebuildGenerated(await this.config());
-      const commit = await this.git.commit(`memory: reject ${candidateId}`, actor);
-      return { commit };
+      await this.appendLog('reject', actor, `${candidateId}; reason-recorded=true`);
     });
+    return { commit: mutation.commit };
   }
 
-  async forget(selector: string, reason: string, actor: Actor = SYSTEM_ACTOR): Promise<{ memoryId: string; commit: string | null }> {
+  async forget(selector: string, reason: string, actor: Actor = this.principal): Promise<{ memoryId: string; commit: string | null }> {
     this.assertInitialized();
-    if (!reason.trim()) throw new Error('A revocation reason is required');
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
-      const memories = await this.readDirectory<MemoryMeta>('wiki');
-      const matches = memories.filter((memory) =>
-        memory.meta.id === selector || normalizeKey(memory.meta.key) === normalizeKey(selector),
-      );
-      if (matches.length === 0) throw new Error(`Memory not found: ${selector}`);
-      if (matches.length > 1) throw new Error(`Selector is ambiguous; use an id: ${matches.map((item) => item.meta.id).join(', ')}`);
-      const memory = matches[0];
-      if (!memory) throw new Error(`Memory not found: ${selector}`);
+    if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'A revocation reason is required');
+    const mutation = await this.withMutation('review', actor, 'forget', `memory: revoke ${safeLogToken(selector)}`, async () => {
+      const memory = await this.findOneMemory(selector);
       const timestamp = nowIso();
       memory.meta.status = 'revoked';
       memory.meta.revokedAt = timestamp;
@@ -379,57 +401,212 @@ export class MemoryVault {
       memory.meta.updatedAt = timestamp;
       memory.meta.revision += 1;
       await this.writeDocument(memory);
-      await this.appendLog('forget', actor, `${memory.meta.id}: ${reason.trim()}`);
-      await this.rebuildGenerated(await this.config());
-      const commit = await this.git.commit(`memory: revoke ${memory.meta.id}`, actor);
-      return { memoryId: memory.meta.id, commit };
+      await this.appendLog('forget', actor, `${memory.meta.id}; reason-recorded=true`);
+      return memory.meta.id;
     });
+    return { memoryId: mutation.value, commit: mutation.commit };
+  }
+
+  async erase(selector: string, reason: string, actor: Actor = this.principal): Promise<{ memoryId: string; keyErased: boolean; commit: string | null }> {
+    this.assertInitialized();
+    authorize(this.principal, 'admin');
+    if (!reason.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'An erasure reason is required');
+    const memory = await this.findOneMemory(selector);
+    if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
+    const id = memory.meta.id;
+    const mutation = await this.withMutation('admin', actor, 'erase', `memory: cryptographically erase ${safeLogToken(id)}`, async () => {
+      const tombstone = {
+        id,
+        type: 'memory-erased',
+        scope: memory.meta.scope,
+        sensitivity: 'internal',
+        status: 'revoked',
+        createdAt: memory.meta.createdAt,
+        updatedAt: nowIso(),
+        erasedAt: nowIso(),
+        reasonRecorded: true,
+      };
+      await this.writeManaged(memory.path, serializeMarkdown(tombstone, `# Erased memory ${id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
+      await this.appendLog('erase', actor, `${id}; cryptographic-erasure=true`);
+      return id;
+    }, [id]);
+    const keyErased = await this.encryption.erase(id);
+    await this.telemetry.gauge('wrapped_keys_last_erasure', keyErased ? 1 : 0);
+    return { memoryId: mutation.value, keyErased, commit: mutation.commit };
   }
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
     this.assertInitialized();
+    authorize(this.principal, 'read');
     for (const directory of ['wiki', 'candidates', 'evidence']) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
-      if (found) return found;
+      if (found && found.meta.type !== 'memory-erased') return found;
     }
-    throw new Error(`Document not found: ${id}`);
+    throw new AgentMemoryError('NOT_FOUND', `Document not found: ${id}`);
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
+    return (await this.searchDetailed(query, options)).hits;
+  }
+
+  async searchDetailed(query: string, options: SearchOptions = {}): Promise<SearchResult> {
     this.assertInitialized();
-    return searchVault(this.root, query, options);
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
+    const normalized = query.trim();
+    if (!normalized) throw new AgentMemoryError('VALIDATION_FAILED', 'A search query is required');
+    if (normalized.length > config.limits.maxQueryCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Search query exceeds the configured limit');
+    const index = this.searchIndex(config);
+    const result = await index.search(normalized, { ...options, principal: this.principal });
+    if (result.indexRebuilt) await this.telemetry.increment('index_rebuilds');
+    return result;
+  }
+
+  async reindex(semantic = false): Promise<ReindexResult> {
+    this.assertInitialized();
+    const config = await this.config();
+    authorize(this.principal, 'maintain', { tenantId: config.tenantId });
+    const result = await this.searchIndex(config).refresh({ semantic });
+    if (result.rebuilt) await this.telemetry.increment('index_rebuilds');
+    await this.telemetry.gauge('index_documents', result.documents);
+    return result;
   }
 
   async context(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
-    this.assertInitialized();
+    const config = await this.config();
     const resident = await readFile(join(this.root, 'MEMORY.md'), 'utf8');
     const hits = await this.search(query, options);
     const sections = hits.map((hit) => `## [${hit.path}]\n${hit.snippet}`);
     const context = `${resident.trim()}\n\n# Retrieved memory\n\n${sections.join('\n\n')}`;
-    return context.slice(0, Math.max(500, options.maxCharacters ?? 12_000));
+    const maximum = Math.max(500, Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters));
+    return context.slice(0, maximum);
   }
 
   async answer(question: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
     return this.llm.answer(question, await this.context(question, options));
   }
 
+  async recover(): Promise<RecoveryResult> {
+    this.assertInitialized();
+    authorize(this.principal, 'maintain');
+    await this.config();
+    return this.telemetry.operation('recover', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const result = await recoverTransactions(this.root, this.git, this.journalKey);
+      if (result.rolledBack.length || result.replayed.length) {
+        try { await this.reconcileAfterSync(); } catch (error) {
+          if (!(error instanceof AgentMemoryError && error.code === 'CONFIG_VERSION_UNSUPPORTED')) throw error;
+        }
+      }
+      return result;
+    }));
+  }
+
+  async expireDue(actor: Actor = this.principal): Promise<{ expired: string[]; commit: string | null }> {
+    this.assertInitialized();
+    const mutation = await this.withMutation('maintain', actor, 'expire', 'maintenance: expire due memories', async () => {
+      const expired: string[] = [];
+      const timestamp = nowIso();
+      for (const memory of await this.readDirectory<MemoryMeta>('wiki')) {
+        if (memory.meta.status !== 'active' || !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now()) continue;
+        memory.meta.status = 'revoked';
+        memory.meta.revokedAt = timestamp;
+        memory.meta.revocationReason = 'Automatically revoked at configured expiry';
+        memory.meta.updatedAt = timestamp;
+        memory.meta.revision += 1;
+        await this.writeDocument(memory);
+        expired.push(memory.meta.id);
+      }
+      if (expired.length) await this.appendLog('expire', actor, `count=${expired.length}`);
+      return expired;
+    });
+    return { expired: mutation.value, commit: mutation.commit };
+  }
+
+  async configureRemote(remote: VaultConfig['remote']): Promise<{ configured: boolean; commit: string | null }> {
+    this.assertInitialized();
+    authorize(this.principal, 'sync');
+    return this.telemetry.operation('remote_configure', this.principal, async () => {
+      const current = await this.config();
+      if (remote) await this.git.configureRemote(remote.name, remote.url);
+      if (!remote && current.remote) await this.git.removeRemote(current.remote.name);
+      const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
+        const next = { ...(await this.config()), remote };
+        await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+        await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
+        return Boolean(remote);
+      });
+      return { configured: mutation.value, commit: mutation.commit };
+    });
+  }
+
+  async remoteStatus(fetch = true): Promise<RemoteStatus> {
+    const config = await this.config();
+    authorize(this.principal, 'sync', { tenantId: config.tenantId });
+    if (!config.remote) return { configured: false, ahead: 0, behind: 0, diverged: false, conflicts: [], lastSuccessfulSync: null };
+    return this.git.remoteStatus(config.remote.name, config.remote.branch, fetch);
+  }
+
+  async sync(options: { push?: boolean } = {}): Promise<RemoteStatus & { pushed: boolean; merged: boolean }> {
+    const config = await this.config();
+    authorize(this.principal, 'sync', { tenantId: config.tenantId });
+    if (!config.remote) throw new AgentMemoryError('REMOTE_INVALID', 'No remote is configured');
+    return this.telemetry.operation('remote_sync', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      await recoverTransactions(this.root, this.git, this.journalKey);
+      const integrity = await this.git.integrity();
+      if (!integrity.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Shadow Git repository failed integrity validation', { error: integrity.error });
+      if (integrity.dirty) throw new AgentMemoryError('REMOTE_CONFLICT', 'Managed vault files contain uncommitted changes');
+      const result = await this.git.sync(config.remote!.name, config.remote!.branch, {
+        push: options.push ?? config.remote!.push,
+        actor: this.principal,
+        reconcile: () => this.reconcileAfterSync(),
+        validate: () => this.validateManagedState(),
+      });
+      await this.reindex(false);
+      return result;
+    }));
+  }
+
   async doctor(): Promise<DoctorReport> {
     this.assertInitialized();
-    const [evidence, candidates, memories, allFiles] = await Promise.all([
+    authorize(this.principal, 'maintain');
+    let config: VaultConfig;
+    try {
+      config = await this.config();
+    } catch (error) {
+      if (!(error instanceof AgentMemoryError && ['CONFIG_VERSION_UNSUPPORTED', 'CONFIG_INVALID'].includes(error.code))) throw error;
+      const [git, pending] = await Promise.all([this.git.integrity(), pendingTransactionCount(this.root)]);
+      let version: number | undefined;
+      try {
+        const raw = JSON.parse(await readFile(join(this.root, 'agent-memory.json'), 'utf8')) as { version?: unknown };
+        if (typeof raw.version === 'number') version = raw.version;
+      } catch { /* The configuration error below is sufficient. */ }
+      return {
+        healthy: false,
+        counts: { evidence: 0, candidates: 0, activeMemories: 0 },
+        pendingCandidates: [], conflicts: [], expired: [], deadLinks: [], orphans: [],
+        ...(version === undefined ? {} : { configVersion: version }),
+        git,
+        index: { healthy: false, documents: 0, error: 'Index validation skipped because configuration is invalid' },
+        recovery: { pending },
+        configuration: { healthy: false, error: error.message },
+      };
+    }
+    const [evidence, candidates, memories, git, pending] = await Promise.all([
       this.readDirectory<EvidenceMeta>('evidence'),
       this.readDirectory<CandidateMeta>('candidates'),
-      this.readDirectory<MemoryMeta>('wiki'),
-      this.listAllMarkdown(),
+      this.readDirectory<MemoryMeta>('wiki').then((documents) => documents.filter((document) => document.meta.type === 'memory')),
+      this.git.integrity(),
+      pendingTransactionCount(this.root),
     ]);
-    const known = new Set(allFiles);
+    const documents = [...evidence, ...candidates, ...memories];
+    const known = new Set(documents.map((document) => document.path));
     const backlinks = new Map<string, string[]>();
     const deadLinks: Array<{ source: string; target: string }> = [];
-    for (const source of allFiles) {
-      const raw = await readFile(resolveInside(this.root, source), 'utf8');
-      for (const link of extractMarkdownLinks(raw)) {
-        const target = resolveMarkdownLink(source, link);
-        if (!target || !known.has(target)) deadLinks.push({ source, target: link });
-        else backlinks.set(target, unique([...(backlinks.get(target) ?? []), source]));
+    for (const document of documents) {
+      for (const link of extractMarkdownLinks(document.body)) {
+        const target = resolveMarkdownLink(document.path, link);
+        if (!target || !known.has(target)) deadLinks.push({ source: document.path, target: link });
+        else backlinks.set(target, unique([...(backlinks.get(target) ?? []), document.path]));
       }
     }
     const now = Date.now();
@@ -437,44 +614,126 @@ export class MemoryVault {
     const conflicts = memories.filter((item) => item.meta.status === 'conflicted').map((item) => item.meta.id);
     const expired = memories.filter((item) => item.meta.status === 'active' && item.meta.expiresAt && Date.parse(item.meta.expiresAt) <= now).map((item) => item.meta.id);
     const orphans = memories.filter((item) => !backlinks.has(item.path)).map((item) => item.path);
+    let indexHealth: DoctorReport['index'];
+    try {
+      indexHealth = await this.searchIndex(config).health();
+    } catch (error) {
+      indexHealth = { healthy: false, documents: 0, error: error instanceof Error ? error.message : String(error) };
+    }
+    const healthy = conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0 && git.healthy && pending === 0 && indexHealth.healthy;
     return {
-      healthy: conflicts.length === 0 && expired.length === 0 && deadLinks.length === 0,
-      counts: {
-        evidence: evidence.length,
-        candidates: candidates.length,
-        activeMemories: memories.filter((item) => item.meta.status === 'active').length,
-      },
+      healthy,
+      counts: { evidence: evidence.length, candidates: candidates.length, activeMemories: memories.filter((item) => item.meta.status === 'active').length },
       pendingCandidates,
       conflicts,
       expired,
       deadLinks,
       orphans,
+      configVersion: config.version,
+      git,
+      index: indexHealth,
+      recovery: { pending },
+      configuration: { healthy: true },
     };
   }
 
   async history(limit = 20, path?: string): Promise<Array<Record<string, string>>> {
     this.assertInitialized();
-    return this.git.history(Math.max(1, Math.min(limit, 100)), path);
+    authorize(this.principal, 'read');
+    const safePath = path ? toPosix(relative(this.root, resolveInside(this.root, path))) : undefined;
+    return this.git.history(Math.max(1, Math.min(limit, 100)), safePath);
   }
 
-  private async promoteCandidate(
-    candidate: MarkdownDocument<CandidateMeta>,
-    superseded: Array<MarkdownDocument<MemoryMeta>>,
-    reviewed: boolean,
-  ): Promise<MarkdownDocument<MemoryMeta>> {
+  private async withMutation<T>(permission: Permission, actor: Actor, operation: string, message: string, action: () => Promise<T>, resourceIds?: string[]): Promise<{ value: T; commit: string | null }> {
+    authorize(this.principal, permission);
+    return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      await this.git.initialize();
+      await recoverTransactions(this.root, this.git, this.journalKey);
+      const transaction = await VaultTransaction.begin(this.root, this.git, actor, message, this.journalKey);
+      this.activeTransaction = transaction;
+      this.activePermission = permission;
+      let ready = false;
+      try {
+        await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
+        const value = await action();
+        await this.rebuildGenerated(await this.config());
+        ready = true;
+        const commit = await transaction.commit();
+        this.activeTransaction = null;
+        this.activePermission = null;
+        try { await this.reindex(false); } catch { await this.telemetry.increment('index_refresh_errors'); }
+        return { value, commit };
+      } catch (error) {
+        this.activeTransaction = null;
+        this.activePermission = null;
+        if (!ready) await transaction.rollback();
+        throw error;
+      }
+    }), resourceIds);
+  }
+
+  private searchIndex(config: VaultConfig): PersistentSearchIndex {
+    return new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+  }
+
+  private async reconcileAfterSync(): Promise<void> {
+    const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'sync: rebuild derived memory', this.journalKey);
+    this.activeTransaction = transaction;
+    this.activePermission = 'sync';
+    let ready = false;
+    try {
+      await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
+      await this.rebuildGenerated(await this.config());
+      ready = true;
+      await transaction.commit();
+    } catch (error) {
+      if (!ready) await transaction.rollback();
+      throw error;
+    } finally {
+      this.activeTransaction = null;
+      this.activePermission = null;
+    }
+    await this.searchIndex(await this.config()).refresh();
+  }
+
+  private async validateManagedState(): Promise<void> {
+    const config = await readVaultConfig(this.root);
+    assertTenant(this.principal, config.tenantId);
+    for (const directory of ['evidence', 'candidates', 'wiki']) {
+      for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+        await this.readDocument<Record<string, unknown>>(toPosix(relative(this.root, file)));
+      }
+    }
+    const report = await this.doctor();
+    if (!report.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronized vault failed health validation', {
+      conflicts: report.conflicts.length,
+      expired: report.expired.length,
+      deadLinks: report.deadLinks.length,
+    });
+  }
+
+  private async findOneMemory(selector: string): Promise<MarkdownDocument<MemoryMeta>> {
+    const memories = (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory');
+    const matches = memories.filter((memory) => memory.meta.id === selector || normalizeKey(memory.meta.key) === normalizeKey(selector));
+    if (matches.length === 0) throw new AgentMemoryError('NOT_FOUND', `Memory not found: ${selector}`);
+    if (matches.length > 1) throw new AgentMemoryError('VALIDATION_FAILED', `Selector is ambiguous; use an id: ${matches.map((item) => item.meta.id).join(', ')}`);
+    return matches[0]!;
+  }
+
+  private async promoteCandidate(candidate: MarkdownDocument<CandidateMeta>, superseded: Array<MarkdownDocument<MemoryMeta>>, reviewed: boolean): Promise<MarkdownDocument<MemoryMeta>> {
     const statement = candidateStatement(candidate.body);
-    const memoryId = `mem-${shortId(`${candidate.meta.scope}\0${candidate.meta.kind}\0${candidate.meta.key}\0${statement}`)}`;
-    const memoryPath = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${slugify(candidate.meta.key)}-${memoryId.slice(-6)}.md`;
+    const id = `mem-${shortId(`${candidate.meta.scope}\0${candidate.meta.kind}\0${candidate.meta.key}\0${statement}`)}`;
+    const path = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${slugify(candidate.meta.key)}-${id.slice(-6)}.md`;
     const timestamp = nowIso();
     for (const old of superseded) {
       old.meta.status = 'superseded';
-      old.meta.supersededBy = memoryPath;
+      old.meta.supersededBy = path;
       old.meta.updatedAt = timestamp;
       old.meta.revision += 1;
       await this.writeDocument(old);
     }
     const meta: MemoryMeta = {
-      id: memoryId,
+      id,
       type: 'memory',
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -492,11 +751,10 @@ export class MemoryVault {
       revision: 1,
       ...(superseded.length > 0 ? { supersedes: superseded.map((item) => item.path) } : {}),
     };
-    const body = memoryBody(meta, statement, memoryPath);
-    const memory = { path: memoryPath, meta, body };
+    const memory = { path, meta, body: memoryBody(meta, statement, path) };
     await this.writeDocument(memory);
     candidate.meta.status = 'promoted';
-    candidate.meta.promotedTo = memoryPath;
+    candidate.meta.promotedTo = path;
     candidate.meta.updatedAt = timestamp;
     candidate.meta.conflictsWith = [];
     await this.writeDocument(candidate);
@@ -504,116 +762,108 @@ export class MemoryVault {
   }
 
   private async rebuildGenerated(config: VaultConfig): Promise<void> {
-    const memories = existsSync(join(this.root, 'wiki')) ? await this.readDirectory<MemoryMeta>('wiki') : [];
+    const memories = existsSync(join(this.root, 'wiki')) ? (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory') : [];
     const candidates = existsSync(join(this.root, 'candidates')) ? await this.readDirectory<CandidateMeta>('candidates') : [];
     const now = Date.now();
-    const active = memories.filter((memory) =>
-      memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now),
-    );
+    const safeMemories = memories.filter((memory) => !isConfidential(memory.meta.sensitivity));
+    const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now));
     const resident = active
-      .filter((memory) => !['sensitive', 'secret'].includes(memory.meta.sensitivity))
+      .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
       .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
       .slice(0, config.residentBudget);
     const memoryLines = resident.map((memory) => `- [${memory.meta.key}](./${memory.path}): ${candidateStatement(memory.body)}`);
-    const memoryDoc = [
-      '# Resident memory',
-      '',
-      '> Auto-generated. Stable, frequently useful facts only; sensitive and secret entries are excluded.',
-      '',
-      ...(memoryLines.length > 0 ? memoryLines : ['_No approved resident memories yet._']),
-      '',
-    ].join('\n');
-    await writeText(join(this.root, 'MEMORY.md'), memoryDoc);
+    await this.writeManaged('MEMORY.md', ['# Resident memory', '', '> Auto-generated. Stable, frequently useful facts only; confidential entries are excluded.', '', ...(memoryLines.length ? memoryLines : ['_No approved resident memories yet._']), ''].join('\n'));
 
-    const rows = memories
+    const rows = safeMemories
       .sort((a, b) => a.meta.scope.localeCompare(b.meta.scope) || a.meta.key.localeCompare(b.meta.key))
       .map((memory) => `| [${escapeTable(memory.meta.key)}](./${memory.path}) | ${memory.meta.scope} | ${memory.meta.kind} | ${memory.meta.status} | ${memory.meta.confidence.toFixed(2)} |`);
-    const pending = candidates.filter((candidate) => candidate.meta.status === 'pending');
-    const indexDoc = [
-      '# Memory index',
-      '',
-      '> Auto-generated from canonical Markdown. The Wiki files remain the source of truth.',
-      '',
-      '| Memory | Scope | Kind | Status | Confidence |',
-      '| --- | --- | --- | --- | ---: |',
-      ...(rows.length > 0 ? rows : ['| _None_ |  |  |  |  |']),
-      '',
-      `Pending candidates: ${pending.length}.`,
-      ...(pending.length > 0 ? ['', ...pending.map((candidate) => `- [${candidate.meta.id}](./${candidate.path}): ${candidate.meta.key}`)] : []),
-      '',
-    ].join('\n');
-    await writeText(join(this.root, 'INDEX.md'), indexDoc);
+    const pending = candidates.filter((candidate) => candidate.meta.status === 'pending' && !isConfidential(candidate.meta.sensitivity));
+    await this.writeManaged('INDEX.md', [
+      '# Memory index', '', '> Auto-generated from canonical Markdown. Confidential records are intentionally omitted.', '',
+      '| Memory | Scope | Kind | Status | Confidence |', '| --- | --- | --- | --- | ---: |',
+      ...(rows.length ? rows : ['| _None_ |  |  |  |  |']), '', `Pending non-confidential candidates: ${pending.length}.`,
+      ...(pending.length ? ['', ...pending.map((candidate) => `- [${candidate.meta.id}](./${candidate.path}): ${candidate.meta.key}`)] : []), '',
+    ].join('\n'));
   }
 
   private async appendLog(action: string, actor: Actor, detail: string): Promise<void> {
-    await appendText(join(this.root, 'log.md'), `\n- ${nowIso()} \`${action}\` by \`${actor.id}\`: ${detail.replaceAll('\n', ' ')}\n`);
+    await this.appendManaged('log.md', `\n- ${nowIso()} \`${safeLogToken(action)}\` by \`${safeLogToken(actor.id)}\`: ${detail.replaceAll('\n', ' ').slice(0, 500)}\n`);
   }
 
   private async installAgentInstructions(): Promise<void> {
     const path = join(this.root, 'AGENTS.md');
     const instructions = agentInstructions();
-    if (!existsSync(path)) {
-      await writeText(path, instructions);
-      return;
-    }
+    if (!existsSync(path)) return this.writeManaged('AGENTS.md', instructions);
     const existing = await readFile(path, 'utf8');
-    if (!existing.includes('<!-- AGENT_MEMORY_WIKI_START -->')) {
-      await appendText(path, `\n\n${instructions}`);
+    if (!existing.includes('<!-- AGENT_MEMORY_WIKI_START -->')) await this.writeManaged('AGENTS.md', `${existing.trimEnd()}\n\n${instructions}`);
+  }
+
+  private async writeManaged(path: string, content: string): Promise<void> {
+    if (this.activeTransaction) await this.activeTransaction.write(path, content);
+    else await writeText(resolveInside(this.root, path), content);
+  }
+
+  private async appendManaged(path: string, content: string): Promise<void> {
+    if (this.activeTransaction) await this.activeTransaction.append(path, content);
+    else {
+      const absolute = resolveInside(this.root, path);
+      const current = existsSync(absolute) ? await readFile(absolute, 'utf8') : '';
+      await writeText(absolute, `${current}${content}`);
     }
   }
 
   private async writeDocument<T extends object>(document: MarkdownDocument<T>): Promise<void> {
-    await writeText(resolveInside(this.root, document.path), serializeMarkdown(document.meta, document.body));
+    const sensitivity = sensitivityOf(document.meta as Record<string, unknown>);
+    const scope = scopeOf(document.meta as Record<string, unknown>);
+    authorize(this.principal, this.activePermission ?? 'write', { scope, sensitivity });
+    const serialized = isConfidential(sensitivity)
+      ? serializeMarkdown(...encryptedParts(await this.encryption.encrypt(document.meta, document.body)))
+      : serializeMarkdown(document.meta, document.body);
+    await this.writeManaged(document.path, serialized);
   }
 
   private async readDocument<T extends object>(rootPath: string): Promise<MarkdownDocument<T>> {
-    const content = await readFile(resolveInside(this.root, rootPath), 'utf8');
-    const parsed = parseMarkdown<T>(content);
-    return { path: toPosix(rootPath), meta: parsed.meta, body: parsed.body };
+    const normalized = toPosix(relative(this.root, resolveInside(this.root, rootPath)));
+    const parsed = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, normalized), 'utf8'));
+    const scope = scopeOf(parsed.meta);
+    const sensitivity = sensitivityOf(parsed.meta);
+    authorize(this.principal, 'read', { scope, sensitivity });
+    if (isEncryptedEnvelope(parsed.meta)) {
+      const logical = await this.encryption.decrypt<T>(parsed.meta as EncryptedEnvelopeMeta, parsed.body);
+      const logicalMeta = logical.meta as Record<string, unknown>;
+      if (logicalMeta.id !== parsed.meta.id || logicalMeta.type !== parsed.meta.type || logicalMeta.scope !== parsed.meta.scope || logicalMeta.sensitivity !== parsed.meta.sensitivity) {
+        throw new AgentMemoryError('ENCRYPTION_FAILED', `Encrypted envelope metadata mismatch for ${parsed.meta.id}`);
+      }
+      authorize(this.principal, 'read', { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta) });
+      return { path: normalized, meta: logical.meta, body: logical.body };
+    }
+    return { path: normalized, meta: parsed.meta as T, body: parsed.body };
   }
 
   private async readDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
-    const files = await listMarkdown(resolveInside(this.root, directory));
     const documents: Array<MarkdownDocument<T>> = [];
-    for (const file of files) {
+    for (const file of await listMarkdown(resolveInside(this.root, directory))) {
       try {
-        const rootPath = toPosix(relative(this.root, file));
-        documents.push(await this.readDocument<T>(rootPath));
-      } catch {
-        // Keep the runtime available when a human is midway through editing a page.
+        documents.push(await this.readDocument<T>(toPosix(relative(this.root, file))));
+      } catch (error) {
+        if (error instanceof AgentMemoryError && error.code !== 'AUTHORIZATION_DENIED') throw error;
       }
     }
     return documents;
   }
 
   private async findById<T extends object>(directory: string, id: string): Promise<MarkdownDocument<T> | null> {
-    const documents = await this.readDirectory<T>(directory);
-    return documents.find((document) => (document.meta as { id?: unknown }).id === id) ?? null;
+    return (await this.readDirectory<T>(directory)).find((document) => (document.meta as { id?: unknown }).id === id) ?? null;
   }
 
   private async requireById<T extends object>(directory: string, id: string): Promise<MarkdownDocument<T>> {
     const document = await this.findById<T>(directory, id);
-    if (!document) throw new Error(`${directory} document not found: ${id}`);
+    if (!document) throw new AgentMemoryError('NOT_FOUND', `${directory} document not found: ${id}`);
     return document;
   }
 
-  private async listAllMarkdown(): Promise<string[]> {
-    const nested = (
-      await Promise.all(['evidence', 'candidates', 'wiki'].map(async (directory) => {
-        const path = join(this.root, directory);
-        return existsSync(path) ? (await listMarkdown(path)).map((file) => toPosix(relative(this.root, file))) : [];
-      }))
-    ).flat();
-    for (const name of ['MEMORY.md', 'INDEX.md', 'log.md']) {
-      if (existsSync(join(this.root, name))) nested.push(name);
-    }
-    return nested;
-  }
-
   private assertInitialized(): void {
-    if (!existsSync(join(this.root, 'agent-memory.json'))) {
-      throw new Error(`Not an Agent Memory Wiki vault: ${this.root}. Run "amem init" first.`);
-    }
+    if (!existsSync(join(this.root, 'agent-memory.json'))) throw new AgentMemoryError('VAULT_NOT_INITIALIZED', `Not an Agent Memory Wiki vault: ${this.root}. Run "amem init" first.`);
   }
 }
 
@@ -629,36 +879,22 @@ async function listMarkdown(root: string): Promise<string[]> {
   return output;
 }
 
-function validateProposal(proposal: ProposedMemory): void {
-  if (!proposal.statement.trim()) throw new Error('Memory statement cannot be empty');
-  if (!proposal.key.trim()) throw new Error('Memory key cannot be empty');
-  if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) {
-    throw new Error('Confidence must be between 0 and 1');
-  }
-  if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new Error('expiresAt must be an ISO date');
+function validateProposal(proposal: ProposedMemory, maximum: number): void {
+  if (!proposal.statement.trim() || !proposal.key.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'Memory statement and key are required');
+  if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
+  if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
+  if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
 }
 
 function candidateBody(meta: CandidateMeta, statement: string): string {
-  const evidence = meta.evidence.length > 0 ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(`candidates/${meta.id}.md`, path)})`) : ['- _No evidence attached; manual review required._'];
+  const evidence = meta.evidence.length ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(`candidates/${meta.id}.md`, path)})`) : ['- _No evidence attached; manual review required._'];
   return [`# Candidate: ${meta.key}`, '', statement.trim(), '', '## Evidence', '', ...evidence].join('\n');
 }
 
 function memoryBody(meta: MemoryMeta, statement: string, memoryPath: string): string {
-  const conditions = meta.conditions.length > 0 ? meta.conditions.map((condition) => `- ${condition}`) : ['- Always, unless superseded or expired.'];
-  const evidence = meta.evidence.length > 0 ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(memoryPath, path)})`) : ['- _Approved explicitly without attached evidence._'];
-  return [
-    `# ${meta.key}`,
-    '',
-    statement.trim(),
-    '',
-    '## Applies when',
-    '',
-    ...conditions,
-    '',
-    '## Evidence',
-    '',
-    ...evidence,
-  ].join('\n');
+  const conditions = meta.conditions.length ? meta.conditions.map((condition) => `- ${condition}`) : ['- Always, unless superseded or expired.'];
+  const evidence = meta.evidence.length ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(memoryPath, path)})`) : ['- _Approved explicitly without attached evidence._'];
+  return [`# ${meta.key}`, '', statement.trim(), '', '## Applies when', '', ...conditions, '', '## Evidence', '', ...evidence].join('\n');
 }
 
 function relativeLink(from: string, to: string): string {
@@ -697,6 +933,22 @@ function toPosix(value: string): string {
   return value.split('\\').join('/');
 }
 
+function scopeOf(meta: Record<string, unknown>): Scope {
+  return ['user', 'project', 'team', 'public'].includes(String(meta.scope)) ? (meta.scope as Scope) : 'project';
+}
+
+function sensitivityOf(meta: Record<string, unknown>): Sensitivity {
+  return ['public', 'internal', 'sensitive', 'secret'].includes(String(meta.sensitivity)) ? (meta.sensitivity as Sensitivity) : 'internal';
+}
+
+function encryptedParts(value: { meta: EncryptedEnvelopeMeta; body: string }): [EncryptedEnvelopeMeta, string] {
+  return [value.meta, value.body];
+}
+
+function safeLogToken(value: string): string {
+  return value.replace(/[^\p{L}\p{N}._:/=-]+/gu, ' ').trim().slice(0, 160);
+}
+
 function agentInstructions(): string {
   return `<!-- AGENT_MEMORY_WIKI_START -->
 # Agent Memory Wiki instructions
@@ -706,16 +958,16 @@ This folder is a durable, Git-versioned memory vault. Read \`MEMORY.md\` first, 
 ## Invariants
 
 - \`evidence/\` is immutable evidence. Never edit or delete captured files.
-- \`candidates/\` is a review queue. Do not treat pending candidates as truth.
+- \`candidates/\` is a review queue. Pending candidates are not truth.
 - \`wiki/\` contains canonical memories. Respect scope, sensitivity, status, conditions, and expiry.
-- Use \`amem capture/propose/consolidate/approve/forget\` or the MCP tools for writes so Git attribution and indexes stay correct.
-- Never expose \`sensitive\` or \`secret\` entries unless the current request is authorized for them.
-- Conflicts stay visible until a human or authorized agent approves a replacement.
+- Use the CLI or MCP tools for writes so transactions, Git attribution, policy, and indexes stay correct.
+- Confidential records require the configured master key and are never written to resident or persistent search indexes.
+- Conflicts stay visible until an authorized reviewer approves a replacement.
 - A single anecdote must not become a general procedure.
 
 ## Retrieval
 
-Call \`memory_context\` with the current question. It returns the small resident set plus ranked Wiki pages and one-hop links. Cite returned paths when using a memory.
+Call \`memory_context\` with the current question. Cite returned paths when using a memory.
 <!-- AGENT_MEMORY_WIKI_END -->
 `;
 }

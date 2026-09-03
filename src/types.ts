@@ -10,7 +10,7 @@ export type MemoryKind = (typeof memoryKinds)[number];
 export type CandidateStatus = 'pending' | 'promoted' | 'rejected';
 export type MemoryStatus = 'active' | 'conflicted' | 'superseded' | 'revoked';
 
-export interface VaultConfig {
+export interface LegacyVaultConfig {
   version: 1;
   vaultId: string;
   name: string;
@@ -18,6 +18,44 @@ export interface VaultConfig {
   residentBudget: number;
   minimumConfidence: number;
   minimumProcedureEvidence: number;
+}
+
+export interface VaultConfig {
+  version: 2;
+  vaultId: string;
+  tenantId: string;
+  name: string;
+  createdAt: string;
+  residentBudget: number;
+  minimumConfidence: number;
+  minimumProcedureEvidence: number;
+  policy: {
+    residentSensitivities: Sensitivity[];
+    requireEncryptionFor: Sensitivity[];
+  };
+  index: {
+    maxDocuments: number;
+    lexicalWeight: number;
+    semanticWeight: number;
+    embeddingModel: string | null;
+  };
+  remote: {
+    name: string;
+    url: string;
+    branch: string;
+    push: boolean;
+  } | null;
+  maintenance: {
+    intervalMs: number;
+    debounceMs: number;
+    autoSync: boolean;
+  };
+  limits: {
+    maxContentCharacters: number;
+    maxQueryCharacters: number;
+    maxResults: number;
+    maxContextCharacters: number;
+  };
 }
 
 export interface Actor {
@@ -99,6 +137,8 @@ export interface SearchHit {
   snippet: string;
   links: string[];
   backlinks: string[];
+  lexicalScore?: number;
+  semanticScore?: number;
 }
 
 export interface DoctorReport {
@@ -113,6 +153,11 @@ export interface DoctorReport {
   expired: string[];
   deadLinks: Array<{ source: string; target: string }>;
   orphans: string[];
+  configVersion?: number;
+  git?: { healthy: boolean; head: string | null; dirty: boolean; error?: string };
+  index?: { healthy: boolean; documents: number; error?: string };
+  recovery?: { pending: number };
+  configuration?: { healthy: boolean; error?: string };
 }
 
 export interface ProposedMemory {
