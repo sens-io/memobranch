@@ -1,6 +1,7 @@
 import type { MemoryKind, ProposedMemory, Scope, Sensitivity } from './types.js';
-import { memoryKinds, scopes, sensitivities } from './types.js';
+import { memoryKinds, sensitivities } from './types.js';
 import { AgentMemoryError } from './errors.js';
+import { sensitivityRank } from './policy.js';
 
 interface LlmOptions {
   baseUrl?: string;
@@ -152,8 +153,13 @@ function validateProposal(value: unknown, defaults: ExtractionDefaults): Propose
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid memory proposal');
   const item = value as Record<string, unknown>;
   const kind = allowed(item.kind, memoryKinds, 'fact');
-  const scope = allowed(item.scope, scopes, defaults.scope);
-  const sensitivity = allowed(item.sensitivity, sensitivities, defaults.sensitivity);
+  // Model output is advisory. Extracted knowledge inherits the source audience,
+  // and may raise (but never lower) the source sensitivity.
+  const scope = defaults.scope;
+  const proposedSensitivity = allowed(item.sensitivity, sensitivities, defaults.sensitivity);
+  const sensitivity = sensitivityRank[proposedSensitivity] > sensitivityRank[defaults.sensitivity]
+    ? proposedSensitivity
+    : defaults.sensitivity;
   const statement = requiredString(item.statement, 'statement');
   const key = typeof item.key === 'string' && item.key.trim() ? item.key.trim() : deriveKey(kind, statement);
   const confidence = Math.max(0, Math.min(1, Number(item.confidence ?? 0.5)));

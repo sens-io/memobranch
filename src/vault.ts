@@ -24,6 +24,7 @@ import type {
   Sensitivity,
   VaultConfig,
 } from './types.js';
+import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
 
 export interface MemoryVaultOptions {
@@ -196,6 +197,7 @@ export class MemoryVault {
 
   async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
     this.assertInitialized();
+    await this.config();
     authorize(this.principal, 'write');
     const evidence = await this.requireById<EvidenceMeta>('evidence', evidenceId);
     const proposals = await this.llm.extractMemories(evidence.body, { scope: evidence.meta.scope, sensitivity: evidence.meta.sensitivity });
@@ -218,6 +220,7 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     const normalizedEvidence: string[] = [];
+    const evidenceRestrictions: Array<{ scope: Scope; sensitivity: Sensitivity }> = [];
     for (const path of evidence) {
       const absolute = resolveInside(this.root, path);
       if (!existsSync(absolute)) throw new AgentMemoryError('NOT_FOUND', `Evidence path does not exist: ${path}`);
@@ -226,14 +229,16 @@ export class MemoryVault {
       const source = await this.readDocument<Record<string, unknown>>(rootPath);
       if (source.meta.type !== 'evidence' || source.meta.immutable !== true) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance is not immutable evidence: ${path}`);
       normalizedEvidence.push(rootPath);
+      evidenceRestrictions.push({ scope: scopeOf(source.meta), sensitivity: sensitivityOf(source.meta) });
     }
     const mutation = await this.withMutation('write', actor, 'propose', `memory: ${logDetail}`, async () => {
       const created: Array<{ id: string; path: string }> = [];
       const duplicates: string[] = [];
       for (const proposal of proposals) {
-        validateProposal(proposal, config.limits.maxContentCharacters);
-        authorize(this.principal, 'write', { scope: proposal.scope, sensitivity: proposal.sensitivity, tenantId: config.tenantId });
-        const signature = `${proposal.scope}\0${proposal.kind}\0${proposal.key}\0${proposal.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
+        const constrained = constrainToEvidence(proposal, evidenceRestrictions);
+        validateProposal(constrained, config.limits.maxContentCharacters);
+        authorize(this.principal, 'write', { scope: constrained.scope, sensitivity: constrained.sensitivity, tenantId: config.tenantId });
+        const signature = `${constrained.scope}\0${constrained.kind}\0${constrained.key}\0${constrained.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
         const id = `cand-${shortId(signature)}`;
         const path = `candidates/${id}.md`;
         if (existsSync(resolveInside(this.root, path))) {
@@ -247,20 +252,20 @@ export class MemoryVault {
           type: 'memory-candidate',
           createdAt: timestamp,
           updatedAt: timestamp,
-          kind: proposal.kind,
-          key: proposal.key.trim(),
-          scope: proposal.scope,
-          sensitivity: proposal.sensitivity,
-          confidence: proposal.confidence,
-          explicit: proposal.explicit,
+          kind: constrained.kind,
+          key: constrained.key.trim(),
+          scope: constrained.scope,
+          sensitivity: constrained.sensitivity,
+          confidence: constrained.confidence,
+          explicit: constrained.explicit,
           status: 'pending',
           evidence: unique(normalizedEvidence),
-          conditions: unique(proposal.conditions),
-          tags: unique(proposal.tags),
-          ...(proposal.expiresAt ? { expiresAt: proposal.expiresAt } : {}),
+          conditions: unique(constrained.conditions),
+          tags: unique(constrained.tags),
+          ...(constrained.expiresAt ? { expiresAt: constrained.expiresAt } : {}),
           conflictsWith: [],
         };
-        await this.writeDocument({ path, meta, body: candidateBody(meta, proposal.statement) });
+        await this.writeDocument({ path, meta, body: candidateBody(meta, constrained.statement) });
         created.push({ id, path });
       }
       if (created.length > duplicates.length) await this.appendLog('propose', actor, `source=${safeLogToken(logDetail)}; count=${created.length - duplicates.length}`);
@@ -437,7 +442,8 @@ export class MemoryVault {
 
   async get(id: string): Promise<MarkdownDocument<Record<string, unknown>>> {
     this.assertInitialized();
-    authorize(this.principal, 'read');
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
     for (const directory of ['wiki', 'candidates', 'evidence']) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
       if (found && found.meta.type !== 'memory-erased') return found;
@@ -474,7 +480,16 @@ export class MemoryVault {
 
   async context(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
     const config = await this.config();
-    const resident = await readFile(join(this.root, 'MEMORY.md'), 'utf8');
+    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki'))
+      .filter((memory) => memory.meta.type === 'memory' && memory.meta.status === 'active')
+      .filter((memory) => !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now())
+      .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
+      .filter((memory) => memory.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
+      .filter((memory) => memory.meta.sensitivity !== 'secret' || options.includeSecret === true)
+      .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
+      .slice(0, config.residentBudget);
+    const residentLines = residentMemories.map((memory) => `- [${memory.meta.key}](${memory.path}): ${candidateStatement(memory.body)}`);
+    const resident = ['# Resident memory', '', ...(residentLines.length ? residentLines : ['_No authorized resident memories._'])].join('\n');
     const hits = await this.search(query, options);
     const sections = hits.map((hit) => `## [${hit.path}]\n${hit.snippet}`);
     const context = `${resident.trim()}\n\n# Retrieved memory\n\n${sections.join('\n\n')}`;
@@ -639,7 +654,8 @@ export class MemoryVault {
 
   async history(limit = 20, path?: string): Promise<Array<Record<string, string>>> {
     this.assertInitialized();
-    authorize(this.principal, 'read');
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
     const safePath = path ? toPosix(relative(this.root, resolveInside(this.root, path))) : undefined;
     return this.git.history(Math.max(1, Math.min(limit, 100)), safePath);
   }
@@ -762,8 +778,8 @@ export class MemoryVault {
   }
 
   private async rebuildGenerated(config: VaultConfig): Promise<void> {
-    const memories = existsSync(join(this.root, 'wiki')) ? (await this.readDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory') : [];
-    const candidates = existsSync(join(this.root, 'candidates')) ? await this.readDirectory<CandidateMeta>('candidates') : [];
+    const memories = existsSync(join(this.root, 'wiki')) ? (await this.readProjectionDirectory<MemoryMeta>('wiki')).filter((document) => document.meta.type === 'memory') : [];
+    const candidates = existsSync(join(this.root, 'candidates')) ? await this.readProjectionDirectory<CandidateMeta>('candidates') : [];
     const now = Date.now();
     const safeMemories = memories.filter((memory) => !isConfidential(memory.meta.sensitivity));
     const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now));
@@ -823,6 +839,8 @@ export class MemoryVault {
   }
 
   private async readDocument<T extends object>(rootPath: string): Promise<MarkdownDocument<T>> {
+    const config = await readVaultConfig(this.root);
+    assertTenant(this.principal, config.tenantId);
     const normalized = toPosix(relative(this.root, resolveInside(this.root, rootPath)));
     const parsed = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, normalized), 'utf8'));
     const scope = scopeOf(parsed.meta);
@@ -838,6 +856,18 @@ export class MemoryVault {
       return { path: normalized, meta: logical.meta, body: logical.body };
     }
     return { path: normalized, meta: parsed.meta as T, body: parsed.body };
+  }
+
+  private async readProjectionDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
+    const documents: Array<MarkdownDocument<T>> = [];
+    for (const file of await listMarkdown(resolveInside(this.root, directory))) {
+      const path = toPosix(relative(this.root, file));
+      const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+      // Confidential documents are excluded before their body is used by generated
+      // projections, so the minimal envelope is sufficient and needs no key.
+      documents.push({ path, meta: parsed.meta as T, body: parsed.body });
+    }
+    return documents;
   }
 
   private async readDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
@@ -884,6 +914,18 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
   if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
   if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
   if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
+}
+
+function constrainToEvidence(
+  proposal: ProposedMemory,
+  evidence: Array<{ scope: Scope; sensitivity: Sensitivity }>,
+): ProposedMemory {
+  if (evidence.length === 0) return proposal;
+  const maximumScope = evidence.reduce((current, item) => Math.min(current, scopes.indexOf(item.scope)), scopes.length - 1);
+  const minimumSensitivity = evidence.reduce((current, item) => Math.max(current, sensitivities.indexOf(item.sensitivity)), 0);
+  const scope = scopes[Math.min(scopes.indexOf(proposal.scope), maximumScope)] ?? evidence[0]!.scope;
+  const sensitivity = sensitivities[Math.max(sensitivities.indexOf(proposal.sensitivity), minimumSensitivity)] ?? evidence[0]!.sensitivity;
+  return { ...proposal, scope, sensitivity };
 }
 
 function candidateBody(meta: CandidateMeta, statement: string): string {

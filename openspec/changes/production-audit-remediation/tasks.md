@@ -2,10 +2,10 @@
 
 ## 1. Authorization and confidentiality
 
-- [ ] 1.1 Enforce tenant checks on all reads and build per-principal resident context.
-- [ ] 1.2 Constrain LLM-derived scope and sensitivity to evidence provenance.
-- [ ] 1.3 Rebuild global generated files from a complete safe projection.
-- [ ] 1.4 Add scope, sensitivity, tenant, and confidentiality-downgrade regressions.
+- [x] 1.1 Enforce tenant checks on all reads and build per-principal resident context.
+- [x] 1.2 Constrain LLM-derived scope and sensitivity to evidence provenance.
+- [x] 1.3 Rebuild global generated files from a complete safe projection.
+- [x] 1.4 Add scope, sensitivity, tenant, and confidentiality-downgrade regressions.
 
 ## 2. Locks and cryptographic erasure
 
