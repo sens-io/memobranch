@@ -13,3 +13,12 @@ Before reusing an in-memory search snapshot, the system MUST verify that the can
 
 - **WHEN** a memory revocation commits and the following index persistence fails
 - **THEN** the mutation may report its durable commit but subsequent retrieval does not use the stale snapshot
+
+### Requirement: Encrypted retrieval stays out of semantic providers
+
+Documents stored in an encrypted envelope MUST NOT be sent to an embedding provider, even when their sensitivity is later removed from `policy.requireEncryptionFor`. Inactive encrypted documents MUST be removed before ranking so they cannot consume the result limit.
+
+#### Scenario: Encryption policy is relaxed after a document was encrypted
+
+- **WHEN** hybrid search decrypts the document ephemerally for authorized lexical search
+- **THEN** the document remains absent from embedding batches and revoked encrypted records cannot displace active hits

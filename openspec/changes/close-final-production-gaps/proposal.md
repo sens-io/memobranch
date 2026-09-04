@@ -2,7 +2,7 @@
 
 ## Why
 
-An independent boundary review reproduced six failures that the existing green suite did not cover: stale authorization data after canonical changes, unenforced configurable encryption, incomplete canonical schemas, blocked legacy-evidence migration, ownerless maintenance leases, and lost concurrent metrics updates. These are release blockers for a production memory service.
+An independent boundary review reproduced six failures that the existing green suite did not cover: stale authorization data after canonical changes, unenforced configurable encryption, incomplete canonical schemas, blocked legacy-evidence migration, ownerless maintenance leases, and lost concurrent metrics updates. Adjacent-path review then found the same invariants missing from transaction journals, erasure tombstones, embeddings after policy changes, cross-document references, managed symlinks, daemon startup cleanup, and the post-push failure window. These are release blockers for a production memory service.
 
 ## What changes
 
@@ -12,6 +12,10 @@ An independent boundary review reproduced six failures that the existing green s
 - Add an explicit, reference-preserving migration from legacy evidence digests to the sensitivity-bound v2 digest.
 - Give maintenance leases unique ownership and only allow the owner to update or release its lease.
 - Serialize audit rotation and metrics updates across processes so observability does not lose events or increments.
+- Keep encrypted plaintext out of transaction journals and embedding requests across policy changes, and make configured-level erasure preserve destruction of the original key.
+- Reject managed symlinks, duplicate identities, and invalid evidence or lifecycle references.
+- Preserve the locally pushed revision after an externally successful push and clean up partial maintenance startup.
+- Keep `.amem/` runtime keys, journals, indexes, and telemetry out of any enclosing Git repository.
 - Add boundary, near-neighbor, retention, and safety regressions for each reproduced failure.
 
 ## Impact
