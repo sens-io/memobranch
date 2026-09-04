@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
-import { AgentMemoryError } from '../src/errors.js';
+import { AgentMemoryError, redactSecrets } from '../src/errors.js';
 import { OperationsTelemetry } from '../src/audit.js';
 import { evidenceDigest, legacyEvidenceDigest } from '../src/evidence.js';
 import { LlmClient } from '../src/llm.js';
@@ -16,6 +16,7 @@ import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
 import type { Principal } from '../src/policy.js';
 import type { ProposedMemory, Scope, Sensitivity } from '../src/types.js';
 import { MemoryVault } from '../src/vault.js';
+import { VaultTransaction } from '../src/transaction.js';
 import { sha256, withFileLock } from '../src/utils.js';
 
 const roots: string[] = [];
@@ -85,12 +86,38 @@ test('non-admin principals without a tenant fail closed while local admins remai
   assert.equal(existsSync(join(newRoot, 'agent-memory.json')), false);
 });
 
+test('runtime keys and journals are ignored by an enclosing Git repository', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-outer-git-'));
+  roots.push(root);
+  await exec('git', ['init'], { cwd: root });
+  await writeFile(join(root, '.gitignore'), '# Existing project rules\n.env.local\n');
+  const vault = new MemoryVault(root, { masterKey });
+  await vault.initialize('outer-git');
+  const ignore = await readFile(join(root, '.gitignore'), 'utf8');
+  assert.match(ignore, /# Existing project rules/);
+  assert.match(ignore, /^\.amem\/$/m);
+  assert.equal((await exec('git', ['status', '--porcelain', '--', '.amem'], { cwd: root })).stdout, '');
+});
+
 class DowngradingLlm extends LlmClient {
   override async extractMemories(_content: string, _defaults: { scope: Scope; sensitivity: Sensitivity }): Promise<ProposedMemory[]> {
     return [{
       kind: 'fact', key: 'classified', statement: 'CLASSIFIED_PAYLOAD_91C2', scope: 'public', sensitivity: 'public',
       confidence: 1, explicit: true, conditions: [], tags: [],
     }];
+  }
+}
+
+class RecordingEmbeddingLlm extends LlmClient {
+  readonly embeddingCalls: string[][] = [];
+
+  override canEmbed(): boolean {
+    return true;
+  }
+
+  override async embed(inputs: string[]): Promise<number[][]> {
+    this.embeddingCalls.push([...inputs]);
+    return inputs.map(() => [1, 0]);
   }
 }
 
@@ -300,6 +327,32 @@ test('effective encryption policy protects every configured sensitivity', async 
   assert.doesNotMatch(await readFile(join(vault.root, 'MEMORY.md'), 'utf8'), /INTERNAL_MEMORY_CANARY_2984/);
   assert.doesNotMatch(await readFile(join(vault.root, 'INDEX.md'), 'utf8'), /INTERNAL_MEMORY_CANARY_2984|internal encrypted key/i);
   assert.ok(candidate.id);
+  assert.equal(await vault.encryption.hasKey(memory.id), true);
+  await vault.erase(memory.id, 'configured internal erasure');
+  assert.equal(await vault.encryption.hasKey(memory.id), false);
+  assert.equal((await vault.search('INTERNAL_MEMORY_CANARY_2984')).length, 0);
+  const tombstoneRaw = await readFile(join(vault.root, memory.path), 'utf8');
+  const tombstoneOuter = parseMarkdown<Record<string, unknown>>(tombstoneRaw);
+  assert.equal(tombstoneOuter.meta.encrypted, 'aes-256-gcm');
+  assert.equal(tombstoneOuter.meta.keyRef, `tombstone:${memory.id}`);
+  assert.equal((await vault.doctor()).healthy, true);
+
+  const journal = await VaultTransaction.begin(
+    vault.root,
+    vault.git,
+    vault.principal,
+    'test: configured policy journal',
+    masterKey,
+    ['internal', 'sensitive', 'secret'],
+  );
+  const journalCanary = 'INTERNAL_JOURNAL_CANARY_7139';
+  await journal.write('wiki/project/fact/journal-policy.md', serializeMarkdown({ sensitivity: 'internal' }, journalCanary));
+  const journalNames = await readdir(join(vault.root, '.amem', 'transactions'));
+  assert.equal(journalNames.length, 1);
+  const journalRaw = await readFile(join(vault.root, '.amem', 'transactions', journalNames[0]!), 'utf8');
+  assert.doesNotMatch(journalRaw, /INTERNAL_JOURNAL_CANARY_7139/);
+  assert.match(journalRaw, /aes-256-gcm/);
+  await journal.rollback();
 
   const noKey = await freshVault();
   const noKeyConfigPath = join(noKey.root, 'agent-memory.json');
@@ -310,6 +363,81 @@ test('effective encryption policy protects every configured sensitivity', async 
     noKey.capture({ content: 'must not persist', scope: 'project', sensitivity: 'internal' }),
     (error: unknown) => error instanceof AgentMemoryError && error.code === 'ENCRYPTION_KEY_UNAVAILABLE',
   );
+});
+
+test('encrypted documents never enter embedding requests after policy changes', async () => {
+  const llm = new RecordingEmbeddingLlm();
+  const vault = await freshVault({ masterKey, llm });
+  const configPath = join(vault.root, 'agent-memory.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+    policy: { requireEncryptionFor: string[] };
+    index: { embeddingModel: string | null };
+  };
+  config.policy.requireEncryptionFor = ['internal', 'sensitive', 'secret'];
+  config.index.embeddingModel = 'recording-test-model';
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await vault.propose({
+    kind: 'fact', key: 'encrypted semantic record', statement: 'EMBEDDING_PLAINTEXT_LEAK_CANARY_5216', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+
+  config.policy.requireEncryptionFor = ['sensitive', 'secret'];
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  llm.embeddingCalls.length = 0;
+  const result = await vault.searchDetailed('encrypted semantic record', { semantic: true });
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.semanticStatus, 'ready');
+  assert.equal(llm.embeddingCalls.length, 1);
+  assert.deepEqual(llm.embeddingCalls[0], ['encrypted semantic record']);
+  assert.doesNotMatch(llm.embeddingCalls.flat().join('\n'), /EMBEDDING_PLAINTEXT_LEAK_CANARY_5216/);
+});
+
+test('revoked encrypted memories cannot displace active search results', async () => {
+  const vault = await freshVault({ masterKey });
+  const term = 'EPHEMERAL_RANKING_CANARY_8254';
+  await vault.propose({
+    kind: 'fact', key: 'active encrypted result', statement: `${term} active`, scope: 'project',
+    sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const active = (await vault.search(term, { includeSecret: true }))[0]!;
+  for (let index = 0; index < 3; index += 1) {
+    await vault.propose({
+      kind: 'fact', key: `revoked encrypted result ${index}`,
+      statement: `${term} ${term} ${term} revoked ${index}`,
+      scope: 'project', sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [],
+    });
+    await vault.consolidate();
+    const revoked = (await vault.search(`revoked ${index}`, { includeSecret: true }))[0]!;
+    await vault.forget(revoked.id, 'ranking regression fixture');
+  }
+  const hits = await vault.search(term, { includeSecret: true, limit: 1 });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]!.id, active.id);
+});
+
+test('migration can encrypt existing plaintext after the encryption policy expands', async () => {
+  const vault = await freshVault({ masterKey });
+  const captured = await vault.capture({
+    content: 'POLICY_EXPANSION_MIGRATION_CANARY_4038', scope: 'project', sensitivity: 'internal',
+  });
+  const before = await readFile(join(vault.root, captured.evidencePath), 'utf8');
+  assert.match(before, /POLICY_EXPANSION_MIGRATION_CANARY_4038/);
+
+  const configPath = join(vault.root, 'agent-memory.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8')) as { policy: { requireEncryptionFor: string[] } };
+  config.policy.requireEncryptionFor = ['internal', 'sensitive', 'secret'];
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await vault.git.commit('config: expand encryption policy', vault.principal, ['agent-memory.json']);
+
+  const migrated = await vault.migrate();
+  assert.equal(migrated.migrated, true);
+  assert.equal(migrated.encrypted, 1);
+  const after = await readFile(join(vault.root, captured.evidencePath), 'utf8');
+  assert.doesNotMatch(after, /POLICY_EXPANSION_MIGRATION_CANARY_4038/);
+  assert.equal(parseMarkdown<Record<string, unknown>>(after).meta.encrypted, 'aes-256-gcm');
+  assert.equal((await vault.doctor()).healthy, true);
 });
 
 test('complete managed schemas reject malformed canonical memories', async () => {
@@ -339,6 +467,39 @@ test('complete managed schemas reject malformed canonical memories', async () =>
     (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT',
   );
   assert.equal((await vault.search('INVALID_SCHEMA_CANARY_1138')).length, 0);
+});
+
+test('metadata references and managed document identities are validated across files', async () => {
+  const vault = await freshVault();
+  const timestamp = new Date().toISOString();
+  const candidatePath = join(vault.root, 'candidates', 'forged-procedure.md');
+  await writeFile(candidatePath, serializeMarkdown({
+    id: 'cand-forged-procedure', type: 'memory-candidate', createdAt: timestamp, updatedAt: timestamp,
+    kind: 'procedure', key: 'forged procedure', scope: 'team', sensitivity: 'internal', confidence: 1,
+    explicit: false, status: 'pending', evidence: ['evidence/missing-one.md', 'evidence/missing-two.md'],
+    conditions: [], tags: [], conflictsWith: [],
+  }, '# Candidate: forged procedure\n\nNever auto-promote this.'));
+  await vault.git.commit('remote-like: add forged procedure', { id: 'remote', name: 'Remote' }, ['candidates']);
+  const report = await vault.doctor();
+  assert.equal(report.healthy, false);
+  assert.match(report.documents?.errors.join('\n') ?? '', /evidence reference is missing or invalid/);
+  await assert.rejects(vault.consolidate(), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'VALIDATION_FAILED');
+
+  await rm(candidatePath);
+  await vault.git.commit('test: remove forged procedure', vault.principal, ['candidates']);
+  await vault.propose({
+    kind: 'fact', key: 'duplicate identity source', statement: 'DUPLICATE_ID_CANARY_1904', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const source = (await vault.search('DUPLICATE_ID_CANARY_1904'))[0]!;
+  const duplicatePath = join(vault.root, 'wiki', 'project', 'fact', 'duplicate-copy.md');
+  await writeFile(duplicatePath, await readFile(join(vault.root, source.path), 'utf8'));
+  await vault.git.commit('remote-like: duplicate canonical identity', { id: 'remote', name: 'Remote' }, ['wiki']);
+  const duplicateReport = await vault.doctor();
+  assert.equal(duplicateReport.healthy, false);
+  assert.match(duplicateReport.documents?.errors.join('\n') ?? '', /Duplicate managed document id/);
 });
 
 test('explicit migration upgrades legacy evidence without changing its identity or path', async () => {
@@ -398,6 +559,14 @@ test('only the maintenance lease owner can release a live lease', async () => {
   const rejected = starts.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   assert.ok(rejected?.reason instanceof AgentMemoryError && rejected.reason.code === 'LOCK_TIMEOUT');
   for (const result of starts) if (result.status === 'fulfilled') await result.value.stop();
+
+  const failedStartup = new MaintenanceService(new MemoryVault(vault.root));
+  const startupInternals = failedStartup as unknown as { updateLease(state: { host: string; port: number }): Promise<void> };
+  startupInternals.updateLease = async () => { throw new Error('simulated lease publication failure'); };
+  await assert.rejects(failedStartup.start({ port: 0 }), /simulated lease publication failure/);
+  const afterFailure = new MaintenanceService(new MemoryVault(vault.root));
+  const afterFailureHandle = await afterFailure.start({ port: 0 });
+  await afterFailureHandle.stop();
 });
 
 test('concurrent metrics and audit writes preserve every accepted update', async () => {
@@ -499,6 +668,25 @@ test('remote synchronization cannot modify or delete committed evidence', async 
   assert.match(await readFile(join(vault.root, captured.evidencePath), 'utf8'), /sensitivity: internal/);
 });
 
+test('remote synchronization rejects symbolic links in managed vault paths', async () => {
+  const { vault, clone } = await remoteFixture();
+  const outside = join(tmpdir(), `memobranch-symlink-target-${Date.now()}`);
+  roots.push(outside);
+  await writeFile(outside, 'OUTSIDE_SYMLINK_CANARY_9335');
+  const linkPath = join(clone, 'wiki', 'project', 'fact', 'linked.md');
+  await mkdir(join(clone, 'wiki', 'project', 'fact'), { recursive: true });
+  await symlink(outside, linkPath);
+  await exec('git', ['add', 'wiki/project/fact/linked.md'], { cwd: clone });
+  await exec('git', ['commit', '-m', 'remote: add managed symlink'], { cwd: clone });
+  await exec('git', ['push', 'origin', 'main'], { cwd: clone });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.sync({ push: false }), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT');
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(existsSync(join(vault.root, 'wiki', 'project', 'fact', 'linked.md')), false);
+  assert.equal(await readFile(outside, 'utf8'), 'OUTSIDE_SYMLINK_CANARY_9335');
+});
+
 test('secret logical keys remain absent from Git paths, content, and visible history subjects', async () => {
   const vault = await freshVault({ masterKey });
   const config = await vault.config();
@@ -561,6 +749,8 @@ test('credential-bearing URL variants are rejected before config or Git changes'
   assert.equal((await vault.config()).remote, null);
   assert.equal(await vault.git.getRemoteUrl('origin'), null);
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal(redactSecrets('ghp_1234567890 github_pat_1234567890 glpat-1234567890 sk-proj-1234567890'),
+    '[redacted-token] [redacted-token] [redacted-token] [redacted-token]');
 });
 
 test('failed remote configuration restores Git and tracked configuration together', async () => {
@@ -605,6 +795,24 @@ test('push failure after a remote pull restores local history and managed files'
   await assert.rejects(vault.sync({ push: true }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_TRANSPORT');
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
   assert.equal(await readFile(join(vault.root, 'log.md'), 'utf8'), log);
+});
+
+test('a failure after a successful push never rolls local history behind the remote', async () => {
+  const { vault, remote } = await remoteFixture();
+  await vault.capture({ content: 'POST_PUSH_FAILURE_CANARY_6372', scope: 'project', sensitivity: 'internal' });
+  const pushedHead = await vault.git.run(['rev-parse', 'HEAD']);
+  const remoteStatus = vault.git.remoteStatus.bind(vault.git);
+  let statusCalls = 0;
+  vault.git.remoteStatus = async (...args) => {
+    statusCalls += 1;
+    if (statusCalls === 2) throw new AgentMemoryError('REMOTE_TRANSPORT', 'simulated post-push status failure');
+    return remoteStatus(...args);
+  };
+  await assert.rejects(vault.sync({ push: true }), (error: unknown) =>
+    error instanceof AgentMemoryError && error.code === 'REMOTE_TRANSPORT');
+  vault.git.remoteStatus = remoteStatus;
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), pushedHead);
+  assert.equal((await exec('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/main'])).stdout.trim(), pushedHead);
 });
 
 test('health endpoint returns unavailable when doctor reports an unhealthy vault', async () => {

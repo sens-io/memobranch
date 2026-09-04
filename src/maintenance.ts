@@ -115,7 +115,12 @@ export class MaintenanceService {
     }
     const address = this.server.address();
     const port = typeof address === 'object' && address ? address.port : (options.port ?? 0);
-    await this.updateLease({ host, port });
+    try {
+      await this.updateLease({ host, port });
+    } catch (error) {
+      try { await this.stop(); } catch { /* Preserve the startup failure. */ }
+      throw error;
+    }
     return { host, port, stop: () => this.stop() };
   }
 

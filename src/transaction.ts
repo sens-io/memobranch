@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 import { AgentMemoryError } from './errors.js';
 import { isEncryptedEnvelope, parseMasterKey } from './encryption.js';
 import { parseMarkdown } from './markdown.js';
-import type { Actor } from './types.js';
+import type { Actor, Sensitivity } from './types.js';
 import { nowIso, resolveInside, shortId, writeText } from './utils.js';
 import type { GitStore } from './git-store.js';
 
@@ -40,12 +40,25 @@ export class VaultTransaction {
   private readonly manifestPath: string;
   private manifest: TransactionManifest;
 
-  private constructor(readonly root: string, readonly git: GitStore, manifest: TransactionManifest, private readonly masterKey: Buffer | null) {
+  private constructor(
+    readonly root: string,
+    readonly git: GitStore,
+    manifest: TransactionManifest,
+    private readonly masterKey: Buffer | null,
+    private readonly encryptedSensitivities: ReadonlySet<Sensitivity>,
+  ) {
     this.manifest = manifest;
     this.manifestPath = join(root, '.amem', 'transactions', `${manifest.id}.json`);
   }
 
-  static async begin(root: string, git: GitStore, actor: Actor, message: string, encodedMasterKey?: string): Promise<VaultTransaction> {
+  static async begin(
+    root: string,
+    git: GitStore,
+    actor: Actor,
+    message: string,
+    encodedMasterKey?: string,
+    encryptedSensitivities: readonly Sensitivity[] = ['sensitive', 'secret'],
+  ): Promise<VaultTransaction> {
     const manifest: TransactionManifest = {
       version: 1,
       id: `txn-${shortId()}`,
@@ -55,7 +68,13 @@ export class VaultTransaction {
       message,
       writes: {},
     };
-    const transaction = new VaultTransaction(root, git, manifest, encodedMasterKey ? parseMasterKey(encodedMasterKey) : null);
+    const transaction = new VaultTransaction(
+      root,
+      git,
+      manifest,
+      encodedMasterKey ? parseMasterKey(encodedMasterKey) : null,
+      new Set(encryptedSensitivities),
+    );
     await transaction.persist();
     return transaction;
   }
@@ -67,11 +86,11 @@ export class VaultTransaction {
     if (!prior) {
       const original = existsSync(absolute) ? await readFile(absolute, 'utf8') : null;
       this.manifest.writes[normalized] = {
-        original: original === null ? null : encodeText(original, normalized, this.masterKey),
-        desired: encodeText(content, normalized, this.masterKey),
+        original: original === null ? null : encodeText(original, normalized, this.masterKey, this.encryptedSensitivities),
+        desired: encodeText(content, normalized, this.masterKey, this.encryptedSensitivities),
       };
     } else {
-      prior.desired = encodeText(content, normalized, this.masterKey);
+      prior.desired = encodeText(content, normalized, this.masterKey, this.encryptedSensitivities);
     }
     await this.persist();
     await writeText(absolute, content);
@@ -166,8 +185,8 @@ function toPosix(value: string): string {
   return value.split('\\').join('/');
 }
 
-function encodeText(value: string, path: string, masterKey: Buffer | null): StoredText {
-  if (!isPlaintextConfidential(value)) return { encoding: 'base64', data: Buffer.from(value, 'utf8').toString('base64') };
+function encodeText(value: string, path: string, masterKey: Buffer | null, encryptedSensitivities: ReadonlySet<Sensitivity>): StoredText {
+  if (!isPlaintextConfidential(value, encryptedSensitivities)) return { encoding: 'base64', data: Buffer.from(value, 'utf8').toString('base64') };
   if (!masterKey) throw new AgentMemoryError('ENCRYPTION_KEY_UNAVAILABLE', 'A master key is required to journal confidential plaintext safely');
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', masterKey, iv);
@@ -190,11 +209,11 @@ function decodeText(value: StoredText | string, path: string, masterKey: Buffer 
   }
 }
 
-function isPlaintextConfidential(value: string): boolean {
+function isPlaintextConfidential(value: string, encryptedSensitivities: ReadonlySet<Sensitivity>): boolean {
   try {
     const parsed = parseMarkdown<Record<string, unknown>>(value);
     if (isEncryptedEnvelope(parsed.meta)) return false;
-    return ['sensitive', 'secret'].includes(String(parsed.meta.sensitivity));
+    return encryptedSensitivities.has(String(parsed.meta.sensitivity) as Sensitivity);
   } catch {
     return false;
   }

@@ -51,7 +51,7 @@ export class EncryptionManager {
     return this.masterKey ? createHash('sha256').update(this.masterKey).digest('hex').slice(0, 16) : null;
   }
 
-  async encrypt<T extends object>(meta: T, body: string): Promise<{ meta: EncryptedEnvelopeMeta; body: string }> {
+  async encrypt<T extends object>(meta: T, body: string, keyRefOverride?: string): Promise<{ meta: EncryptedEnvelopeMeta; body: string }> {
     const logical = meta as T & { id?: unknown; type?: unknown; scope?: unknown; sensitivity?: unknown; status?: unknown; createdAt?: unknown; updatedAt?: unknown };
     const id = required(logical.id, 'id');
     const type = required(logical.type, 'type');
@@ -60,7 +60,8 @@ export class EncryptionManager {
     if (!['public', 'internal', 'sensitive', 'secret'].includes(sensitivity)) {
       throw new AgentMemoryError('ENCRYPTION_FAILED', 'Document sensitivity is invalid');
     }
-    const dataKey = await this.getOrCreateDataKey(id);
+    const keyRef = keyRefOverride === undefined ? id : required(keyRefOverride, 'keyRef');
+    const dataKey = await this.getOrCreateDataKey(keyRef);
     const iv = randomBytes(12);
     const cipher = createCipheriv(CIPHER, dataKey, iv);
     const envelopeBase = {
@@ -80,7 +81,7 @@ export class EncryptionManager {
       cipherVersion: 1,
       iv: iv.toString('base64'),
       tag: cipher.getAuthTag().toString('base64'),
-      keyRef: id,
+      keyRef,
     };
     return { meta: envelope, body: `ENC[${ciphertext.toString('base64')}]` };
   }
@@ -138,7 +139,7 @@ export class EncryptionManager {
     if (!this.masterKey) {
       throw new AgentMemoryError(
         'ENCRYPTION_KEY_UNAVAILABLE',
-        'A 32-byte AMEM_MASTER_KEY is required for sensitive and secret memory',
+        'A 32-byte AMEM_MASTER_KEY is required for encrypted memory',
       );
     }
     return this.masterKey;
@@ -163,10 +164,6 @@ export class EncryptionManager {
 
 export function isEncryptedEnvelope(meta: object): meta is EncryptedEnvelopeMeta {
   return (meta as { encrypted?: unknown }).encrypted === CIPHER;
-}
-
-export function isConfidential(sensitivity: Sensitivity): boolean {
-  return sensitivity === 'sensitive' || sensitivity === 'secret';
 }
 
 export function parseMasterKey(value: string): Buffer {

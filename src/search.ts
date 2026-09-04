@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
@@ -166,7 +166,9 @@ export class PersistentSearchIndex {
     const index = this.trustedIndex!;
     const documents = index.documents.filter((document) =>
       isActive(document) && canAccess(principal, document.scope, document.sensitivity) && selectedArea(document.path, options));
-    documents.push(...(await this.loadEphemeralSelected(principal, options)));
+    const ephemeral = await this.loadEphemeralSelected(principal, options);
+    const ephemeralPaths = new Set(ephemeral.map((document) => document.path));
+    documents.push(...ephemeral);
 
     const queryTerms = tokenize(query);
     if (queryTerms.length === 0) return { hits: [], semanticStatus, indexRebuilt: refreshed.rebuilt };
@@ -175,7 +177,7 @@ export class PersistentSearchIndex {
     let semantic = new Map<string, number>();
     if (options.semantic && this.config.index.embeddingModel && this.llm?.canEmbed(this.config.index.embeddingModel)) {
       try {
-        semantic = await this.semanticScores(query, documents);
+        semantic = await this.semanticScores(query, documents, ephemeralPaths);
         semanticStatus = 'ready';
       } catch {
         semanticStatus = 'degraded';
@@ -333,7 +335,8 @@ export class PersistentSearchIndex {
         const logical = await this.secureReader(relativePath);
         const raw = `---\nplaceholder: true\n---\n${logical.body}`;
         const source = await stat(file);
-        documents.push(indexParts(relativePath, logical.meta, logical.body, sha256(raw), source.size, source.mtimeMs, statIdentity(source)));
+        const document = indexParts(relativePath, logical.meta, logical.body, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
+        if (isActive(document)) documents.push(document);
       } catch {
         // Authorization and key failures do not reveal the document through search.
       }
@@ -363,13 +366,15 @@ export class PersistentSearchIndex {
     await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: this.config.index.embeddingModel, vectors })}\n`);
   }
 
-  private async semanticScores(query: string, documents: IndexedDocument[]): Promise<Map<string, number>> {
-    await this.refreshEmbeddings(documents.filter((document) => !this.config.policy.requireEncryptionFor.includes(document.sensitivity)));
+  private async semanticScores(query: string, documents: IndexedDocument[], excludedPaths: ReadonlySet<string>): Promise<Map<string, number>> {
+    const safeDocuments = documents.filter((document) =>
+      !excludedPaths.has(document.path) && !this.config.policy.requireEncryptionFor.includes(document.sensitivity));
+    await this.refreshEmbeddings(safeDocuments);
     const cache = await this.readEmbeddingCache();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
     if (!queryVector) return new Map();
     return new Map(
-      documents
+      safeDocuments
         .map((document) => {
           const vector = cache.vectors[document.contentHash];
           return vector ? ([document.path, Math.max(0, cosine(queryVector, vector))] as const) : null;
@@ -511,10 +516,12 @@ async function allManagedMarkdown(root: string): Promise<string[]> {
 
 async function listMarkdown(root: string): Promise<string[]> {
   if (!existsSync(root)) return [];
+  if ((await lstat(root)).isSymbolicLink()) throw new Error(`Symbolic links are not allowed in managed vault paths: ${root}`);
   const entries = await readdir(root, { withFileTypes: true });
   const output: string[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in managed vault paths: ${path}`);
     if (entry.isDirectory()) output.push(...(await listMarkdown(path)));
     else if (entry.isFile() && entry.name.endsWith('.md')) output.push(path);
   }
@@ -592,7 +599,7 @@ function sensitivityOf(meta: Record<string, unknown>): Sensitivity {
 }
 
 function isActive(document: IndexedDocument): boolean {
-  if (['revoked', 'superseded', 'rejected', 'conflicted'].includes(document.status ?? '')) return false;
+  if (['revoked', 'superseded', 'rejected', 'conflicted', 'promoted'].includes(document.status ?? '')) return false;
   return !document.expiresAt || Date.parse(document.expiresAt) > Date.now();
 }
 

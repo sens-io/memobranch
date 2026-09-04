@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
 import { OperationsTelemetry } from './audit.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
-import { EncryptionManager, isConfidential, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
+import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
 import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion } from './evidence.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
@@ -109,7 +109,14 @@ export class MemoryVault {
       if (this.principal.tenantId) config.tenantId = this.principal.tenantId;
       await Promise.all(['.amem', 'evidence', 'candidates', 'wiki'].map((directory) => mkdir(join(this.root, directory), { recursive: true })));
       await this.git.initialize();
-      const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'init: create agent memory vault', this.journalKey);
+      const transaction = await VaultTransaction.begin(
+        this.root,
+        this.git,
+        this.principal,
+        'init: create agent memory vault',
+        this.journalKey,
+        config.policy.requireEncryptionFor,
+      );
       this.activeTransaction = transaction;
       this.activePermission = 'maintain';
       let ready = false;
@@ -117,6 +124,7 @@ export class MemoryVault {
       try {
         await this.writeManaged('agent-memory.json', `${JSON.stringify(config, null, 2)}\n`);
         await this.installAgentInstructions();
+        await this.installRuntimeIgnore();
         await this.writeManaged('log.md', '# Memory log\n\nAppend-only audit journal for memory operations.\n');
         await this.rebuildGenerated(config);
         await this.appendManaged('log.md', `\n- ${timestamp} \`init\` by \`${this.principal.id}\`: initialized vault ${config.vaultId}\n`);
@@ -189,8 +197,8 @@ export class MemoryVault {
         }
       }
       await this.appendLog('migrate', this.principal, `config=${migration.migrated}; encrypted=${encrypted}; evidence-digests=${evidenceDigests}`);
-      return { migrated: migration.migrated || original.version === 1 || evidenceDigests > 0, encrypted, evidenceDigests };
-    }, undefined, { allowLegacyEvidence: true });
+      return { migrated: migration.migrated || original.version === 1 || encrypted > 0 || evidenceDigests > 0, encrypted, evidenceDigests };
+    }, undefined, { allowLegacyEvidence: true, allowPlaintextRequiredEncryption: true });
     return { ...result.value, commit: result.commit };
   }
 
@@ -329,6 +337,7 @@ export class MemoryVault {
       const result: Omit<ConsolidationResult, 'commit'> = { promoted: [], merged: [], conflicts: [], deferred: [] };
       let changed = false;
       for (const candidate of candidates) {
+        await this.assertEvidenceReferences(candidate.meta.evidence);
         const matching = memories.filter((memory) =>
           ['active', 'conflicted'].includes(memory.meta.status) &&
           memory.meta.scope === candidate.meta.scope &&
@@ -390,6 +399,7 @@ export class MemoryVault {
     this.assertInitialized();
     const mutation = await this.withMutation('review', actor, 'approve', `memory: approve ${safeLogToken(candidateId)}`, async () => {
       const candidate = await this.requireById<CandidateMeta>('candidates', candidateId);
+      await this.assertEvidenceReferences(candidate.meta.evidence);
       if (candidate.meta.status === 'rejected') throw new AgentMemoryError('VALIDATION_FAILED', `Candidate ${candidateId} was rejected`);
       if (candidate.meta.status === 'promoted' && candidate.meta.promotedTo) {
         const existing = await this.readDocument<MemoryMeta>(candidate.meta.promotedTo);
@@ -486,7 +496,9 @@ export class MemoryVault {
       await recoverTransactions(this.root, this.git, this.journalKey);
       await this.recoverErasureIntentsLocked();
       const memory = await this.findOneMemory(selector);
-      if (!isConfidential(memory.meta.sensitivity)) throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to encrypted sensitive or secret memory');
+      if (!config.policy.requireEncryptionFor.includes(memory.meta.sensitivity)) {
+        throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to memory covered by the encryption policy');
+      }
       const intent: ErasureIntent = {
         version: 1,
         id: memory.meta.id,
@@ -709,6 +721,8 @@ export class MemoryVault {
     const candidates = candidateScan.documents;
     const memories = memoryScan.documents.filter((document) => document.meta.type === 'memory');
     const documentErrors = [...candidateScan.errors, ...memoryScan.errors];
+    const managedDocuments: Array<MarkdownDocument<object>> = [...evidence, ...candidates, ...memoryScan.documents];
+    documentErrors.push(...metadataReferenceErrors(managedDocuments));
     const documents = [...evidence, ...candidates, ...memories];
     const known = new Set(documents.map((document) => document.path));
     const backlinks = new Map<string, string[]>();
@@ -770,10 +784,10 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
-    await this.config();
+    const config = await this.config();
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
       await recoverTransactions(this.root, this.git, this.journalKey);
@@ -782,12 +796,20 @@ export class MemoryVault {
       if (evidenceIntegrity.errors.length > 0) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Immutable evidence failed integrity validation', { errors: evidenceIntegrity.errors.slice(0, 20) });
       }
-      const transaction = await VaultTransaction.begin(this.root, this.git, actor, message, this.journalKey);
+      const transaction = await VaultTransaction.begin(
+        this.root,
+        this.git,
+        actor,
+        message,
+        this.journalKey,
+        config.policy.requireEncryptionFor,
+      );
       this.activeTransaction = transaction;
       this.activePermission = permission;
       let ready = false;
       try {
         await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
+        await this.installRuntimeIgnore();
         const value = await action();
         await this.rebuildGenerated(await this.config());
         ready = true;
@@ -825,13 +847,22 @@ export class MemoryVault {
   }
 
   private async reconcileAfterSync(): Promise<void> {
-    const transaction = await VaultTransaction.begin(this.root, this.git, this.principal, 'sync: rebuild derived memory', this.journalKey);
+    const config = await this.config();
+    const transaction = await VaultTransaction.begin(
+      this.root,
+      this.git,
+      this.principal,
+      'sync: rebuild derived memory',
+      this.journalKey,
+      config.policy.requireEncryptionFor,
+    );
     this.activeTransaction = transaction;
     this.activePermission = 'sync';
     let ready = false;
     try {
       await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
-      await this.rebuildGenerated(await this.config());
+      await this.installRuntimeIgnore();
+      await this.rebuildGenerated(config);
       ready = true;
       await transaction.commit();
     } catch (error) {
@@ -884,7 +915,15 @@ export class MemoryVault {
     if (await this.encryption.hasKey(intent.id)) {
       throw new AgentMemoryError('ENCRYPTION_FAILED', `Unable to destroy the wrapped key for ${intent.id}`);
     }
-    const transaction = await VaultTransaction.begin(this.root, this.git, intent.actor, `memory: cryptographically erase ${safeLogToken(intent.id)}`, this.journalKey);
+    const config = await this.config();
+    const transaction = await VaultTransaction.begin(
+      this.root,
+      this.git,
+      intent.actor,
+      `memory: cryptographically erase ${safeLogToken(intent.id)}`,
+      this.journalKey,
+      config.policy.requireEncryptionFor,
+    );
     this.activeTransaction = transaction;
     this.activePermission = 'admin';
     let ready = false;
@@ -894,7 +933,7 @@ export class MemoryVault {
         id: intent.id,
         type: 'memory-erased',
         scope: intent.scope,
-        sensitivity: 'internal',
+        sensitivity: 'internal' as const,
         status: 'revoked',
         createdAt: intent.createdAt,
         updatedAt: timestamp,
@@ -902,9 +941,14 @@ export class MemoryVault {
         reasonRecorded: Boolean(intent.reasonSha256),
         ...(intent.reasonSha256 ? { reasonSha256: intent.reasonSha256 } : {}),
       };
-      await this.writeManaged(intent.path, serializeMarkdown(tombstone, `# Erased memory ${intent.id}\n\nThe encrypted payload and its wrapped data key were destroyed.`));
+      const tombstoneBody = `# Erased memory ${intent.id}\n\nThe encrypted payload and its wrapped data key were destroyed.`;
+      const serializedTombstone = config.policy.requireEncryptionFor.includes(tombstone.sensitivity)
+        ? serializeMarkdown(...encryptedParts(await this.encryption.encrypt(tombstone, tombstoneBody, `tombstone:${intent.id}`)))
+        : serializeMarkdown(tombstone, tombstoneBody);
+      await this.writeManaged(intent.path, serializedTombstone);
+      await this.installRuntimeIgnore();
       await this.appendLog('erase', intent.actor, `${intent.id}; cryptographic-erasure=true`);
-      await this.rebuildGenerated(await this.config());
+      await this.rebuildGenerated(config);
       ready = true;
       const commit = await transaction.commit();
       await rm(this.erasureIntentPath(intent.id), { force: true });
@@ -922,7 +966,9 @@ export class MemoryVault {
     return join(this.root, '.amem', 'erasures', `${safeLogToken(id)}.json`);
   }
 
-  private async verifyEvidenceIntegrity(options: { allowLegacyEvidence?: boolean } = {}): Promise<{ errors: string[]; documents: Array<MarkdownDocument<EvidenceMeta>> }> {
+  private async verifyEvidenceIntegrity(
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean } = {},
+  ): Promise<{ errors: string[]; documents: Array<MarkdownDocument<EvidenceMeta>> }> {
     const errors: string[] = [];
     const documents: Array<MarkdownDocument<EvidenceMeta>> = [];
     for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
@@ -936,6 +982,21 @@ export class MemoryVault {
       }
     }
     return { errors, documents };
+  }
+
+  private async assertEvidenceReferences(paths: readonly string[]): Promise<void> {
+    for (const path of unique(paths)) {
+      if (!path.startsWith('evidence/')) {
+        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is outside evidence/: ${path}`);
+      }
+      try {
+        const document = await this.readDocument<Record<string, unknown>>(path);
+        if (document.meta.type !== 'evidence' || document.meta.immutable !== true) throw new Error('not immutable evidence');
+      } catch (error) {
+        if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw error;
+        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is invalid: ${path}`);
+      }
+    }
   }
 
   private async validateManagedState(): Promise<void> {
@@ -1051,6 +1112,18 @@ export class MemoryVault {
     if (!existsSync(path)) return this.writeManaged('AGENTS.md', instructions);
     const existing = await readFile(path, 'utf8');
     if (!existing.includes('<!-- AGENT_MEMORY_WIKI_START -->')) await this.writeManaged('AGENTS.md', `${existing.trimEnd()}\n\n${instructions}`);
+  }
+
+  private async installRuntimeIgnore(): Promise<void> {
+    const path = join(this.root, '.gitignore');
+    const existing = existsSync(path) ? await readFile(path, 'utf8') : '';
+    const ignoresRuntime = existing.split(/\r?\n/).some((line) => {
+      const normalized = line.trim().replace(/^\//, '').replace(/\/$/, '');
+      return normalized === '.amem';
+    });
+    if (ignoresRuntime) return;
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    await this.writeManaged('.gitignore', `${existing}${prefix}\n# MemoBranch local runtime state\n.amem/\n`);
   }
 
   private async writeManaged(path: string, content: string): Promise<void> {
@@ -1175,10 +1248,16 @@ export class MemoryVault {
 
 async function listMarkdown(root: string): Promise<string[]> {
   if (!existsSync(root)) return [];
+  if ((await lstat(root)).isSymbolicLink()) {
+    throw new AgentMemoryError('VALIDATION_FAILED', `Symbolic links are not allowed in managed vault paths: ${root}`);
+  }
   const entries = await readdir(root, { withFileTypes: true });
   const output: string[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new AgentMemoryError('VALIDATION_FAILED', `Symbolic links are not allowed in managed vault paths: ${path}`);
+    }
     if (entry.isDirectory()) output.push(...(await listMarkdown(path)));
     else if (entry.isFile() && entry.name.endsWith('.md')) output.push(path);
   }
@@ -1190,6 +1269,46 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
   if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
   if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
   if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
+}
+
+function metadataReferenceErrors(documents: Array<MarkdownDocument<object>>): string[] {
+  const errors: string[] = [];
+  const entries = documents.map((document) => ({ document, meta: document.meta as Record<string, unknown> }));
+  const byId = new Map<string, string[]>();
+  const evidencePaths = new Set(entries.filter(({ meta }) => meta.type === 'evidence').map(({ document }) => document.path));
+  const memoryPaths = new Set(entries
+    .filter(({ meta }) => meta.type === 'memory' || meta.type === 'memory-erased')
+    .map(({ document }) => document.path));
+  const memoryIds = new Set(entries.filter(({ meta }) => meta.type === 'memory').map(({ meta }) => String(meta.id)));
+  for (const { document, meta } of entries) {
+    const id = String(meta.id);
+    byId.set(id, [...(byId.get(id) ?? []), document.path]);
+    if (meta.type === 'memory-candidate' || meta.type === 'memory') {
+      for (const reference of meta.evidence as string[]) {
+        if (!evidencePaths.has(reference)) errors.push(`${document.path}: evidence reference is missing or invalid: ${reference}`);
+      }
+    }
+    if (meta.type === 'memory-candidate') {
+      if (typeof meta.promotedTo === 'string' && !memoryPaths.has(meta.promotedTo)) {
+        errors.push(`${document.path}: promotedTo reference is missing: ${meta.promotedTo}`);
+      }
+      for (const reference of meta.conflictsWith as string[]) {
+        if (!memoryIds.has(reference)) errors.push(`${document.path}: conflictsWith reference is missing: ${reference}`);
+      }
+    }
+    if (meta.type === 'memory') {
+      if (typeof meta.supersededBy === 'string' && !memoryPaths.has(meta.supersededBy)) {
+        errors.push(`${document.path}: supersededBy reference is missing: ${meta.supersededBy}`);
+      }
+      for (const reference of (meta.supersedes as string[] | undefined) ?? []) {
+        if (!memoryPaths.has(reference)) errors.push(`${document.path}: supersedes reference is missing: ${reference}`);
+      }
+    }
+  }
+  for (const [id, paths] of byId) {
+    if (paths.length > 1) errors.push(`Duplicate managed document id ${id}: ${paths.join(', ')}`);
+  }
+  return errors;
 }
 
 function isCanonicalDocumentPath(path: string): boolean {

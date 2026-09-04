@@ -50,7 +50,7 @@ export function toAgentMemoryError(error: unknown): AgentMemoryError {
 export function redactSecrets(value: string): string {
   return value
     .replace(/(https?:\/\/)[^/@\s]+@/gi, '$1[redacted]@')
-    .replace(/\b(?:sk|ghp|github_pat|glpat)-[A-Za-z0-9_-]{8,}\b/g, '[redacted-token]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|glpat-[A-Za-z0-9_-]{8,})\b/g, '[redacted-token]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]');
 }
 
