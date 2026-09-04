@@ -57,8 +57,8 @@ export class EncryptionManager {
     const type = required(logical.type, 'type');
     const scope = required(logical.scope, 'scope');
     const sensitivity = required(logical.sensitivity, 'sensitivity') as Sensitivity;
-    if (!['sensitive', 'secret'].includes(sensitivity)) {
-      throw new AgentMemoryError('ENCRYPTION_FAILED', 'Only confidential documents use envelope encryption');
+    if (!['public', 'internal', 'sensitive', 'secret'].includes(sensitivity)) {
+      throw new AgentMemoryError('ENCRYPTION_FAILED', 'Document sensitivity is invalid');
     }
     const dataKey = await this.getOrCreateDataKey(id);
     const iv = randomBytes(12);
