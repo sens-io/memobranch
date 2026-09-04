@@ -16,8 +16,9 @@
   <img src="https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" alt="DeepSeek Harness plugin">
   <a href="https://github.com/sens-io/memobranch/actions/workflows/ci.yml"><img src="https://github.com/sens-io/memobranch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-59%20passed-22C55E?style=flat-square" alt="59 tests passed">
+  <img src="https://img.shields.io/badge/tests-63%20passed-22C55E?style=flat-square" alt="63 tests passed">
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
   <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
@@ -27,6 +28,7 @@
   <a href="#-核心能力">核心能力</a> •
   <a href="#-快速开始">快速开始</a> •
   <a href="#-工作原理">工作原理</a> •
+  <a href="#-deepseek-harness-插件">DeepSeek Harness</a> •
   <a href="#-mcp-接入">MCP 接入</a> •
   <a href="#-生产运维">生产运维</a>
 </p>
@@ -40,7 +42,7 @@ MemoBranch 是一个面向 AI Agent 的生产级、本地优先长期记忆层�
 它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。生产版采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流完成。
 
 > [!IMPORTANT]
-> LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索和 MCP 接入仍然可以完整工作。
+> LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索、DeepSeek Harness 与 MCP 接入仍然可以完整工作。
 
 ## 💡 为什么需要它
 
@@ -79,7 +81,7 @@ flowchart LR
 | 🔎 | **混合检索** | CJK/英文词法检索、可选 embeddings、Wiki 链接扩展与增量索引 |
 | 🔄 | **远端 Git 同步** | ahead/behind/diverged 状态、快进、常规合并、冲突中止和受控推送 |
 | 🧯 | **崩溃恢复** | 多文件写入先 journal，再原子替换；启动后自动回滚或重放 |
-| 🔌 | **CLI + MCP** | 稳定 JSON、类型化错误、有限输入、最小权限工具契约 |
+| 🔌 | **CLI + Agent 插件** | CLI、MCP 与 DeepSeek Harness 原生插件，共享稳定错误和最小权限契约 |
 | 📈 | **生产可观测性** | 单实例维护服务、`/healthz`、Prometheus `/metrics`、脱敏审计 |
 | 🧩 | **OpenSpec 驱动** | proposal、规格、设计、任务、验证证据与归档完整留痕 |
 
@@ -148,9 +150,11 @@ amem doctor --root ~/my-agent-memory --json
 flowchart TB
     Agent[AI Agent / Human] --> CLI[CLI]
     Agent --> MCP[MCP Server]
+    Agent --> DSH[DeepSeek Harness Plugin]
 
     CLI --> Policy[Identity & Policy]
     MCP --> Policy
+    DSH --> Policy
     Policy --> Vault[Memory Vault]
 
     Vault --> TX[Transaction Journal]
@@ -278,6 +282,75 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
 
 授权会同时检查 `scope`、最高 `sensitivity` 与 `tenantId`，并且发生在解密、评分、图扩展、摘要生成和 embedding 请求之前。所有非管理员主体都必须绑定 vault 配置中的 `tenantId`；仅本地隐式管理员可以省略。
 
+## 🐋 DeepSeek Harness 插件
+
+MemoBranch 可以作为原生 Cordis 插件直接进入 DeepSeek Harness 的工具注册表，不需要额外启动 MCP 子进程。插件遵循 Harness 生命周期，配置变化可热替换，卸载时由 Cordis 自动撤销全部工具注册。
+
+> [!NOTE]
+> MemoBranch 本身支持 Node.js 20+；官方 `@deepseek-ai/dsh@0.1.2-rc.1` 的当前依赖链要求 Node.js 22.19+。以所安装 Harness 版本的 `engines` 声明为准。
+
+### 从本地源码安装
+
+先构建 MemoBranch，再把项目目录安装到一个 Harness profile：
+
+```bash
+cd /absolute/path/to/memobranch
+npm ci
+npm run build
+
+dsh plugin --profile personal-agent add /absolute/path/to/memobranch
+dsh --profile personal-agent --dump-config
+dsh --profile personal-agent
+```
+
+发布到 npm 后，也可以直接安装：
+
+```bash
+dsh plugin --profile personal-agent add memobranch
+```
+
+从 GitHub 安装时建议锁定 commit：
+
+```bash
+dsh plugin --profile personal-agent add github:sens-io/memobranch#<commit-sha>
+```
+
+Git 安装会通过 `prepare` 构建 TypeScript。pnpm 10 及更新版本需要在该 profile 的 `pnpm-workspace.yaml` 中显式允许 `memobranch` 的构建脚本；这等价于允许依赖在安装阶段执行代码，只应对可信且已锁定的提交授权。
+
+### 配置
+
+身份、权限、tenant、密钥和 provider 凭据仍通过下方 `AMEM_*` 环境变量由启动进程注入，模型不能在工具参数中覆盖它们。`vaultRoot` 留空时依次使用 `AMEM_VAULT` 和当前工作目录。
+
+如需覆盖插件默认值，在 profile 的 `cordis.patch.yml` 中覆盖同一个插件行：
+
+```yaml
+- id: memobranch-memory
+  name: memobranch/deepseek-harness
+  config:
+    vaultRoot: /absolute/path/to/memory-vault
+    defaultScope: project
+    defaultSensitivity: internal
+    defaultSearchLimit: 8
+    defaultMaxContextCharacters: 12000
+```
+
+配置由 Schemastery 在加载时校验。`defaultSearchLimit` 只允许 `1..50`，`defaultMaxContextCharacters` 只允许 `500..50000`；错误配置不会注册任何工具。
+
+### 最小权限工具集
+
+插件根据 `AMEM_PERMISSIONS` 收缩模型可见的工具，而 `MemoryVault` 在执行时再次授权：
+
+| 权限 | 可见工具 |
+| --- | --- |
+| `read` | `memory_context`, `memory_search`, `memory_get`, `memory_version`, `memory_config`, `memory_policy`, `memory_history` |
+| `write` | `memory_capture`, `memory_propose` |
+| `review` | `memory_consolidate`, `memory_review`, `memory_forget` |
+| `admin` | 全部工具，包括 `memory_erase` |
+| `maintain` | `memory_doctor`, `memory_recover`, `memory_reindex`, `memory_maintenance` |
+| `sync` | `memory_remote_status`, `memory_remote_sync` |
+
+所有工具都通过官方 `defineTool` API 声明类型化参数和规范输出。工具不声明不安全的并行执行；取消信号会中止待处理的模型请求，并等待已拥有的 vault 工作停止后再返回。建议 Agent 在需要长期上下文的任务开始前调用 `memory_context`。
+
 ## 🔌 MCP 接入
 
 构建完成后，把以下配置加入支持 MCP 的 Agent 工具。请将路径替换为实际绝对路径：
@@ -373,7 +446,7 @@ curl http://127.0.0.1:9464/metrics
 
 | 变量 | 含义 | 默认值 |
 | --- | --- | --- |
-| `AMEM_VAULT` | MCP vault 路径 | 当前目录 |
+| `AMEM_VAULT` | MCP / DeepSeek Harness vault 路径 | 当前目录 |
 | `AMEM_ACTOR_ID` | Git 与审计主体 ID | `agent` |
 | `AMEM_ACTOR_NAME` | Git 与审计主体名称 | 主体 ID |
 | `AMEM_ACTOR_EMAIL` | 可选 Git 邮箱 | 空 |
@@ -448,7 +521,7 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 | Gate | 当前状态 |
 | --- | :---: |
 | TypeScript build | ✅ PASS |
-| CLI / MCP / Vault tests | ✅ 59 / 59 |
+| CLI / MCP / DeepSeek Harness / Vault tests | ✅ 63 / 63 |
 | 1,000 文档索引性能门禁 | ✅ PASS |
 | npm package dry-run | ✅ PASS |
 | 依赖漏洞审计 | ✅ 0 known vulnerabilities |
@@ -460,7 +533,7 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 
 ## 🧱 威胁模型与边界
 
-**本实现防护：** MCP 调用者伪造身份、越权 scope/sensitivity 访问、机密明文进入 Git/索引/日志/指标/恢复日志、外层 Git 误收运行态、托管路径符号链接、部分写入、重复执行、远端 URL 凭据落盘、常见同步冲突和模型服务不可用。
+**本实现防护：** MCP 或 Harness 调用者伪造身份、越权 scope/sensitivity 访问、机密明文进入 Git/索引/日志/指标/恢复日志、外层 Git 误收运行态、托管路径符号链接、部分写入、重复执行、远端 URL 凭据落盘、常见同步冲突和模型服务不可用。
 
 **本实现不防护：** 已完全控制本机或进程内存的攻击者、恶意本机管理员、已导出明文、操作系统或备份泄漏、Git/LLM 供应链失陷、流量分析，以及第三方已经持有副本的删除。
 
@@ -471,6 +544,7 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 - [OpenKnowledge](https://github.com/inkeep/open-knowledge)：Git 驱动的本地 Markdown / LLM Wiki 架构灵感。
 - [OpenSpec](https://github.com/Fission-AI/OpenSpec)：规格驱动的生产开发与归档流程。
 - [Model Context Protocol](https://modelcontextprotocol.io/)：Agent 与记忆服务之间的标准工具接口。
+- [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)：原生 Cordis 插件、配置和类型化工具接口。
 
 ---
 

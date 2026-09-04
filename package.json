@@ -8,7 +8,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./deepseek-harness": {
+      "types": "./dist/deepseek-harness.d.ts",
+      "import": "./dist/deepseek-harness.js",
+      "default": "./dist/deepseek-harness.js"
     }
   },
   "bin": {
@@ -19,12 +25,14 @@
   },
   "files": [
     "dist",
+    "cordis.patch.yml",
     "README.md",
     ".env.example",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "dev": "tsx src/cli.ts",
     "mcp": "tsx src/mcp.ts",
     "test": "node --import tsx --test test/*.test.ts",
@@ -43,20 +51,42 @@
   },
   "homepage": "https://github.com/sens-io/memobranch#readme",
   "author": "sens-io",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "keywords": [
     "agent-memory",
     "llm-wiki",
     "mcp",
     "git",
-    "knowledge-base"
+    "knowledge-base",
+    "deepseek-harness",
+    "cordis"
   ],
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2",
     "@modelcontextprotocol/server": "^2.0.0",
     "yaml": "^2.8.1",
     "zod": "^4.1.5"
   },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
     "@modelcontextprotocol/client": "^2.0.0",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",

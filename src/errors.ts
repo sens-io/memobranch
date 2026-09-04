@@ -9,6 +9,7 @@ export const errorCodes = [
   'GIT_OPERATION_FAILED',
   'LOCK_TIMEOUT',
   'NOT_FOUND',
+  'OPERATION_CANCELLED',
   'REMOTE_CONFLICT',
   'REMOTE_INVALID',
   'REMOTE_TRANSPORT',
@@ -61,5 +62,6 @@ function defaultExitCode(code: ErrorCode): number {
   if (code.startsWith('REMOTE_')) return 6;
   if (code.startsWith('ENCRYPTION_')) return 7;
   if (code === 'DEPENDENCY_UNAVAILABLE') return 8;
+  if (code === 'OPERATION_CANCELLED') return 130;
   return 2;
 }
