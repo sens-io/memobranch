@@ -73,6 +73,8 @@ export interface EvidenceMeta {
   scope: Scope;
   sensitivity: Sensitivity;
   sha256: string;
+  digestVersion?: 2;
+  legacySha256?: string;
   immutable: true;
 }
 

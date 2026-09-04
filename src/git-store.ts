@@ -8,7 +8,7 @@ import type { Actor } from './types.js';
 import { nowIso, writeText } from './utils.js';
 
 const execFileAsync = promisify(execFile);
-const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md'];
+const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md', '.gitignore'];
 
 export interface GitIntegrity {
   healthy: boolean;
@@ -139,6 +139,7 @@ export class GitStore {
     const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
     const syncStatePath = join(this.root, '.amem', 'sync-state.json');
     const originalSyncState = existsSync(syncStatePath) ? await readFile(syncStatePath, 'utf8') : null;
+    let pushed = false;
     try {
       const before = await this.remoteStatus(name, branch, true);
       if (!before.configured) throw new AgentMemoryError('REMOTE_INVALID', `Remote ${name} is not configured`);
@@ -162,7 +163,6 @@ export class GitStore {
         await options.reconcile?.();
       }
       await options.validate?.();
-      let pushed = false;
       if (options.push) {
         await this.run(['push', name, `HEAD:${branch}`], options.actor ? { actor: options.actor } : {});
         pushed = true;
@@ -172,7 +172,10 @@ export class GitStore {
       await writeText(syncStatePath, `${JSON.stringify({ lastSuccessfulSync }, null, 2)}\n`);
       return { ...status, lastSuccessfulSync, pushed, merged };
     } catch (error) {
-      await this.restoreSyncSnapshot(originalHead, syncStatePath, originalSyncState);
+      // A successful push is externally committed and cannot be rolled back here.
+      // Keep the matching local revision so a retry is idempotent and does not
+      // manufacture a local/remote divergence.
+      if (!pushed) await this.restoreSyncSnapshot(originalHead, syncStatePath, originalSyncState);
       if (error instanceof AgentMemoryError) throw error;
       throw new AgentMemoryError('REMOTE_CONFLICT', 'Local synchronized state failed vault validation', {
         cause: error instanceof Error ? redactSecrets(error.message) : String(error),

@@ -37,11 +37,18 @@ The system MUST use the installed Git credential and SSH mechanisms and MUST NOT
 - **THEN** synchronization returns a redacted typed transport error and leaves local history and managed files unchanged
 
 ### Requirement: Synchronization failure restores local state
-After beginning remote integration, failure during reconcile, validation, final status, or push MUST restore the pre-sync local revision and managed working state.
 
-#### Scenario: Remote fast-forward contains invalid managed state
-- **WHEN** post-integration validation fails
-- **THEN** synchronization returns a typed conflict and local HEAD and managed files match the pre-sync snapshot
+Before a push succeeds, failure during integration, reconciliation, validation, status, or transport MUST restore the pre-sync local revision and managed state. After a push succeeds, later status or local-bookkeeping failure MUST retain the matching pushed local revision because the external state cannot be rolled back safely.
+
+#### Scenario: Final status fails after a successful push
+
+- **WHEN** the remote accepts the local revision and the subsequent status refresh fails
+- **THEN** synchronization returns a typed error while local HEAD and remote branch both remain at the pushed revision
+
+#### Scenario: Push itself fails
+
+- **WHEN** the remote does not accept the push
+- **THEN** synchronization restores the pre-sync local revision, managed files, and synchronization state
 
 ### Requirement: Remote configuration is atomic
 Git remote configuration and tracked vault configuration MUST change as one compensatable operation under the writer lock.

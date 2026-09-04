@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
   <a href="https://github.com/sens-io/memobranch/actions/workflows/ci.yml"><img src="https://github.com/sens-io/memobranch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-46%20passed-22C55E?style=flat-square" alt="46 tests passed">
+  <img src="https://img.shields.io/badge/tests-59%20passed-22C55E?style=flat-square" alt="59 tests passed">
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
   <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
@@ -75,13 +75,13 @@ flowchart LR
 | 📚 | **Git-native Wiki** | Markdown 是权威数据；每次逻辑变更都有身份归因的 Git 提交 |
 | 🧾 | **证据驱动记忆** | `evidence → candidates → wiki`，保留来源、置信度、条件与修订链 |
 | 🛡️ | **服务端访问控制** | 按 permission、scope、sensitivity、tenant 在读取内容前授权 |
-| 🔐 | **机密信封加密** | `sensitive` / `secret` 使用每记录 DEK + AES-256-GCM，并支持密码学擦除 |
+| 🔐 | **策略化信封加密** | 策略指定的任意敏感级别使用每记录 DEK + AES-256-GCM，并支持密码学擦除 |
 | 🔎 | **混合检索** | CJK/英文词法检索、可选 embeddings、Wiki 链接扩展与增量索引 |
 | 🔄 | **远端 Git 同步** | ahead/behind/diverged 状态、快进、常规合并、冲突中止和受控推送 |
 | 🧯 | **崩溃恢复** | 多文件写入先 journal，再原子替换；启动后自动回滚或重放 |
 | 🔌 | **CLI + MCP** | 稳定 JSON、类型化错误、有限输入、最小权限工具契约 |
 | 📈 | **生产可观测性** | 单实例维护服务、`/healthz`、Prometheus `/metrics`、脱敏审计 |
-| 🧩 | **OpenSpec 驱动** | 6 个正式规格、25 条规范要求、27/27 实现任务均已归档 |
+| 🧩 | **OpenSpec 驱动** | proposal、规格、设计、任务、验证证据与归档完整留痕 |
 
 > [!NOTE]
 > 当前定位是“一租户一个 vault”的本地服务。它不包含浏览器编辑器、托管控制面、多租户数据库、分布式写入共识或自动语义冲突裁决。
@@ -175,6 +175,7 @@ flowchart TB
 vault/
 ├── agent-memory.json       # v2 配置
 ├── AGENTS.md               # Agent 使用约束
+├── .gitignore              # 防止外层 Git 误收 .amem 运行态
 ├── evidence/               # 不可变原始证据
 ├── candidates/             # 待审核候选
 ├── wiki/                   # 正式记忆
@@ -197,6 +198,7 @@ vault/
 - `candidates/` 保存提炼后的待审核知识；冲突和低置信内容不会自动进入正式记忆。
 - `wiki/` 只保存审核后的正式记忆，是检索和上下文生成的权威来源。
 - `procedure` 默认至少需要两份证据。
+- 所有证据引用、晋升/取代关系和托管文档 ID 都会做跨文件完整性检查。
 - 同一 `scope + kind + key` 的不同内容会形成显式冲突。
 - 普通检索不会返回 `conflicted` 记录；拒绝最后一个冲突候选会恢复原正式记忆。
 - LLM 提炼结果继承 evidence 的 scope，且敏感级别只能提高、不能降低。
@@ -228,13 +230,13 @@ amem reindex --semantic --root ~/my-agent-memory --json
 amem search "回答偏好" --semantic --root ~/my-agent-memory --json
 ```
 
-向量服务不可用时，请求仍会返回词法和图关系结果，并报告 `semanticStatus: "degraded"`。只有非机密正式 Wiki 页面会发送到 embedding API。
+向量服务不可用时，请求仍会返回词法和图关系结果，并报告 `semanticStatus: "degraded"`。任何加密文档都不会发送到 embedding API，即使之后调整了加密策略。
 
 ## 🔐 安全与机密记忆
 
 ### 信封加密
 
-首次读写 `sensitive` 或 `secret` 记录前，提供一个 32 字节 master key：
+首次读写策略要求加密的记录前，提供一个 32 字节 master key；默认策略覆盖 `sensitive` 与 `secret`，也可以扩展到 `internal` 或 `public`：
 
 ```bash
 export AMEM_MASTER_KEY="$(openssl rand -hex 32)"
@@ -253,11 +255,12 @@ amem capture "仅授权 Agent 可见的机密内容" \
 密钥恢复注意事项：
 
 - `.amem/keys.json` 保存由 master key 包装的数据密钥，不会通过 Git 同步。
+- 初始化与后续迁移会在 vault 的 `.gitignore` 中维护 `.amem/`，避免被外层 Git 仓库误收。
 - 跨主机读取机密记忆时，需要单独、安全地迁移 master key 与 `.amem/keys.json`。
 - 丢失任意一项都会使对应历史密文不可恢复。
 - `erase` 只能保证本 vault 不再具备解密能力，不能删除外部备份、已导出明文或第三方副本。
 - `erase` 的理由会规范化后保存 SHA-256 承诺值，Git 中不会出现理由明文；旧版无理由摘要的恢复记录会如实标记为未记录。
-- 机密记录不会进入 `MEMORY.md`、`INDEX.md`、持久化索引、向量 API、审计正文或指标标签。
+- 策略加密记录不会进入 `MEMORY.md`、`INDEX.md`、持久化索引、向量 API、审计正文或指标标签；恢复日志也按同一策略加密。
 - 证据 ID 同时绑定 scope、sensitivity、来源 URI 与正文；远端只能追加证据，不能改写或删除既有证据。
 
 ### 权限模型
@@ -329,9 +332,9 @@ amem remote status --root ~/my-agent-memory --json
 amem remote sync --root ~/my-agent-memory --push --json
 ```
 
-同步顺序：恢复未完成事务 → 检查工作树 → fetch → 计算 ahead/behind → 快进或常规 merge → 证据只追加校验 → 重建派生状态 → 机密编码与健康校验 → 可选 push。
+同步顺序：恢复未完成事务 → 检查工作树 → fetch → 计算 ahead/behind → 快进或常规 merge → 证据只追加校验 → 重建派生状态 → 模式、引用、符号链接、机密编码与健康校验 → 可选 push。
 
-发生内容冲突、后置校验失败或 push 失败时，系统会保留错误信息并恢复同步前的本地 HEAD、受管工作树和同步状态，不会自动强推。
+在 push 成功前发生内容冲突、后置校验或传输失败时，系统会恢复同步前的本地 HEAD、受管工作树和同步状态，不会自动强推。如果远端已成功接受 push、但最后的状态刷新失败，本地会保留与远端一致的已推送提交，使重试保持幂等。
 
 ## 🩺 生产运维
 
@@ -357,6 +360,7 @@ curl http://127.0.0.1:9464/metrics
 
 - HTTP 服务只接受回环地址。
 - `.amem/service.json` 维护单实例租约，存活进程不会被抢占。
+- 租约包含实例所有权令牌；只有持有者能更新或释放，启动末端失败会清理监听器、端口与自有租约。
 - 受管目录变更会防抖后触发增量索引；原生文件监听不可用时自动降级为有界轮询。
 - `SIGTERM` / `SIGINT` 会等待正在执行的事务安全结束。
 - 最近一次 `doctor` 不健康或维护周期失败时，`/healthz` 返回 HTTP 503 和 `status: "unavailable"`。
@@ -428,7 +432,7 @@ Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.a
 amem config migrate --root ~/my-agent-memory --json
 ```
 
-迁移会先创建 `agent-memory.json.v1.bak`，再加入租户、权限、索引、远端、维护和限制配置。已有机密明文只有在显式迁移且提供 `AMEM_MASTER_KEY` 时才会被重写为加密信封。
+迁移会先创建 `agent-memory.json.v1.bak`，再加入租户、权限、索引、远端、维护和限制配置。旧版 evidence 摘要会升级且保留原 ID、路径与引用；扩大 `policy.requireEncryptionFor` 后，已有明文只有在显式迁移且提供 `AMEM_MASTER_KEY` 时才会被重写为加密信封。
 
 遇到未来版本配置时，`doctor` 仍可提供只读诊断，但所有写入都会以 `CONFIG_VERSION_UNSUPPORTED` 失败关闭。
 
@@ -444,19 +448,19 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 | Gate | 当前状态 |
 | --- | :---: |
 | TypeScript build | ✅ PASS |
-| CLI / MCP / Vault tests | ✅ 46 / 46 |
+| CLI / MCP / Vault tests | ✅ 59 / 59 |
 | 1,000 文档索引性能门禁 | ✅ PASS |
 | npm package dry-run | ✅ PASS |
 | 依赖漏洞审计 | ✅ 0 known vulnerabilities |
 | OpenSpec strict validation | ✅ 6 / 6 specs |
 
-测试覆盖租户缺失拒绝、机密明文同步回滚、证据敏感度降级与远端不可变性、机密 Git 元数据、删除理由承诺、多进程锁竞争、跨进程缓存失效、事务回滚/重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
+测试覆盖租户隔离、策略化加密与迁移、恢复日志和 embedding 隔离、密码学擦除、权威索引复核、完整模式与跨文档引用、符号链接拒绝、证据不可变性、推送前后失败窗口、并发锁/租约/指标、事务回滚与重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
 
-规格与归档记录位于 [`openspec/`](./openspec)；生产审计见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)，本轮独立复审与验证证据见 [`independent-audit-remediation`](./openspec/changes/archive/2026-09-03-independent-audit-remediation)。
+规格与归档记录位于 [`openspec/`](./openspec)；生产审计见 [`production-audit-remediation`](./openspec/changes/archive/2026-09-03-production-audit-remediation)、[`independent-audit-remediation`](./openspec/changes/archive/2026-09-03-independent-audit-remediation)，最终生产收口见 [`close-final-production-gaps`](./openspec/changes/archive/2026-09-04-close-final-production-gaps)。
 
 ## 🧱 威胁模型与边界
 
-**本实现防护：** MCP 调用者伪造身份、越权 scope/sensitivity 访问、机密明文进入 Git/索引/日志/指标、部分写入、重复执行、远端 URL 凭据落盘、常见同步冲突和模型服务不可用。
+**本实现防护：** MCP 调用者伪造身份、越权 scope/sensitivity 访问、机密明文进入 Git/索引/日志/指标/恢复日志、外层 Git 误收运行态、托管路径符号链接、部分写入、重复执行、远端 URL 凭据落盘、常见同步冲突和模型服务不可用。
 
 **本实现不防护：** 已完全控制本机或进程内存的攻击者、恶意本机管理员、已导出明文、操作系统或备份泄漏、Git/LLM 供应链失陷、流量分析，以及第三方已经持有副本的删除。
 

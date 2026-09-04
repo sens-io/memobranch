@@ -67,12 +67,12 @@ export async function withFileLock<T>(lockPath: string, action: () => Promise<T>
   await mkdir(dirname(lockPath), { recursive: true });
   const deadline = Date.now() + Math.max(1, timeoutMs);
   const ownerToken = randomUUID();
+  const ticket = process.hrtime.bigint().toString();
   const queuePath = `${lockPath}.queue`;
-  const contenderPath = join(queuePath, `${ownerToken}.json`);
+  const contenderPath = join(queuePath, `${ticket.padStart(24, '0')}-${ownerToken}.json`);
   await mkdir(queuePath, { recursive: true });
   const contenderHandle = await open(contenderPath, 'wx');
   try {
-    const ticket = process.hrtime.bigint().toString();
     await contenderHandle.writeFile(`${JSON.stringify({ version: 1, pid: process.pid, ownerToken, ticket, createdAt: nowIso() })}\n`, 'utf8');
   } finally {
     await contenderHandle.close();
@@ -99,33 +99,29 @@ export async function withFileLock<T>(lockPath: string, action: () => Promise<T>
         }
       }
       if (Date.now() >= deadline) throw new AgentMemoryError('LOCK_TIMEOUT', `Timed out waiting for vault lock: ${lockPath}`);
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
   } finally {
     await rm(contenderPath, { force: true });
   }
 }
 
-interface LockContender {
-  ownerToken: string;
-  pid: number;
-  ticket: bigint;
-}
-
 async function firstLiveContender(queuePath: string): Promise<string | null> {
-  const contenders: LockContender[] = [];
   for (const name of (await readdir(queuePath)).filter((entry) => entry.endsWith('.json')).sort()) {
     const path = join(queuePath, name);
+    const separator = name.indexOf('-');
+    const expectedOwner = separator >= 0 ? name.slice(separator + 1, -'.json'.length) : name.slice(0, -'.json'.length);
     try {
       const value = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown; ownerToken?: unknown; ticket?: unknown };
       if (!Number.isInteger(value.pid) || Number(value.pid) <= 0 || typeof value.ownerToken !== 'string' || !value.ownerToken || typeof value.ticket !== 'string' || !/^\d+$/.test(value.ticket)) {
         throw new Error('Malformed lock contender');
       }
+      if (value.ownerToken !== expectedOwner) throw new Error('Lock contender owner does not match its path');
       if (processIsDead(Number(value.pid))) {
         await rm(path, { force: true });
         continue;
       }
-      contenders.push({ ownerToken: value.ownerToken, pid: Number(value.pid), ticket: BigInt(value.ticket) });
+      return value.ownerToken;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       try {
@@ -138,11 +134,10 @@ async function firstLiveContender(queuePath: string): Promise<string | null> {
       }
       // A newly created contender is visible before its owner finishes writing.
       // Treat it as the earliest ticket so nobody can pass an incomplete peer.
-      contenders.push({ ownerToken: name, pid: 0, ticket: 0n });
+      return expectedOwner;
     }
   }
-  contenders.sort((left, right) => left.ticket < right.ticket ? -1 : left.ticket > right.ticket ? 1 : left.ownerToken.localeCompare(right.ownerToken));
-  return contenders[0]?.ownerToken ?? null;
+  return null;
 }
 
 async function clearObservedStaleLock(lockPath: string): Promise<boolean> {
