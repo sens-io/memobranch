@@ -3,7 +3,7 @@ import { readFile, stat, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactSecrets } from './errors.js';
 import type { Principal } from './policy.js';
-import { appendText, nowIso, writeText } from './utils.js';
+import { appendText, nowIso, withFileLock, writeText } from './utils.js';
 
 const MAX_AUDIT_BYTES = 10 * 1024 * 1024;
 const MAX_METRICS = 64;
@@ -27,14 +27,17 @@ export interface AuditEvent {
 export class OperationsTelemetry {
   readonly auditPath: string;
   readonly metricsPath: string;
+  private readonly auditLockPath: string;
+  private readonly metricsLockPath: string;
 
   constructor(readonly root: string) {
     this.auditPath = join(root, '.amem', 'audit.jsonl');
     this.metricsPath = join(root, '.amem', 'metrics.json');
+    this.auditLockPath = join(root, '.amem', 'audit.lock');
+    this.metricsLockPath = join(root, '.amem', 'metrics.lock');
   }
 
   async record(event: AuditEvent): Promise<void> {
-    await this.rotateAuditIfNeeded();
     const safe: AuditEvent & { timestamp: string } = {
       timestamp: nowIso(),
       operation: clean(event.operation, 64),
@@ -45,37 +48,45 @@ export class OperationsTelemetry {
       ...(event.errorCode ? { errorCode: clean(event.errorCode, 64) } : {}),
       ...(event.durationMs === undefined ? {} : { durationMs: Math.max(0, Math.round(event.durationMs)) }),
     };
-    await appendText(this.auditPath, `${JSON.stringify(safe)}\n`);
+    await withFileLock(this.auditLockPath, async () => {
+      await this.rotateAuditIfNeeded();
+      await appendText(this.auditPath, `${JSON.stringify(safe)}\n`);
+    }, 30_000);
     await this.increment(`operations_${event.operation}_${event.outcome}`);
   }
 
   async operation<T>(operation: string, principal: Principal, action: () => Promise<T>, resourceIds?: string[]): Promise<T> {
     const started = Date.now();
+    let result: T;
     try {
-      const result = await action();
-      await this.record({ operation, outcome: 'success', principalId: principal.id, ...(principal.tenantId ? { tenantId: principal.tenantId } : {}), ...(resourceIds ? { resourceIds } : {}), durationMs: Date.now() - started });
-      return result;
+      result = await action();
     } catch (error) {
       const code = typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : 'INTERNAL_ERROR';
-      await this.record({ operation, outcome: code === 'AUTHORIZATION_DENIED' ? 'denied' : 'error', principalId: principal.id, ...(principal.tenantId ? { tenantId: principal.tenantId } : {}), ...(resourceIds ? { resourceIds } : {}), errorCode: code, durationMs: Date.now() - started });
+      await this.recordSafely({ operation, outcome: code === 'AUTHORIZATION_DENIED' ? 'denied' : 'error', principalId: principal.id, ...(principal.tenantId ? { tenantId: principal.tenantId } : {}), ...(resourceIds ? { resourceIds } : {}), errorCode: code, durationMs: Date.now() - started });
       throw error;
     }
+    await this.recordSafely({ operation, outcome: 'success', principalId: principal.id, ...(principal.tenantId ? { tenantId: principal.tenantId } : {}), ...(resourceIds ? { resourceIds } : {}), durationMs: Date.now() - started });
+    return result;
   }
 
   async increment(name: string, amount = 1): Promise<void> {
-    const state = await this.readMetrics();
-    const key = metricName(name);
-    if (!(key in state.counters) && Object.keys(state.counters).length >= MAX_METRICS) return;
-    state.counters[key] = (state.counters[key] ?? 0) + amount;
-    await writeText(this.metricsPath, `${JSON.stringify(state, null, 2)}\n`);
+    await withFileLock(this.metricsLockPath, async () => {
+      const state = await this.readMetrics();
+      const key = metricName(name);
+      if (!(key in state.counters) && Object.keys(state.counters).length >= MAX_METRICS) return;
+      state.counters[key] = (state.counters[key] ?? 0) + amount;
+      await writeText(this.metricsPath, `${JSON.stringify(state, null, 2)}\n`);
+    }, 30_000);
   }
 
   async gauge(name: string, value: number): Promise<void> {
-    const state = await this.readMetrics();
-    const key = metricName(name);
-    if (!(key in state.gauges) && Object.keys(state.gauges).length >= MAX_METRICS) return;
-    state.gauges[key] = Number.isFinite(value) ? value : 0;
-    await writeText(this.metricsPath, `${JSON.stringify(state, null, 2)}\n`);
+    await withFileLock(this.metricsLockPath, async () => {
+      const state = await this.readMetrics();
+      const key = metricName(name);
+      if (!(key in state.gauges) && Object.keys(state.gauges).length >= MAX_METRICS) return;
+      state.gauges[key] = Number.isFinite(value) ? value : 0;
+      await writeText(this.metricsPath, `${JSON.stringify(state, null, 2)}\n`);
+    }, 30_000);
   }
 
   async prometheus(): Promise<string> {
@@ -95,6 +106,14 @@ export class OperationsTelemetry {
       return value;
     } catch {
       return { version: 1, counters: {}, gauges: {} };
+    }
+  }
+
+  private async recordSafely(event: AuditEvent): Promise<void> {
+    try {
+      await this.record(event);
+    } catch {
+      // Observability failures must not turn an already committed operation into a reported failure.
     }
   }
 

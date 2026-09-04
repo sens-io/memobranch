@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
+import { OperationsTelemetry } from '../src/audit.js';
+import { evidenceDigest, legacyEvidenceDigest } from '../src/evidence.js';
 import { LlmClient } from '../src/llm.js';
 import { MaintenanceService } from '../src/maintenance.js';
 import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
@@ -238,6 +240,186 @@ test('a long-lived search cache observes revocation completed by another process
   const secondProcess = new MemoryVault(longLived.root);
   await secondProcess.forget(warmed[0]!.id, 'revoked by another process');
   assert.equal((await longLived.search('CROSS_PROCESS_REVOCATION_77C1')).length, 0);
+});
+
+test('cached search fails closed after canonical clearance changes or a post-commit refresh failure', async () => {
+  const admin = await freshVault();
+  await admin.propose({
+    kind: 'fact', key: 'stale authorization policy', statement: 'STALE_AUTHORIZATION_CANARY_7341', scope: 'public',
+    sensitivity: 'public', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await admin.consolidate();
+  const config = await admin.config();
+  const reader = new MemoryVault(admin.root, {
+    principal: principal(config.tenantId, { scopes: ['public'], maxSensitivity: 'public' }),
+  });
+  const initial = await reader.search('STALE_AUTHORIZATION_CANARY_7341');
+  assert.equal(initial.length, 1);
+  const path = join(admin.root, initial[0]!.path);
+  const canonical = parseMarkdown<Record<string, unknown>>(await readFile(path, 'utf8'));
+  canonical.meta.sensitivity = 'internal';
+  await writeFile(path, serializeMarkdown(canonical.meta, canonical.body));
+  await admin.git.commit('manual: raise canonical sensitivity', { id: 'operator', name: 'Operator' }, ['wiki']);
+  assert.equal((await reader.search('STALE_AUTHORIZATION_CANARY_7341')).length, 0);
+
+  const revocation = await admin.propose({
+    kind: 'fact', key: 'revocation policy', statement: 'REVOKED_INDEX_CANARY_6207', scope: 'public',
+    sensitivity: 'public', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await admin.consolidate();
+  const warmed = await admin.search('REVOKED_INDEX_CANARY_6207');
+  assert.equal(warmed.length, 1);
+  const originalReindex = admin.reindex.bind(admin);
+  admin.reindex = async () => { throw new Error('simulated durable index write failure'); };
+  const forgotten = await admin.forget(warmed[0]!.id, 'third-party revocation regression');
+  admin.reindex = originalReindex;
+  assert.ok(forgotten.commit);
+  assert.equal((await admin.search('REVOKED_INDEX_CANARY_6207')).length, 0);
+  assert.ok(revocation.id);
+});
+
+test('effective encryption policy protects every configured sensitivity', async () => {
+  const vault = await freshVault({ masterKey });
+  const configPath = join(vault.root, 'agent-memory.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8')) as { policy: { requireEncryptionFor: string[] } };
+  config.policy.requireEncryptionFor = ['internal', 'sensitive', 'secret'];
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const captured = await vault.capture({ content: 'INTERNAL_ENCRYPTION_CANARY_2984', scope: 'project', sensitivity: 'internal' });
+  const evidenceRaw = await readFile(join(vault.root, captured.evidencePath), 'utf8');
+  assert.doesNotMatch(evidenceRaw, /INTERNAL_ENCRYPTION_CANARY_2984/);
+  assert.equal(parseMarkdown<Record<string, unknown>>(evidenceRaw).meta.encrypted, 'aes-256-gcm');
+  const candidate = await vault.propose({
+    kind: 'fact', key: 'internal encrypted key', statement: 'INTERNAL_MEMORY_CANARY_2984', scope: 'project',
+    sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [],
+  });
+  await vault.consolidate();
+  const memory = (await vault.search('INTERNAL_MEMORY_CANARY_2984'))[0]!;
+  const memoryRaw = await readFile(join(vault.root, memory.path), 'utf8');
+  assert.doesNotMatch(memoryRaw, /INTERNAL_MEMORY_CANARY_2984|internal encrypted key/i);
+  assert.match(memory.path, /\/mem-[a-f0-9]{12}\.md$/);
+  assert.doesNotMatch(await readFile(join(vault.root, 'MEMORY.md'), 'utf8'), /INTERNAL_MEMORY_CANARY_2984/);
+  assert.doesNotMatch(await readFile(join(vault.root, 'INDEX.md'), 'utf8'), /INTERNAL_MEMORY_CANARY_2984|internal encrypted key/i);
+  assert.ok(candidate.id);
+
+  const noKey = await freshVault();
+  const noKeyConfigPath = join(noKey.root, 'agent-memory.json');
+  const noKeyConfig = JSON.parse(await readFile(noKeyConfigPath, 'utf8')) as { policy: { requireEncryptionFor: string[] } };
+  noKeyConfig.policy.requireEncryptionFor = ['internal', 'sensitive', 'secret'];
+  await writeFile(noKeyConfigPath, `${JSON.stringify(noKeyConfig, null, 2)}\n`);
+  await assert.rejects(
+    noKey.capture({ content: 'must not persist', scope: 'project', sensitivity: 'internal' }),
+    (error: unknown) => error instanceof AgentMemoryError && error.code === 'ENCRYPTION_KEY_UNAVAILABLE',
+  );
+});
+
+test('complete managed schemas reject malformed canonical memories', async () => {
+  const vault = await freshVault();
+  const directory = join(vault.root, 'wiki', 'public', 'fact');
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'injected.md'), serializeMarkdown(
+    { id: 'mem-injected', type: 'memory', key: 'injected', kind: 'fact', scope: 'public', sensitivity: 'public', status: 'active' },
+    '# Injected\n\nINVALID_SCHEMA_CANARY_1138',
+  ));
+  await writeFile(join(vault.root, 'candidates', 'injected.md'), serializeMarkdown(
+    { id: 'cand-injected', type: 'memory-candidate', key: 'injected', kind: 'fact', scope: 'public', sensitivity: 'public', status: 'pending' },
+    '# Candidate\n\nMissing required candidate fields.',
+  ));
+  await writeFile(join(directory, 'erased.md'), serializeMarkdown(
+    { id: 'mem-erased', type: 'memory-erased', scope: 'public', sensitivity: 'internal', status: 'revoked', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), erasedAt: new Date().toISOString(), reasonRecorded: true },
+    '# Erased memory\n\nMissing the required reason commitment.',
+  ));
+  await vault.git.commit('remote-like: inject malformed documents', { id: 'remote', name: 'Remote' }, ['candidates', 'wiki']);
+  await vault.reindex(false);
+  const report = await vault.doctor();
+  assert.equal(report.healthy, false);
+  assert.match(report.documents?.errors.join('\n') ?? '', /Invalid managed document schema/);
+  assert.equal(report.documents?.errors.length, 3);
+  await assert.rejects(
+    (vault as unknown as { validateManagedState(): Promise<void> }).validateManagedState(),
+    (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_CONFLICT',
+  );
+  assert.equal((await vault.search('INVALID_SCHEMA_CANARY_1138')).length, 0);
+});
+
+test('explicit migration upgrades legacy evidence without changing its identity or path', async () => {
+  const vault = await freshVault();
+  const content = 'LEGACY_EVIDENCE_CANARY_8852';
+  const scope = 'project';
+  const sensitivity = 'internal';
+  const sourceUri = '';
+  const legacySha256 = legacyEvidenceDigest(scope, sourceUri, content);
+  const id = `ev-${legacySha256.slice(0, 12)}`;
+  const path = `evidence/2026/01/01/legacy-${id}.md`;
+  await mkdir(join(vault.root, 'evidence', '2026', '01', '01'), { recursive: true });
+  await writeFile(join(vault.root, path), serializeMarkdown({
+    id, type: 'evidence', createdAt: new Date().toISOString(), actor: 'old-version', scope,
+    sensitivity, sha256: legacySha256, immutable: true,
+  }, `# Evidence ${id}\n\n${content}`));
+  await vault.git.commit('old-version: capture evidence', { id: 'old-version', name: 'Old version' }, ['evidence']);
+  assert.equal((await vault.doctor()).healthy, false);
+
+  const migrated = await vault.migrate();
+  assert.equal(migrated.evidenceDigests, 1);
+  assert.ok(migrated.commit);
+  const document = parseMarkdown<Record<string, unknown>>(await readFile(join(vault.root, path), 'utf8'));
+  assert.equal(document.meta.id, id);
+  assert.equal(document.meta.digestVersion, 2);
+  assert.equal(document.meta.legacySha256, legacySha256);
+  assert.equal(document.meta.sha256, evidenceDigest(scope, sensitivity, sourceUri, content));
+  assert.equal((await vault.get(id)).path, path);
+  assert.equal((await vault.doctor()).healthy, true);
+});
+
+test('only the maintenance lease owner can release a live lease', async () => {
+  const vault = await freshVault();
+  const owner = new MaintenanceService(vault);
+  const handle = await owner.start({ port: 0 });
+  try {
+    const leasePath = join(vault.root, '.amem', 'service.json');
+    const before = await readFile(leasePath, 'utf8');
+    const unrelated = new MaintenanceService(new MemoryVault(vault.root));
+    await unrelated.stop();
+    assert.equal(await readFile(leasePath, 'utf8'), before);
+    const duplicate = new MaintenanceService(new MemoryVault(vault.root));
+    await assert.rejects(
+      duplicate.start({ port: 0 }),
+      (error: unknown) => error instanceof AgentMemoryError && error.code === 'LOCK_TIMEOUT',
+    );
+  } finally {
+    await handle.stop();
+  }
+
+  const racers = [
+    new MaintenanceService(new MemoryVault(vault.root)),
+    new MaintenanceService(new MemoryVault(vault.root)),
+  ];
+  const starts = await Promise.allSettled(racers.map((service) => service.start({ port: 0 })));
+  assert.equal(starts.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = starts.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  assert.ok(rejected?.reason instanceof AgentMemoryError && rejected.reason.code === 'LOCK_TIMEOUT');
+  for (const result of starts) if (result.status === 'fulfilled') await result.value.stop();
+});
+
+test('concurrent metrics and audit writes preserve every accepted update', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'memobranch-telemetry-audit-'));
+  roots.push(root);
+  const telemetry = new OperationsTelemetry(root);
+  await Promise.all(Array.from({ length: 100 }, () => telemetry.increment('concurrent')));
+  const metrics = JSON.parse(await readFile(join(root, '.amem', 'metrics.json'), 'utf8')) as { counters: Record<string, number> };
+  assert.equal(metrics.counters.concurrent, 100);
+
+  await Promise.all(Array.from({ length: 25 }, (_, index) => telemetry.record({
+    operation: 'parallel_audit', outcome: 'success', principalId: `worker-${index}`,
+  })));
+  const events = (await readFile(join(root, '.amem', 'audit.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(events.length, 25);
+  assert.equal(new Set(events.map((line) => JSON.parse(line).principalId)).size, 25);
+
+  const unavailableTelemetry = new OperationsTelemetry(root);
+  unavailableTelemetry.record = async () => { throw new Error('simulated telemetry outage'); };
+  assert.equal(await unavailableTelemetry.operation('committed_action', principal('tenant'), async () => 'committed'), 'committed');
+  const actionFailure = new Error('action failed');
+  await assert.rejects(unavailableTelemetry.operation('failed_action', principal('tenant'), async () => { throw actionFailure; }), actionFailure);
 });
 
 test('evidence hash changes make health fail and cannot be swept into another commit', async () => {

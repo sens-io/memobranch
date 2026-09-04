@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { open, readFile, readdir, rm, stat } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import type { MemoryVault } from './vault.js';
-import { nowIso, writeText } from './utils.js';
+import { nowIso, withFileLock, writeText } from './utils.js';
 
 export interface MaintenanceResult {
   startedAt: string;
@@ -36,9 +37,12 @@ export class MaintenanceService {
   private timer: NodeJS.Timeout | null = null;
   private debounce: NodeJS.Timeout | null = null;
   private readonly leasePath: string;
+  private readonly leaseLockPath: string;
+  private leaseOwnerToken: string | null = null;
 
   constructor(readonly vault: MemoryVault) {
     this.leasePath = join(vault.root, '.amem', 'service.json');
+    this.leaseLockPath = join(vault.root, '.amem', 'service.lock');
   }
 
   async runOnce(): Promise<MaintenanceResult> {
@@ -68,7 +72,7 @@ export class MaintenanceService {
     try {
       this.watchers = await createManagedWatchers(this.vault.root, schedule);
     } catch (error) {
-      await rm(this.leasePath, { force: true });
+      await this.releaseLease();
       throw error;
     }
     this.timer = setInterval(() => { void this.runOnce().catch(() => undefined); }, config.maintenance.intervalMs);
@@ -111,7 +115,7 @@ export class MaintenanceService {
     }
     const address = this.server.address();
     const port = typeof address === 'object' && address ? address.port : (options.port ?? 0);
-    await writeText(this.leasePath, `${JSON.stringify({ pid: process.pid, startedAt: nowIso(), host, port }, null, 2)}\n`);
+    await this.updateLease({ host, port });
     return { host, port, stop: () => this.stop() };
   }
 
@@ -134,7 +138,7 @@ export class MaintenanceService {
         }),
       ]);
     }
-    await rm(this.leasePath, { force: true });
+    await this.releaseLease();
   }
 
   private async performCycle(): Promise<MaintenanceResult> {
@@ -151,18 +155,65 @@ export class MaintenanceService {
   }
 
   private async acquireLease(): Promise<void> {
-    if (existsSync(this.leasePath)) {
-      try {
-        const lease = JSON.parse(await readFile(this.leasePath, 'utf8')) as { pid?: number };
-        if (lease.pid && isLive(lease.pid)) throw new AgentMemoryError('LOCK_TIMEOUT', `Maintenance service is already running with pid ${lease.pid}`);
-      } catch (error) {
-        if (error instanceof AgentMemoryError) throw error;
+    const ownerToken = randomUUID();
+    await withFileLock(this.leaseLockPath, async () => {
+      if (existsSync(this.leasePath)) {
+        try {
+          const lease = JSON.parse(await readFile(this.leasePath, 'utf8')) as { pid?: number };
+          if (lease.pid && isLive(lease.pid)) throw new AgentMemoryError('LOCK_TIMEOUT', `Maintenance service is already running with pid ${lease.pid}`);
+        } catch (error) {
+          if (error instanceof AgentMemoryError) throw error;
+        }
+        await rm(this.leasePath, { force: true });
       }
-      await rm(this.leasePath, { force: true });
+      let handle;
+      try {
+        handle = await open(this.leasePath, 'wx');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new AgentMemoryError('LOCK_TIMEOUT', 'Maintenance service lease was acquired concurrently');
+        throw error;
+      }
+      try {
+        await handle.writeFile(`${JSON.stringify({ pid: process.pid, ownerToken, startedAt: nowIso() }, null, 2)}\n`);
+      } finally {
+        await handle.close();
+      }
+      this.leaseOwnerToken = ownerToken;
+    });
+  }
+
+  private async updateLease(state: { host: string; port: number }): Promise<void> {
+    const ownerToken = this.leaseOwnerToken;
+    if (!ownerToken) throw new AgentMemoryError('LOCK_TIMEOUT', 'Maintenance service does not own a lease');
+    await withFileLock(this.leaseLockPath, async () => {
+      const lease = await this.readLease();
+      if (lease.ownerToken !== ownerToken) throw new AgentMemoryError('LOCK_TIMEOUT', 'Maintenance service lease ownership changed');
+      await writeText(this.leasePath, `${JSON.stringify({ ...lease, ...state, pid: process.pid, ownerToken }, null, 2)}\n`);
+    });
+  }
+
+  private async releaseLease(): Promise<void> {
+    const ownerToken = this.leaseOwnerToken;
+    if (!ownerToken) return;
+    let released = false;
+    try {
+      await withFileLock(this.leaseLockPath, async () => {
+        try {
+          const lease = await this.readLease();
+          if (lease.ownerToken === ownerToken) await rm(this.leasePath, { force: true });
+          released = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          released = true;
+        }
+      });
+    } finally {
+      if (released) this.leaseOwnerToken = null;
     }
-    const handle = await open(this.leasePath, 'wx');
-    await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: nowIso() }, null, 2)}\n`);
-    await handle.close();
+  }
+
+  private async readLease(): Promise<{ pid?: number; ownerToken?: string; startedAt?: string; host?: string; port?: number }> {
+    return JSON.parse(await readFile(this.leasePath, 'utf8')) as { pid?: number; ownerToken?: string; startedAt?: string; host?: string; port?: number };
   }
 }
 
