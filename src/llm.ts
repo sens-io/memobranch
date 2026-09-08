@@ -2,6 +2,7 @@ import type { MemoryKind, ProposedMemory, Scope, Sensitivity } from './types.js'
 import { memoryKinds, sensitivities } from './types.js';
 import { AgentMemoryError } from './errors.js';
 import { sensitivityRank } from './policy.js';
+import { cancellationError, operationSignal, throwIfCancelled } from './operation.js';
 
 interface LlmOptions {
   baseUrl?: string;
@@ -127,8 +128,11 @@ export class LlmClient {
   }
 
   private async requestJson(path: string, payload: object): Promise<unknown> {
+    const callerSignal = operationSignal();
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      throwIfCancelled();
       const controller = new AbortController();
+      const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
       const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
       timer.unref();
       this.pending.add(controller);
@@ -137,14 +141,19 @@ export class LlmClient {
           method: 'POST',
           headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
-          signal: controller.signal,
+          signal,
         });
+        throwIfCancelled();
         if (!response.ok) {
+          await response.body?.cancel();
           if ((response.status === 429 || response.status >= 500) && attempt < this.maxRetries) continue;
           throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request failed with HTTP ${response.status}`);
         }
-        return await boundedJson(response, this.maxResponseBytes);
+        const value = await boundedJson(response, this.maxResponseBytes);
+        throwIfCancelled();
+        return value;
       } catch (error) {
+        if (callerSignal?.aborted) throw cancellationError();
         if (error instanceof AgentMemoryError) throw error;
         if (attempt < this.maxRetries && !controller.signal.aborted) continue;
         const reason = controller.signal.aborted ? 'timed out or was cancelled' : 'failed';

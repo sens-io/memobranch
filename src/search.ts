@@ -6,6 +6,7 @@ import { assertManagedDocument } from './document-schema.js';
 import { isEncryptedEnvelope } from './encryption.js';
 import type { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
+import { throwIfCancelled } from './operation.js';
 import { assertTenant, canAccess, localAdminPrincipal, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
@@ -95,6 +96,7 @@ export class PersistentSearchIndex {
   }
 
   async refresh(options: { semantic?: boolean } = {}): Promise<ReindexResult> {
+    throwIfCancelled();
     let rebuilt = !(await this.indexIsValid());
     const files = await listMarkdown(join(this.root, 'wiki'));
     if (files.length > this.config.index.maxDocuments) {
@@ -110,6 +112,7 @@ export class PersistentSearchIndex {
     let updated = 0;
     let confidentialSkipped = 0;
     for (const file of files) {
+      throwIfCancelled();
       const relativePath = toPosix(relative(this.root, file));
       try {
         const source = await stat(file);
@@ -141,6 +144,7 @@ export class PersistentSearchIndex {
     const currentPaths = new Set(documents.map((document) => document.path));
     const removed = previous.documents.filter((document) => !currentPaths.has(document.path)).length;
     const index: StoredIndex = { version: INDEX_VERSION, updatedAt: new Date().toISOString(), documents };
+    throwIfCancelled();
     if (rebuilt || updated > 0 || removed > 0) await writeText(this.indexPath, `${JSON.stringify(index)}\n`);
     this.trustedIndex = index;
     this.trustedFileIdentity = await fileIdentity(this.indexPath);
@@ -151,6 +155,7 @@ export class PersistentSearchIndex {
         await this.refreshEmbeddings(documents);
         semanticStatus = 'ready';
       } catch {
+        throwIfCancelled();
         semanticStatus = 'degraded';
       }
     }
@@ -158,6 +163,7 @@ export class PersistentSearchIndex {
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult> {
+    throwIfCancelled();
     const principal = options.principal ?? localAdminPrincipal();
     assertTenant(principal, this.config.tenantId);
     let semanticStatus: SearchResult['semanticStatus'] = 'disabled';
@@ -180,6 +186,7 @@ export class PersistentSearchIndex {
         semantic = await this.semanticScores(query, documents, ephemeralPaths);
         semanticStatus = 'ready';
       } catch {
+        throwIfCancelled();
         semanticStatus = 'degraded';
       }
     }
@@ -214,6 +221,7 @@ export class PersistentSearchIndex {
     }
 
     const verified: Array<SearchHit | null> = await Promise.all(selected.slice(0, limit).map(async ({ document, score, lexicalScore, semanticScore }): Promise<SearchHit | null> => {
+      throwIfCancelled();
       try {
         if (!this.secureReader) throw new Error('Canonical reader is unavailable');
         const canonical = await this.secureReader(document.path);
@@ -245,6 +253,7 @@ export class PersistentSearchIndex {
           backlinks: backlinkMap.get(document.path) ?? [],
         } satisfies SearchHit;
       } catch {
+        throwIfCancelled();
         return null;
       }
     }));
@@ -252,6 +261,7 @@ export class PersistentSearchIndex {
   }
 
   async health(): Promise<SearchIndexHealth> {
+    throwIfCancelled();
     if (!(await this.indexIsValid())) return { healthy: false, documents: 0, error: 'Search index is missing, corrupt, or unsupported' };
     const index = await this.readIndex();
     const expected = new Map<string, string>();
@@ -322,6 +332,7 @@ export class PersistentSearchIndex {
     if (!this.secureReader) return [];
     const documents: IndexedDocument[] = [];
     for (const file of await allManagedMarkdown(this.root)) {
+      throwIfCancelled();
       const relativePath = toPosix(relative(this.root, file));
       if (!selectedArea(relativePath, options)) continue;
       try {
@@ -338,6 +349,7 @@ export class PersistentSearchIndex {
         const document = indexParts(relativePath, logical.meta, logical.body, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
         if (isActive(document)) documents.push(document);
       } catch {
+        throwIfCancelled();
         // Authorization and key failures do not reveal the document through search.
       }
     }
@@ -355,6 +367,7 @@ export class PersistentSearchIndex {
       else missing.push(document);
     }
     for (let offset = 0; offset < missing.length; offset += 32) {
+      throwIfCancelled();
       const batch = missing.slice(offset, offset + 32);
       const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel);
       for (let index = 0; index < batch.length; index += 1) {
@@ -363,6 +376,7 @@ export class PersistentSearchIndex {
         if (document && vector) vectors[document.contentHash] = vector;
       }
     }
+    throwIfCancelled();
     await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: this.config.index.embeddingModel, vectors })}\n`);
   }
 

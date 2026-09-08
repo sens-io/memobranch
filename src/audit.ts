@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile, stat, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactSecrets } from './errors.js';
+import { withoutCancellation } from './operation.js';
 import type { Principal } from './policy.js';
 import { appendText, nowIso, withFileLock, writeText } from './utils.js';
 
@@ -111,7 +112,7 @@ export class OperationsTelemetry {
 
   private async recordSafely(event: AuditEvent): Promise<void> {
     try {
-      await this.record(event);
+      await withoutCancellation(() => this.record(event));
     } catch {
       // Observability failures must not turn an already committed operation into a reported failure.
     }

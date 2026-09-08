@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { AgentMemoryError } from './errors.js';
+import { throwIfCancelled } from './operation.js';
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -64,6 +65,7 @@ export function resolveInside(root: string, requested = '.'): string {
 }
 
 export async function withFileLock<T>(lockPath: string, action: () => Promise<T>, timeoutMs = 5_000): Promise<T> {
+  throwIfCancelled();
   await mkdir(dirname(lockPath), { recursive: true });
   const deadline = Date.now() + Math.max(1, timeoutMs);
   const ownerToken = randomUUID();
@@ -79,6 +81,7 @@ export async function withFileLock<T>(lockPath: string, action: () => Promise<T>
   }
   try {
     for (;;) {
+      throwIfCancelled();
       const winner = await firstLiveContender(queuePath);
       if (winner === ownerToken) {
         let handle;
@@ -91,6 +94,7 @@ export async function withFileLock<T>(lockPath: string, action: () => Promise<T>
         if (handle) {
           try {
             await handle.writeFile(`${JSON.stringify({ version: 1, pid: process.pid, ownerToken, createdAt: nowIso() })}\n`, 'utf8');
+            throwIfCancelled();
             return await action();
           } finally {
             await handle.close();
