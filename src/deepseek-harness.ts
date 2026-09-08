@@ -4,6 +4,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
+import { throwIfCancelled, withOperation } from './operation.js';
 import { principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
@@ -57,12 +58,19 @@ const stringOutput = {
   render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }],
 };
 
+const lifetimes = new WeakMap<MemoryVault, { controller: AbortController; pending: Set<Promise<unknown>> }>();
+
 export function apply(ctx: Context, config: Config): void {
   const resolved = resolveConfig(config);
   const principal = principalFromEnv();
   const vaultRoot = resolve(resolved.vaultRoot || process.env.AMEM_VAULT || process.cwd());
   const vault = new MemoryVault(vaultRoot, { principal });
-  ctx.effect(() => () => vault.llm.cancelPending());
+  const lifetime = { controller: new AbortController(), pending: new Set<Promise<unknown>>() };
+  lifetimes.set(vault, lifetime);
+  ctx.effect(() => async () => {
+    lifetime.controller.abort();
+    await Promise.allSettled([...lifetime.pending]);
+  });
 
   if (granted(principal, 'read')) registerReadTools(ctx, vault, principal, resolved);
   if (granted(principal, 'write')) registerWriteTools(ctx, vault, resolved);
@@ -389,17 +397,24 @@ function granted(principal: Principal, permission: Permission): boolean {
 }
 
 async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
-  if (signal.aborted) throw safeError(cancelled());
-  const cancelProvider = () => vault.llm.cancelPending();
-  signal.addEventListener('abort', cancelProvider, { once: true });
+  const lifetime = lifetimes.get(vault);
+  const effectiveSignal = lifetime ? AbortSignal.any([signal, lifetime.controller.signal]) : signal;
+  const pending = withOperation(effectiveSignal, async () => {
+    try {
+      const value = await action();
+      throwIfCancelled();
+      return value;
+    } catch (error) { throw safeError(error); }
+  });
+  lifetime?.pending.add(pending);
   try {
-    const value = await action();
-    if (signal.aborted) throw cancelled();
-    return value;
+    return await pending;
   } catch (error) {
-    throw safeError(signal.aborted ? cancelled() : error);
+    // A pre-dispatch cancellation is thrown outside the callback above.
+    if (error instanceof AgentMemoryError) throw safeError(error);
+    throw error;
   } finally {
-    signal.removeEventListener('abort', cancelProvider);
+    lifetime?.pending.delete(pending);
   }
 }
 
@@ -413,10 +428,6 @@ async function runJson(vault: MemoryVault, signal: AbortSignal, action: () => Pr
 function safeError(error: unknown): Error {
   const normalized = toAgentMemoryError(error);
   return new Error(JSON.stringify(normalized.toJSON()));
-}
-
-function cancelled() {
-  return new AgentMemoryError('OPERATION_CANCELLED', 'DeepSeek Harness tool call was cancelled');
 }
 
 function boundedString(value: string, field: string, max: number): string {

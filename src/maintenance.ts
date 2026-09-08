@@ -5,6 +5,7 @@ import { open, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
+import { authorize } from './policy.js';
 import type { MemoryVault } from './vault.js';
 import { nowIso, withFileLock, writeText } from './utils.js';
 
@@ -147,12 +148,14 @@ export class MaintenanceService {
   }
 
   private async performCycle(): Promise<MaintenanceResult> {
+    const config = await this.vault.config();
+    authorize(this.vault.principal, 'maintain', { tenantId: config.tenantId });
+    if (config.remote && config.maintenance.autoSync) authorize(this.vault.principal, 'sync', { tenantId: config.tenantId });
     const startedAt = nowIso();
     const recovery = await this.vault.recover();
     const expiry = await this.vault.expireDue();
     const index = await this.vault.reindex(Boolean((await this.vault.config()).index.embeddingModel));
     const doctor = await this.vault.doctor();
-    const config = await this.vault.config();
     const sync = config.remote && config.maintenance.autoSync ? await this.vault.sync() : undefined;
     const finishedAt = nowIso();
     await this.vault.telemetry.gauge('maintenance_healthy', doctor.healthy ? 1 : 0);
