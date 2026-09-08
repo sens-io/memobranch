@@ -286,6 +286,8 @@ MCP 主体完全由服务端环境构造，调用者不能通过工具参数伪�
 
 MemoBranch 可以作为原生 Cordis 插件直接进入 DeepSeek Harness 的工具注册表，不需要额外启动 MCP 子进程。插件遵循 Harness 生命周期，配置变化可热替换，卸载时由 Cordis 自动撤销全部工具注册。
 
+插件已使用 `@deepseek-ai/dsh-tools@0.1.2-rc.1` 验证，兼容范围声明为 `^0.1.2-rc.1`，包含该预发布版本及后续兼容的 `0.1` 稳定版本。
+
 > [!NOTE]
 > MemoBranch 本身支持 Node.js 20+；官方 `@deepseek-ai/dsh@0.1.2-rc.1` 的当前依赖链要求 Node.js 22.19+。以所安装 Harness 版本的 `engines` 声明为准。
 
@@ -349,7 +351,11 @@ Git 安装会通过 `prepare` 构建 TypeScript。pnpm 10 及更新版本需要�
 | `maintain` | `memory_doctor`, `memory_recover`, `memory_reindex`, `memory_maintenance` |
 | `sync` | `memory_remote_status`, `memory_remote_sync` |
 
-所有工具都通过官方 `defineTool` API 声明类型化参数和规范输出。工具不声明不安全的并行执行；取消信号会中止待处理的模型请求，并等待已拥有的 vault 工作停止后再返回。建议 Agent 在需要长期上下文的任务开始前调用 `memory_context`。
+所有工具都通过官方 `defineTool` API 声明类型化参数和规范输出。`write`、`review`、`maintain`、`sync` 可以单独授予：操作所需的内部读取使用对应权限，但不会因此开放 `memory_get` 或 `memory_search`。作用域、敏感等级与 tenant 检查保持有效。启用维护自动同步时还需授予 `sync`。
+
+取消按调用隔离，不会中止其他会话的模型请求。等待锁或尚未进入提交阶段的写入会停止并回滚；已经进入提交阶段的事务、恢复和密码学擦除会安全收尾，然后返回 `OPERATION_CANCELLED`。若已产生提交，错误的 `details.committed` 会列出操作与提交号；取消后不会再启动提炼或后续写入。插件卸载会取消并等待其拥有的调用完成清理。
+
+Git 命令默认最多运行 30 秒，可通过 `AMEM_GIT_TIMEOUT_MS` 调整（`1..300000` 毫秒），取消或超时会终止所属传输进程。已确认成功的推送不会被本地回滚；若推送在确认前被中断，远端结果可能不确定，应先检查远端状态再重试。建议 Agent 在需要长期上下文的任务开始前调用 `memory_context`。
 
 ## 🔌 MCP 接入
 
@@ -463,6 +469,7 @@ curl http://127.0.0.1:9464/metrics
 | `AMEM_LLM_TIMEOUT_MS` | 单次 provider 请求总超时 | `30000` |
 | `AMEM_LLM_MAX_RESPONSE_BYTES` | provider 最大响应字节数 | `2000000` |
 | `AMEM_LLM_MAX_RETRIES` | 429/5xx/网络失败的有限重试次数 | `1` |
+| `AMEM_GIT_TIMEOUT_MS` | 单条 Git 命令及传输进程的超时（1–300000 毫秒） | `30000` |
 
 完整示例见 [`.env.example`](./.env.example)。
 
