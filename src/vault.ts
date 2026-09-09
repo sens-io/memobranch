@@ -634,34 +634,32 @@ export class MemoryVault {
     authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_configure', this.principal, async () => {
       if (remote) validateRemote(remote.name, remote.url);
-      const current = await this.config();
       const snapshots = new Map<string, string | null>();
       let remoteChanged = false;
-      try {
-        const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
-          for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
-            snapshots.set(name, await this.git.getRemoteUrl(name));
-          }
-          remoteChanged = true;
-          if (remote) await this.git.configureRemote(remote.name, remote.url);
-          if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
-          const next = { ...(await this.config()), remote };
-          await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
-          await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
-          return Boolean(remote);
-        });
-        return { configured: mutation.value, commit: mutation.commit };
-      } catch (error) {
-        if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
-          await withoutCancellation(async () => {
+      const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
+        const current = await this.config();
+        for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
+          snapshots.set(name, await this.git.getRemoteUrl(name));
+        }
+        remoteChanged = true;
+        if (remote) await this.git.configureRemote(remote.name, remote.url);
+        if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
+        const next = { ...(await this.config()), remote };
+        await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+        await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
+        return Boolean(remote);
+      }, undefined, {
+        rollbackOnCommitFailure: true,
+        onFailure: async () => {
+          if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
             for (const [name, url] of snapshots) {
               if (url) await this.git.configureRemote(name, url);
               else await this.git.removeRemote(name);
             }
-          });
-        }
-        throw error;
-      }
+          }
+        },
+      });
+      return { configured: mutation.value, commit: mutation.commit };
     });
   }
 
@@ -806,7 +804,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; onFailure?: () => Promise<void> } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     const config = await this.config();
@@ -854,7 +852,10 @@ export class MemoryVault {
       } catch (error) {
         this.activeTransaction = null;
         this.activePermission = null;
-        if (!ready) await withoutCancellation(() => transaction.rollback());
+        if (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit)) await withoutCancellation(() => transaction.rollback());
+        // Compensate side effects before releasing the writer lock. Ready
+        // journals and successful commits retain their durable desired state.
+        if (options.onFailure) await withoutCancellation(options.onFailure);
         throw error;
       }
     }), resourceIds);
@@ -897,7 +898,8 @@ export class MemoryVault {
       // Sync may still roll this back; recovery reconciliation is already durable.
       if (permission === 'maintain') recordCommit('recover', commit);
     } catch (error) {
-      if (!ready) await withoutCancellation(() => transaction.rollback());
+      if (permission === 'sync') await withoutCancellation(() => transaction.discard());
+      else if (!ready) await withoutCancellation(() => transaction.rollback());
       throw error;
     } finally {
       this.activeTransaction = null;

@@ -95,10 +95,32 @@ export class GitStore {
     }
     if (availablePaths.length === 0) return null;
     await this.run(['add', '-A', '--', ...availablePaths], { actor });
-    const hasChanges = await this.hasStagedChanges();
-    if (!hasChanges) return null;
-    await this.run(['commit', '--no-gpg-sign', '-m', message], { actor });
-    return this.run(['rev-parse', 'HEAD']);
+    const changedPaths = await this.stagedChanges(availablePaths);
+    if (changedPaths.length === 0) return null;
+    const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
+    // A scoped add does not scope a normal commit: unrelated staged changes
+    // must stay in the caller's index, including when a commit is retried.
+    try {
+      await this.run(['commit', '--only', '--no-gpg-sign', '-m', message, '--', ...changedPaths], { actor });
+    } catch (error) {
+      // A hook can time out after Git has advanced the ref. Settle that boundary
+      // before a transaction decides whether it can restore its original files.
+      let currentHead: string;
+      try {
+        currentHead = await withoutCancellation(() => this.run(['rev-parse', '--verify', 'HEAD']));
+      } catch {
+        // A missing outcome probe is not proof that the ref never advanced.
+        // Keep ready recovery state instead of undoing a possibly durable write.
+        throw new AgentMemoryError('GIT_OPERATION_FAILED', 'Git commit outcome is unknown; recovery is required', { commitOutcomeUnknown: true });
+      }
+      if (currentHead && currentHead !== originalHead) throw committedGitError(error, currentHead);
+      throw error;
+    }
+    try {
+      return await this.run(['rev-parse', 'HEAD']);
+    } catch (error) {
+      throw committedGitError(error);
+    }
   }
 
   async configureRemote(name: string, url: string): Promise<void> {
@@ -253,8 +275,10 @@ export class GitStore {
     }
   }
 
-  private async hasStagedChanges(): Promise<boolean> {
-    return Boolean(await this.run(['diff', '--cached', '--name-only']));
+  private async stagedChanges(paths: string[]): Promise<string[]> {
+    // Resolve directories to changed files: Git cannot commit an empty directory
+    // pathspec. Disable rename folding so both sides stay in the scoped commit.
+    return (await this.run(['diff', '--cached', '--name-only', '--no-renames', '-z', '--', ...paths])).split('\0').filter(Boolean);
   }
 
   async history(limit = 20, path?: string): Promise<Array<Record<string, string>>> {
@@ -272,6 +296,14 @@ export class GitStore {
         return { sha, date, author, email, subject };
       });
   }
+}
+
+function committedGitError(error: unknown, commit?: string): AgentMemoryError {
+  return new AgentMemoryError(
+    error instanceof AgentMemoryError ? error.code : 'GIT_OPERATION_FAILED',
+    error instanceof AgentMemoryError ? error.message : redactSecrets(error instanceof Error ? error.message : String(error)),
+    { ...(error instanceof AgentMemoryError ? error.safeDetails : {}), commitCreated: true, ...(commit ? { commit } : {}) },
+  );
 }
 
 function gitTimeout(explicit?: number): number {

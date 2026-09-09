@@ -9,7 +9,7 @@ import type { Actor, Sensitivity } from './types.js';
 import { nowIso, resolveInside, shortId, writeText } from './utils.js';
 import type { GitStore } from './git-store.js';
 
-type TransactionPhase = 'writing' | 'ready';
+type TransactionPhase = 'writing' | 'ready' | 'discarded';
 
 type StoredText =
   | { encoding: 'base64'; data: string }
@@ -39,6 +39,16 @@ export interface RecoveryResult {
 export class VaultTransaction {
   private readonly manifestPath: string;
   private manifest: TransactionManifest;
+  private committed = false;
+  private uncertainCommit = false;
+
+  get isCommitted(): boolean {
+    return this.committed;
+  }
+
+  get hasUncertainCommit(): boolean {
+    return this.uncertainCommit;
+  }
 
   private constructor(
     readonly root: string,
@@ -105,18 +115,41 @@ export class VaultTransaction {
   async commit(): Promise<string | null> {
     this.manifest.phase = 'ready';
     await this.persist();
-    const commit = await this.git.commit(this.manifest.message, this.manifest.actor, Object.keys(this.manifest.writes));
+    let commit: string | null;
+    try {
+      commit = await this.git.commit(this.manifest.message, this.manifest.actor, Object.keys(this.manifest.writes));
+    } catch (error) {
+      if (error instanceof AgentMemoryError && error.safeDetails?.commitCreated === true) this.committed = true;
+      if (error instanceof AgentMemoryError && error.safeDetails?.commitOutcomeUnknown === true) this.uncertainCommit = true;
+      throw error;
+    }
+    this.committed = true;
     await rm(this.manifestPath, { force: true });
     return commit;
   }
 
   async rollback(): Promise<void> {
+    const wasReady = this.manifest.phase === 'ready';
+    if (wasReady) {
+      this.manifest.phase = 'writing';
+      await this.persist();
+    }
     const entries = Object.entries(this.manifest.writes).reverse();
     for (const [path, state] of entries) {
       const absolute = resolveInside(this.root, path);
       if (state.original === null) await rm(absolute, { force: true });
       else await writeText(absolute, decodeText(state.original, path, this.masterKey));
     }
+    if (wasReady && entries.length) await this.git.run(['reset', '--', ...entries.map(([path]) => path)]);
+    await rm(this.manifestPath, { force: true });
+  }
+
+  async discard(): Promise<void> {
+    // The enclosing Git sync owns restoration of the entire snapshot. Neither
+    // desired nor original journal contents belong to that restored snapshot.
+    // Persist this decision first so interrupted cleanup cannot replay either.
+    this.manifest.phase = 'discarded';
+    await this.persist();
     await rm(this.manifestPath, { force: true });
   }
 
@@ -151,7 +184,7 @@ export async function recoverTransactions(root: string, git: GitStore, encodedMa
       const commit = await git.commit(manifest.message, manifest.actor, Object.keys(manifest.writes));
       if (commit) result.commits.push(commit);
       result.replayed.push(manifest.id);
-    } else {
+    } else if (manifest.phase === 'writing') {
       for (const [rootPath, state] of Object.entries(manifest.writes).reverse()) {
         const absolute = resolveInside(root, rootPath);
         if (state.original === null) await rm(absolute, { force: true });
@@ -171,7 +204,7 @@ export async function pendingTransactionCount(root: string): Promise<number> {
 }
 
 function validateManifest(value: TransactionManifest): void {
-  if (value.version !== 1 || !value.id || !['writing', 'ready'].includes(value.phase) || !value.actor?.id || !value.message || !value.writes) {
+  if (value.version !== 1 || !value.id || !['writing', 'ready', 'discarded'].includes(value.phase) || !value.actor?.id || !value.message || !value.writes) {
     throw new Error('Malformed transaction manifest');
   }
   for (const [path, state] of Object.entries(value.writes)) {
