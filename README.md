@@ -37,9 +37,11 @@
 
 ---
 
-MemoBranch 是一个面向 AI Agent 的生产级、本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
+MemoBranch 是一个面向 AI Agent、面向生产场景的本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
 
-它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。生产版采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流完成。
+它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。开发采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流；各能力是否验收，以对应版本的验证记录为准。
+
+> **核心设计约束：** LLM Wiki 以 [Karpathy 的方法](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)为准：持续编译和维护有来源、互相链接的知识，而不是仅做向量检索。详见[核心设计与实现差距](docs/design/llm-wiki-core.md)。当前已实现原子记忆基础，完整的跨来源 Wiki 编译、查询成果回存和语义 Lint 尚未验收；不将设计目标当成已交付功能。
 
 > [!IMPORTANT]
 > LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索、DeepSeek Harness 与 MCP 接入仍然可以完整工作。
@@ -521,18 +523,21 @@ amem config migrate --root ~/my-agent-memory --json
 ```bash
 npm run check
 npm pack --dry-run
+npm run test:package
 npm audit --omit=dev
 OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 ```
 
-| Gate | 当前状态 |
-| --- | :---: |
-| TypeScript build | ✅ PASS |
-| CLI / MCP / DeepSeek Harness / Vault tests | ✅ 63 / 63 |
-| 1,000 文档索引性能门禁 | ✅ PASS |
-| npm package dry-run | ✅ PASS |
-| 依赖漏洞审计 | ✅ 0 known vulnerabilities |
-| OpenSpec strict validation | ✅ 6 / 6 specs |
+| Gate | 验证要求 |
+| --- | --- |
+| TypeScript build | 严格编译通过 |
+| CLI / MCP / DeepSeek Harness / Vault tests | 目标提交完整套件通过；覆盖 `main` / `master` 默认分支 |
+| 1,000 文档索引性能门禁 | 索引与检索符合测试预算 |
+| 安装包 | 打包后安装到独立消费者，验证导出、Bundle 和真实 Harness 调用 |
+| 依赖漏洞审计 | 发布时重新运行生产依赖审计 |
+| OpenSpec strict validation | 规格、变更与验收记录保持一致 |
+
+结果绑定具体提交与环境，不能用这里的静态表格代替最新 [GitHub CI](https://github.com/sens-io/memobranch/actions) 或独立审查。
 
 测试覆盖租户隔离、策略化加密与迁移、恢复日志和 embedding 隔离、密码学擦除、权威索引复核、完整模式与跨文档引用、符号链接拒绝、证据不可变性、推送前后失败窗口、并发锁/租约/指标、事务回滚与重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
 
