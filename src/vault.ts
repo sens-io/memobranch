@@ -354,7 +354,7 @@ export class MemoryVault {
         );
         const same = matching.find((memory) => normalizeStatement(memory.body) === normalizeStatement(candidate.body));
         if (same) {
-          same.meta.evidence = unique([...same.meta.evidence, ...candidate.meta.evidence]);
+          mergeDerivation(same, candidate);
           same.meta.confidence = Math.max(same.meta.confidence, candidate.meta.confidence);
           same.meta.updatedAt = nowIso();
           same.meta.validatedAt = same.meta.updatedAt;
@@ -421,7 +421,7 @@ export class MemoryVault {
       const same = conflicts.find((memory) => normalizeStatement(memory.body) === normalizeStatement(candidate.body));
       if (same) {
         const timestamp = nowIso();
-        same.meta.evidence = unique([...same.meta.evidence, ...candidate.meta.evidence]);
+        mergeDerivation(same, candidate);
         same.meta.confidence = 1;
         same.meta.updatedAt = timestamp;
         same.meta.validatedAt = timestamp;
@@ -564,7 +564,7 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     authorize(this.principal, permission, { tenantId: config.tenantId });
-    const result = await this.searchIndex(config).refresh({ semantic });
+    const result = await this.searchIndex(config).refresh({ semantic, principal: this.principal, permission });
     if (result.rebuilt) await this.telemetry.increment('index_rebuilds');
     await this.telemetry.gauge('index_documents', result.documents);
     return result;
@@ -737,7 +737,7 @@ export class MemoryVault {
       this.scanDirectory<MemoryMeta>('wiki', permission),
       this.git.integrity(),
       pendingTransactionCount(this.root),
-      this.verifyEvidenceIntegrity(),
+      this.scanDirectory<EvidenceMeta>('evidence', permission),
     ]);
     const evidence = evidenceIntegrity.documents;
     const candidates = candidateScan.documents;
@@ -1387,6 +1387,21 @@ function constrainToEvidence(
 function candidateBody(meta: CandidateMeta, statement: string): string {
   const evidence = meta.evidence.length ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(`candidates/${meta.id}.md`, path)})`) : ['- _No evidence attached; manual review required._'];
   return [`# Candidate: ${meta.key}`, '', statement.trim(), '', '## Evidence', '', ...evidence].join('\n');
+}
+
+// Duplicate statements can have differently classified derivations. Preserve
+// the strongest restrictions before serializing any newly attached provenance.
+function mergeDerivation(memory: MarkdownDocument<MemoryMeta>, candidate: MarkdownDocument<CandidateMeta>): void {
+  const statement = candidateStatement(memory.body);
+  memory.meta.sensitivity = sensitivities[Math.max(
+    sensitivities.indexOf(memory.meta.sensitivity), sensitivities.indexOf(candidate.meta.sensitivity),
+  )]!;
+  memory.meta.evidence = unique([...memory.meta.evidence, ...candidate.meta.evidence]);
+  memory.meta.conditions = unique([...memory.meta.conditions, ...candidate.meta.conditions]);
+  memory.meta.tags = unique([...memory.meta.tags, ...candidate.meta.tags]);
+  const expirations = [memory.meta.expiresAt, candidate.meta.expiresAt].filter((value): value is string => Boolean(value));
+  if (expirations.length) memory.meta.expiresAt = expirations.sort((a, b) => Date.parse(a) - Date.parse(b))[0]!;
+  memory.body = memoryBody(memory.meta, statement, memory.path);
 }
 
 function memoryBody(meta: MemoryMeta, statement: string, memoryPath: string): string {

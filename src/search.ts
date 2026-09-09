@@ -7,7 +7,7 @@ import { isEncryptedEnvelope } from './encryption.js';
 import type { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
 import { throwIfCancelled } from './operation.js';
-import { assertTenant, canAccess, localAdminPrincipal, type Principal } from './policy.js';
+import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
@@ -65,6 +65,12 @@ export interface ReindexResult {
   rebuilt: boolean;
 }
 
+export interface RefreshOptions {
+  semantic?: boolean;
+  principal?: Principal;
+  permission?: Permission;
+}
+
 export interface SearchResult {
   hits: SearchHit[];
   semanticStatus: 'disabled' | 'ready' | 'degraded';
@@ -95,8 +101,12 @@ export class PersistentSearchIndex {
     this.embeddingPath = join(root, '.amem', 'embeddings.json');
   }
 
-  async refresh(options: { semantic?: boolean } = {}): Promise<ReindexResult> {
+  async refresh(options: RefreshOptions = {}): Promise<ReindexResult> {
     throwIfCancelled();
+    const principal = options.principal ?? localAdminPrincipal();
+    const permission = options.permission ?? 'maintain';
+    assertTenant(principal, this.config.tenantId);
+    authorize(principal, permission);
     let rebuilt = !(await this.indexIsValid());
     const files = await listMarkdown(join(this.root, 'wiki'));
     if (files.length > this.config.index.maxDocuments) {
@@ -152,7 +162,7 @@ export class PersistentSearchIndex {
     let semanticStatus: ReindexResult['semanticStatus'] = 'disabled';
     if (options.semantic && this.config.index.embeddingModel) {
       try {
-        await this.refreshEmbeddings(documents);
+        await this.refreshEmbeddings(documents, principal, permission);
         semanticStatus = 'ready';
       } catch {
         throwIfCancelled();
@@ -166,8 +176,11 @@ export class PersistentSearchIndex {
     throwIfCancelled();
     const principal = options.principal ?? localAdminPrincipal();
     assertTenant(principal, this.config.tenantId);
+    authorize(principal, 'read');
     let semanticStatus: SearchResult['semanticStatus'] = 'disabled';
-    const refreshed = await this.ensureTrusted(Boolean(options.semantic));
+    // Establish the shared lexical index before selecting the caller's documents.
+    // Semantic provider calls happen only after that authorization boundary.
+    const refreshed = await this.ensureTrusted(principal);
     semanticStatus = refreshed.semanticStatus;
     const index = this.trustedIndex!;
     const documents = index.documents.filter((document) =>
@@ -181,9 +194,9 @@ export class PersistentSearchIndex {
     const documentFrequency = frequencies(documents, queryTerms);
     const lexical = new Map(documents.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, documents.length)]));
     let semantic = new Map<string, number>();
-    if (options.semantic && this.config.index.embeddingModel && this.llm?.canEmbed(this.config.index.embeddingModel)) {
+    if (options.semantic && this.config.index.embeddingModel) {
       try {
-        semantic = await this.semanticScores(query, documents, ephemeralPaths);
+        semantic = await this.semanticScores(query, documents, ephemeralPaths, principal);
         semanticStatus = 'ready';
       } catch {
         throwIfCancelled();
@@ -283,8 +296,8 @@ export class PersistentSearchIndex {
     return { healthy: true, documents: index.documents.length };
   }
 
-  private async ensureTrusted(semantic: boolean): Promise<ReindexResult> {
-    if (this.trustedIndex && !semantic) {
+  private async ensureTrusted(principal: Principal): Promise<ReindexResult> {
+    if (this.trustedIndex) {
       if (
         this.trustedFileIdentity === await fileIdentity(this.indexPath) &&
         await this.canonicalSourceStateMatches(this.trustedIndex)
@@ -301,7 +314,7 @@ export class PersistentSearchIndex {
         this.trustedFileIdentity = await fileIdentity(this.indexPath);
       }
     }
-    if (!this.trustedIndex || semantic) return this.refresh(semantic ? { semantic: true } : {});
+    if (!this.trustedIndex) return this.refresh({ principal, permission: 'read' });
     return { documents: this.trustedIndex.documents.length, updated: 0, removed: 0, confidentialSkipped: 0, semanticStatus: 'disabled', rebuilt: false };
   }
 
@@ -356,12 +369,18 @@ export class PersistentSearchIndex {
     return documents;
   }
 
-  private async refreshEmbeddings(documents: IndexedDocument[]): Promise<void> {
+  private async refreshEmbeddings(documents: IndexedDocument[], principal: Principal, permission: Permission): Promise<void> {
     if (!this.llm?.canEmbed(this.config.index.embeddingModel) || !this.config.index.embeddingModel) throw new Error('Embeddings are not configured');
     const cache = await this.readEmbeddingCache();
     const vectors: Record<string, number[]> = {};
     const missing: IndexedDocument[] = [];
     for (const document of documents) {
+      if (!isActive(document) || this.config.policy.requireEncryptionFor.includes(document.sensitivity)) continue;
+      try {
+        authorize(principal, permission, { scope: document.scope, sensitivity: document.sensitivity, tenantId: this.config.tenantId });
+      } catch {
+        continue;
+      }
       const cached = cache.model === this.config.index.embeddingModel ? cache.vectors[document.contentHash] : undefined;
       if (cached) vectors[document.contentHash] = cached;
       else missing.push(document);
@@ -380,10 +399,10 @@ export class PersistentSearchIndex {
     await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: this.config.index.embeddingModel, vectors })}\n`);
   }
 
-  private async semanticScores(query: string, documents: IndexedDocument[], excludedPaths: ReadonlySet<string>): Promise<Map<string, number>> {
+  private async semanticScores(query: string, documents: IndexedDocument[], excludedPaths: ReadonlySet<string>, principal: Principal): Promise<Map<string, number>> {
     const safeDocuments = documents.filter((document) =>
       !excludedPaths.has(document.path) && !this.config.policy.requireEncryptionFor.includes(document.sensitivity));
-    await this.refreshEmbeddings(safeDocuments);
+    await this.refreshEmbeddings(safeDocuments, principal, 'read');
     const cache = await this.readEmbeddingCache();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
     if (!queryVector) return new Map();
