@@ -36,6 +36,7 @@
     "dev": "tsx src/cli.ts",
     "mcp": "tsx src/mcp.ts",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:package": "node scripts/verify-package.mjs",
     "check": "npm run build && npm test",
     "audit:prod": "npm audit --omit=dev"
   },

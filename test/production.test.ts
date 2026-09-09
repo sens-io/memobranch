@@ -231,7 +231,7 @@ test('remote Git pushes, pulls fast-forward, reports divergence, and aborts conf
   const remote = await mkdtemp(join(tmpdir(), 'amem-remote-'));
   const clone = await mkdtemp(join(tmpdir(), 'amem-clone-'));
   roots.push(remote, clone);
-  await exec('git', ['init', '--bare', remote]);
+  await exec('git', ['init', '--bare', '--initial-branch=main', remote]);
   const vault = await freshVault();
   await assert.rejects(vault.configureRemote({ name: 'origin', url: 'https://user:secret-token@example.test/vault.git', branch: 'main', push: false }), (error: unknown) => error instanceof AgentMemoryError && error.code === 'REMOTE_INVALID');
   assert.doesNotMatch(await readFile(join(vault.root, '.amem', 'audit.jsonl'), 'utf8'), /secret-token/);
@@ -241,7 +241,7 @@ test('remote Git pushes, pulls fast-forward, reports divergence, and aborts conf
   assert.ok(firstSync.lastSuccessfulSync);
 
   await rm(clone, { recursive: true, force: true });
-  await exec('git', ['clone', remote, clone]);
+  await exec('git', ['clone', '--branch', 'main', remote, clone]);
   await git(clone, ['config', 'user.name', 'Remote tester']);
   await git(clone, ['config', 'user.email', 'remote@example.test']);
   await writeFile(join(clone, 'log.md'), `${await readFile(join(clone, 'log.md'), 'utf8')}\nremote update\n`);
