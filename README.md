@@ -553,6 +553,8 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 
 ## 🙏 致谢
 
+- [Karpathy — LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：持久增量知识编译与 Ingest / Query / Lint 核心方法。
+- [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki)：Wiki 工作流与验收方法的实现参考；未复制其源码。
 - [OpenKnowledge](https://github.com/inkeep/open-knowledge)：Git 驱动的本地 Markdown / LLM Wiki 架构灵感。
 - [OpenSpec](https://github.com/Fission-AI/OpenSpec)：规格驱动的生产开发与归档流程。
 - [Model Context Protocol](https://modelcontextprotocol.io/)：Agent 与记忆服务之间的标准工具接口。

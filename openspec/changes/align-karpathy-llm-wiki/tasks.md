@@ -3,6 +3,7 @@
 - [x] Read Karpathy's source and inspect the pinned reference implementation.
 - [x] Adopt project-level principles, safety boundaries and a truthful gap matrix.
 - [x] Define executable acceptance scenarios before making compliance claims.
+- [x] Independently verify design fidelity, primary sources and truthful implementation gaps.
 
 ## Implementation and verification
 
