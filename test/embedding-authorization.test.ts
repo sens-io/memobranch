@@ -94,7 +94,7 @@ test('semantic search sends only readable active documents on cold, warm, and ch
   const cold = await reader.searchDetailed(query, { semantic: true, includeSecret: true });
   assert.equal(cold.semanticStatus, 'ready');
   assert.deepEqual(cold.hits.map((hit) => hit.id), ['allowed']);
-  assert.ok(cold.hits[0]!.semanticScore > 0);
+  assert.ok((cold.hits[0]?.semanticScore ?? 0) > 0);
   assert.ok(recording.inputs().some((input) => input.includes(allowed)));
   assert.doesNotMatch(JSON.stringify(recording.requests), forbidden);
 
@@ -128,7 +128,7 @@ test('maintain-only semantic reindex embeds its authorized subset and retains ca
   assert.doesNotMatch(JSON.stringify(recording.requests), forbidden);
   recording.requests.length = 0;
   assert.equal((await maintainer.reindex(true)).semanticStatus, 'ready');
-  assert.deepEqual(recording.requests, []);
+  assert.equal(recording.requests.length, 0);
 
   await setModel(admin, 'embedding-model-b');
   assert.equal((await maintainer.reindex(true)).semanticStatus, 'ready');

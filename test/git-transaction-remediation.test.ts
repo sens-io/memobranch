@@ -170,7 +170,7 @@ test('remote commit rejection restores config, Git remotes, journal and scoped i
   await vault.git.run(['add', '--', 'AGENTS.md']);
   const staged = await vault.git.run(['diff', '--cached', '--binary']);
   await precommit(vault, true);
-  for (const next of [{ ...old, name: 'upstream', url: join(vault.root, 'rejected') }, undefined]) {
+  for (const next of [{ ...old, name: 'upstream', url: join(vault.root, 'rejected') }, null]) {
     await assert.rejects(vault.configureRemote(next));
     assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
     assert.deepEqual((await vault.config()).remote, old);

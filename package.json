@@ -37,7 +37,8 @@
     "mcp": "tsx src/mcp.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "test:package": "node scripts/verify-package.mjs",
-    "check": "npm run build && npm test",
+    "test:types": "tsc -p tsconfig.tests.json",
+    "check": "npm run build && npm run test:types && npm test",
     "audit:prod": "npm audit --omit=dev"
   },
   "engines": {

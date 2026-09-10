@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, test } from 'node:test';
 import { AgentMemoryError } from '../src/errors.js';
-import type { EncryptedEnvelopeMeta } from '../src/encryption.js';
+import { isEncryptedEnvelope } from '../src/encryption.js';
 import { MaintenanceService } from '../src/maintenance.js';
 import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
 import type { Principal } from '../src/policy.js';
@@ -123,7 +123,8 @@ test('confidential records fail closed, avoid plaintext artifacts, and support c
   assert.equal(erased.keyErased, true);
   assert.equal(await vault.encryption.hasKey(hit.id), false);
   const historical = parseMarkdown<Record<string, unknown>>(encryptedRaw);
-  await assert.rejects(vault.encryption.decrypt(historical.meta as EncryptedEnvelopeMeta, historical.body), (error: unknown) => error instanceof AgentMemoryError && error.code === 'ENCRYPTION_KEY_UNAVAILABLE');
+  assert.ok(isEncryptedEnvelope(historical.meta));
+  await assert.rejects(vault.encryption.decrypt(historical.meta, historical.body), (error: unknown) => error instanceof AgentMemoryError && error.code === 'ENCRYPTION_KEY_UNAVAILABLE');
   const audit = await readFile(join(vault.root, '.amem', 'audit.jsonl'), 'utf8');
   assert.match(audit, new RegExp(hit.id));
   assert.doesNotMatch(audit, /SILVER ORCHID/);
