@@ -633,30 +633,17 @@ export class MemoryVault {
     authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_configure', this.principal, async () => {
       if (remote) validateRemote(remote.name, remote.url);
-      const snapshots = new Map<string, string | null>();
-      let remoteChanged = false;
       const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
         const current = await this.config();
-        for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
-          snapshots.set(name, await this.git.getRemoteUrl(name));
-        }
-        remoteChanged = true;
-        if (remote) await this.git.configureRemote(remote.name, remote.url);
-        if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
+        const transaction = this.activeTransaction!;
+        if (remote) await transaction.configureRemote(remote.name, remote.url);
+        if (current.remote && (!remote || current.remote.name !== remote.name)) await transaction.configureRemote(current.remote.name, null);
         const next = { ...(await this.config()), remote };
         await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
         await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
         return Boolean(remote);
       }, undefined, {
         rollbackOnCommitFailure: true,
-        onFailure: async () => {
-          if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
-            for (const [name, url] of snapshots) {
-              if (url) await this.git.configureRemote(name, url);
-              else await this.git.removeRemote(name);
-            }
-          }
-        },
       });
       return { configured: mutation.value, commit: mutation.commit };
     });
@@ -811,7 +798,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; onFailure?: () => Promise<void> } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -860,9 +847,6 @@ export class MemoryVault {
         this.activeTransaction = null;
         this.activePermission = null;
         if (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit)) await withoutCancellation(() => transaction.rollback());
-        // Compensate side effects before releasing the writer lock. Ready
-        // journals and successful commits retain their durable desired state.
-        if (options.onFailure) await withoutCancellation(options.onFailure);
         throw error;
       }
     }), resourceIds);
@@ -949,15 +933,6 @@ export class MemoryVault {
       await this.recoverErasureIntentsLocked();
       return result;
     });
-  }
-
-  private async remoteConfigMatches(expected: VaultConfig['remote']): Promise<boolean> {
-    try {
-      const actual = (await readVaultConfig(this.root)).remote;
-      return JSON.stringify(actual) === JSON.stringify(expected);
-    } catch {
-      return false;
-    }
   }
 
   private async recoverErasureIntentsLocked(): Promise<string[]> {

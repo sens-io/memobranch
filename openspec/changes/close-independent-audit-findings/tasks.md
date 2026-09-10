@@ -8,6 +8,7 @@
 - [x] Make test branch selection explicit and add CI environment coverage.
 - [x] Add actual package installation and Harness runtime smoke gate.
 - [x] Resolve independent-review finding: durable sync rollback survives restoration failure.
+- [ ] Resolve follow-up finding: remote-configuration compensation and index cleanup survive failure and restart.
 
 ## Verification and acceptance
 

@@ -7,7 +7,7 @@ import { isEncryptedEnvelope, parseMasterKey } from './encryption.js';
 import { parseMarkdown } from './markdown.js';
 import type { Actor, Sensitivity } from './types.js';
 import { nowIso, resolveInside, shortId, writeText } from './utils.js';
-import type { GitStore } from './git-store.js';
+import { validateRemote, type GitStore } from './git-store.js';
 
 type TransactionPhase = 'writing' | 'ready' | 'discarded';
 
@@ -20,6 +20,12 @@ interface FileState {
   desired: StoredText | string;
 }
 
+interface RemoteState {
+  name: string;
+  original: string | null;
+  desired: string | null;
+}
+
 interface TransactionManifest {
   version: 1;
   id: string;
@@ -28,6 +34,8 @@ interface TransactionManifest {
   actor: Actor;
   message: string;
   writes: Record<string, FileState>;
+  remotes?: RemoteState[];
+  indexResetPending?: boolean;
 }
 
 export interface RecoveryResult {
@@ -112,8 +120,28 @@ export class VaultTransaction {
     await this.write(rootPath, `${current}${content}`);
   }
 
+  async configureRemote(name: string, url: string | null): Promise<void> {
+    validateJournalRemote(name, url);
+    const remotes = this.manifest.remotes ?? [];
+    const prior = remotes.find((remote) => remote.name === name);
+    if (prior) {
+      prior.desired = url;
+    } else {
+      if (remotes.length >= 2) throw new AgentMemoryError('REMOTE_INVALID', 'A remote configuration transaction can change at most two remotes');
+      const original = await this.git.getRemoteUrl(name);
+      validateJournalRemote(name, original);
+      remotes.push({ name, original, desired: url });
+    }
+    this.manifest.remotes = remotes;
+    // Git configuration is outside the tracked files, so its inverse must be
+    // durable before an interrupted command can change the remote.
+    await this.persist();
+    await restoreRemote(this.git, name, url);
+  }
+
   async commit(): Promise<string | null> {
     this.manifest.phase = 'ready';
+    this.manifest.indexResetPending = true;
     await this.persist();
     let commit: string | null;
     try {
@@ -129,9 +157,11 @@ export class VaultTransaction {
   }
 
   async rollback(): Promise<void> {
-    const wasReady = this.manifest.phase === 'ready';
-    if (wasReady) {
+    if (this.manifest.phase === 'ready') {
       this.manifest.phase = 'writing';
+      // Preserve the cleanup obligation across a failed reset and restart,
+      // including journals written before indexResetPending was introduced.
+      this.manifest.indexResetPending = true;
       await this.persist();
     }
     const entries = Object.entries(this.manifest.writes).reverse();
@@ -140,7 +170,8 @@ export class VaultTransaction {
       if (state.original === null) await rm(absolute, { force: true });
       else await writeText(absolute, decodeText(state.original, path, this.masterKey));
     }
-    if (wasReady && entries.length) await this.git.run(['reset', '--', ...entries.map(([path]) => path)]);
+    if (this.manifest.indexResetPending && entries.length) await this.git.run(['reset', '--', ...entries.map(([path]) => path)]);
+    for (const remote of [...(this.manifest.remotes ?? [])].reverse()) await restoreRemote(this.git, remote.name, remote.original);
     await rm(this.manifestPath, { force: true });
   }
 
@@ -181,6 +212,7 @@ export async function recoverTransactions(root: string, git: GitStore, encodedMa
       for (const [rootPath, state] of Object.entries(manifest.writes)) {
         await writeText(resolveInside(root, rootPath), decodeText(state.desired, rootPath, masterKey));
       }
+      for (const remote of manifest.remotes ?? []) await restoreRemote(git, remote.name, remote.desired);
       const commit = await git.commit(manifest.message, manifest.actor, Object.keys(manifest.writes));
       if (commit) result.commits.push(commit);
       result.replayed.push(manifest.id);
@@ -190,6 +222,9 @@ export async function recoverTransactions(root: string, git: GitStore, encodedMa
         if (state.original === null) await rm(absolute, { force: true });
         else await writeText(absolute, decodeText(state.original, rootPath, masterKey));
       }
+      const paths = Object.keys(manifest.writes);
+      if (manifest.indexResetPending && paths.length) await git.run(['reset', '--', ...paths]);
+      for (const remote of [...(manifest.remotes ?? [])].reverse()) await restoreRemote(git, remote.name, remote.original);
       result.rolledBack.push(manifest.id);
     }
     await rm(path, { force: true });
@@ -212,6 +247,33 @@ function validateManifest(value: TransactionManifest): void {
       throw new Error(`Malformed transaction file state: ${path}`);
     }
   }
+  if (value.indexResetPending !== undefined && typeof value.indexResetPending !== 'boolean') throw new Error('Malformed transaction index state');
+  if (value.remotes !== undefined) {
+    if (!Array.isArray(value.remotes) || value.remotes.length > 2) throw new Error('Malformed transaction remote states');
+    const names = new Set<string>();
+    for (const remote of value.remotes) {
+      if (!remote || typeof remote !== 'object' || names.has(remote.name)) throw new Error('Malformed transaction remote state');
+      validateJournalRemote(remote.name, remote.original);
+      validateJournalRemote(remote.name, remote.desired);
+      names.add(remote.name);
+    }
+  }
+}
+
+function validateJournalRemote(name: string, url: string | null): void {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9._][A-Za-z0-9._-]{0,254}$/.test(name)) {
+    throw new AgentMemoryError('REMOTE_INVALID', 'Transaction remote name is invalid');
+  }
+  if (url === null) return;
+  if (typeof url !== 'string' || url.length > 8192 || /[\u0000-\u001f\u007f]/.test(url)) {
+    throw new AgentMemoryError('REMOTE_INVALID', 'Transaction remote URL is invalid');
+  }
+  validateRemote(name, url);
+}
+
+async function restoreRemote(git: GitStore, name: string, url: string | null): Promise<void> {
+  if (url === null) await git.removeRemote(name);
+  else await git.configureRemote(name, url);
 }
 
 function toPosix(value: string): string {

@@ -7,6 +7,11 @@ Remote configuration compensation MUST settle before the writer lock is released
 - **WHEN** the first fails and the second succeeds
 - **THEN** delayed compensation from the first cannot overwrite the second's Git remote
 
+#### Scenario: Configuration compensation is interrupted
+- **WHEN** a configuration update fails and either its index reset or Git remote compensation also fails
+- **THEN** the original and desired remote settings and pending index cleanup remain in durable recovery state until all required compensation succeeds
+- **AND** a restarted recovery restores both configuration representations, preserves unrelated staged and unstaged content, and cannot delete the journal or admit another writer prematurely
+
 ### Requirement: Snapshot restoration is durable and checked
 Synchronization MUST persist recovery information before losing its original state, check restoration results, and retain recovery information across reset or cleanup failure. Accepted or uncertain pushes MUST not be blindly rolled back.
 

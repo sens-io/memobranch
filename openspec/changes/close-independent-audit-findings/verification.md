@@ -37,6 +37,12 @@ Boundary coverage includes a real reset-blocking Git index lock; a fresh process
 
 Read-only review of committed candidate `727bdef` was dispatched, but the reviewer and its isolated authorization-retention subtask terminated with the platform error: "Your workspace is out of credits. Ask your workspace owner to refill in order to continue." No final review verdict was delivered. Review must resume after the workspace owner restores capacity; this is not approval or an assertion of zero remaining findings. Passing tests alone are not final acceptance.
 
+The review subsequently resumed and **RETURNED** `727bdef`. It independently passed 36 Git/sync/cancellation tests plus 14 authorization/provenance tests (50/50, no skips, macOS Node 26.8.2 / Apple Git 2.39.3), and reproduced another P1 using actual Git: a failed index reset during rejected remote configuration skipped volatile remote compensation; restarted recovery deleted the journal while the Git remote and index remained inconsistent. The failed child scope was completed locally by the isolated reviewer. The reviewer did not independently execute Linux or package gates.
+
+## Remote-configuration recovery revision
+
+Pending correction and a new committed-candidate review. Five new regressions independently reproduced the uncorrected behavior: URL change, remote rename, remote removal under an actual index lock; and actual Git config-lock failure immediately after remote mutation or during commit rollback. Baseline: 0/5 passed. They require exact original HEAD, configuration, log, Git remotes and unrelated staged/unstaged content after restart, a retained journal while compensation is blocked, and a successful subsequent operation.
+
 ### Limits
 
 Windows process-tree termination, real production credentials/remotes, power-loss durability and the future full Karpathy Wiki compiler are not established by these checks. Unknown push outcomes intentionally remain blocked when the remote cannot confirm the attempted revision; the runbook requires investigation rather than deleting recovery records or force-pushing. These finite checks do not prove the absence of unknown defects.
