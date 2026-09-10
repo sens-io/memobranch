@@ -99,6 +99,7 @@ export class MemoryVault {
     authorize(this.principal, 'maintain', { tenantId: this.principal.tenantId ?? 'local-admin' });
     await mkdir(this.root, { recursive: true });
     return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      if (await this.git.pendingSyncSnapshot()) await this.recoverPendingLocked('maintain');
       const configPath = join(this.root, 'agent-memory.json');
       if (existsSync(configPath)) {
         await this.config();
@@ -501,7 +502,7 @@ export class MemoryVault {
     authorize(this.principal, 'admin', { tenantId: config.tenantId });
     return this.telemetry.operation('erase', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked('admin');
       const memory = await this.findOneMemory(selector, 'admin');
       if (!config.policy.requireEncryptionFor.includes(memory.meta.sensitivity)) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to memory covered by the encryption policy');
@@ -594,11 +595,9 @@ export class MemoryVault {
   }
 
   async recover(): Promise<RecoveryResult> {
-    this.assertInitialized();
     authorize(this.principal, 'maintain');
-    await this.config();
     return this.telemetry.operation('recover', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), () => withoutCancellation(async () => {
-      const result = await this.recoverPendingLocked();
+      const result = await this.recoverPendingLocked('maintain');
       if (result.rolledBack.length || result.replayed.length) {
         try { await this.reconcileAfterSync('maintain'); } catch (error) {
           if (!(error instanceof AgentMemoryError && error.code === 'CONFIG_VERSION_UNSUPPORTED')) throw error;
@@ -671,11 +670,11 @@ export class MemoryVault {
   }
 
   async sync(options: { push?: boolean } = {}): Promise<RemoteStatus & { pushed: boolean; merged: boolean }> {
-    const config = await this.config();
-    authorize(this.principal, 'sync', { tenantId: config.tenantId });
-    if (!config.remote) throw new AgentMemoryError('REMOTE_INVALID', 'No remote is configured');
+    authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_sync', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked('sync');
+      const config = await this.config();
+      if (!config.remote) throw new AgentMemoryError('REMOTE_INVALID', 'No remote is configured');
       const integrity = await this.git.integrity();
       if (!integrity.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Shadow Git repository failed integrity validation', { error: integrity.error });
       if (integrity.dirty) throw new AgentMemoryError('REMOTE_CONFLICT', 'Managed vault files contain uncommitted changes');
@@ -700,7 +699,15 @@ export class MemoryVault {
   }
 
   async doctor(): Promise<DoctorReport> {
-    return this.healthReport('maintain');
+    const report = await this.healthReport('maintain');
+    // Public diagnostics must include the outer sync recovery boundary. The
+    // internal sync validator intentionally checks only canonical health while
+    // its own intent is active and the writer lock is still held.
+    if (existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+      report.healthy = false;
+      report.recovery = { pending: (report.recovery?.pending ?? 0) + 1 };
+    }
+    return report;
   }
 
   private async healthReport(permission: 'maintain' | 'sync'): Promise<DoctorReport> {
@@ -807,10 +814,10 @@ export class MemoryVault {
     options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; onFailure?: () => Promise<void> } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
-    const config = await this.config();
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked(permission);
+      const config = await this.config();
       const evidenceIntegrity = await this.verifyEvidenceIntegrity(options);
       if (evidenceIntegrity.errors.length > 0) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Immutable evidence failed integrity validation', { errors: evidenceIntegrity.errors.slice(0, 20) });
@@ -898,8 +905,9 @@ export class MemoryVault {
       // Sync may still roll this back; recovery reconciliation is already durable.
       if (permission === 'maintain') recordCommit('recover', commit);
     } catch (error) {
-      if (permission === 'sync') await withoutCancellation(() => transaction.discard());
-      else if (!ready) await withoutCancellation(() => transaction.rollback());
+      // The outer sync intent must restore the original Git snapshot before
+      // deleting this journal. Retain it if that restoration cannot finish.
+      if (permission === 'maintain' && !ready) await withoutCancellation(() => transaction.rollback());
       throw error;
     } finally {
       this.activeTransaction = null;
@@ -912,9 +920,30 @@ export class MemoryVault {
     await writeText(this.erasureIntentPath(intent.id), `${JSON.stringify(intent, null, 2)}\n`);
   }
 
-  private async recoverPendingLocked(): Promise<RecoveryResult> {
+  private async recoverPendingLocked(permission: Permission): Promise<RecoveryResult> {
     throwIfCancelled();
     return withoutCancellation(async () => {
+      const snapshot = await this.git.pendingSyncSnapshot();
+      if (snapshot) {
+        // A rejected merge can contain invalid JSON, a future schema, a missing
+        // config, or another tenant. Authorize against the verified original
+        // commit before performing any recovery mutation.
+        let tenantId: string;
+        try {
+          const original = JSON.parse(await this.git.run(['show', `${snapshot.originalHead}:agent-memory.json`])) as Record<string, unknown>;
+          const tenant = original.version === 1 ? original.vaultId : original.version === 2 ? original.tenantId : undefined;
+          if (typeof tenant !== 'string' || !tenant) throw new Error('Original snapshot has no supported tenant identity');
+          tenantId = tenant;
+        } catch (error) {
+          throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Cannot verify the original synchronization tenant');
+        }
+        authorize(this.principal, permission, { tenantId });
+        await this.git.recoverSync({ confirmPush: async () => authorize(this.principal, 'sync', { tenantId }) });
+        this.cachedSearchIndex?.value.invalidate();
+        this.cachedSearchIndex = null;
+      }
+      const config = await this.config();
+      authorize(this.principal, permission, { tenantId: config.tenantId });
       const result = await recoverTransactions(this.root, this.git, this.journalKey);
       for (const commit of result.commits) recordCommit('recover', commit);
       await this.recoverErasureIntentsLocked();

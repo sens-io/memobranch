@@ -482,12 +482,14 @@ curl http://127.0.0.1:9464/metrics
 
 1. 停止所有写入者和守护进程，保留完整 vault 与 `.amem/` 副本。
 2. 运行 `amem doctor --root <vault> --json`，记录配置、Git、索引和事务状态。
-3. 运行 `amem recover --root <vault> --json`；`writing` 事务回滚，`ready` 事务完整重放并提交。
+3. 运行 `amem recover --root <vault> --json`；先恢复未完成的同步快照，再回滚 `writing` 事务或重放 `ready` 事务。恢复未成功前，后续写入会被阻止。
 4. 运行 `amem reindex --root <vault> --json`，从 Markdown 重建缺失或损坏索引。
 5. 运行 `amem remote status --root <vault> --json`；出现 divergence 时人工检查，不绕过保护强推。
 6. 再次运行 `doctor`，仅在 `healthy: true` 后恢复服务和自动同步。
 
 Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.amem/git`，不要删除工作树中的 Markdown 权威数据。master key 或 wrapped key 丢失时系统会失败关闭，请从受控密钥备份恢复。
+
+同步明确失败时会恢复原 HEAD、受管文件和同步状态；重置或清理失败会保留 `.amem/sync-intent.json`，排除占用或文件系统故障后可重试恢复。远端已接收的推送不回滚。如果传输中断导致结果未知，恢复还需 `sync` 权限来确认远端包含该提交；仅有 `maintain` 权限不会访问远端。未能确认时保持阻塞，请检查远端和备份，不要直接删除恢复记录或强推。为保证这一边界，一次同步只支持一个推送目的地。
 
 </details>
 

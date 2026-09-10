@@ -13,3 +13,16 @@ Synchronization MUST persist recovery information before losing its original sta
 #### Scenario: Rejected remote configuration is unreadable
 - **WHEN** rollback is interrupted after receiving an invalid or changed-tenant configuration
 - **THEN** an authorized recovery can validate the original snapshot tenant and restore it without trusting the rejected configuration or disclosing it to another tenant
+
+#### Scenario: Reset succeeds but cleanup fails
+- **WHEN** reset restores the original revision but restoration of sync state or cleanup fails
+- **THEN** recovery information remains durable and the next writer cannot bypass it
+
+#### Scenario: Push is verifiably rejected or never started
+- **WHEN** a normal Git porcelain response rejects the single target ref, or cancellation prevents spawning the push
+- **THEN** synchronization restores the original snapshot and retires its recovery intent only after successful compensation
+
+#### Scenario: Push result is uncertain
+- **WHEN** a transport interruption leaves the external push outcome unconfirmed
+- **THEN** the local revision and intent remain, diagnostics report pending recovery, and remote confirmation requires sync permission
+- **AND** confirmation of the attempted commit or a descendant finishes bookkeeping without reverting the accepted revision
