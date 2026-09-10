@@ -7,14 +7,14 @@
 - [x] Keep remote configuration compensation inside the writer lock.
 - [x] Make test branch selection explicit and add CI environment coverage.
 - [x] Add actual package installation and Harness runtime smoke gate.
-- [ ] Resolve independent-review finding: durable sync rollback survives restoration failure.
+- [x] Resolve independent-review finding: durable sync rollback survives restoration failure.
 
 ## Verification and acceptance
 
 - [x] Verify the first candidate with 105/105 tests on macOS/Node 22 and Linux/Node 20.
 - [x] Independently review the first candidate and record its rejection.
-- [ ] Re-run focused, full, cross-environment and installed-package gates on the final candidate.
-- [ ] Strictly typecheck new regression files.
-- [ ] Validate all OpenSpec changes and specs.
+- [x] Re-run focused, full, cross-environment and installed-package gates on candidate 727bdef.
+- [x] Strictly typecheck new regression files.
+- [x] Validate all OpenSpec changes and specs.
 - [ ] Independently approve the final committed candidate with no unresolved confirmed finding.
 - [ ] Record final evidence and limitations; keep commits local unless separately authorized to push.
