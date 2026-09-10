@@ -99,6 +99,7 @@ export class MemoryVault {
     authorize(this.principal, 'maintain', { tenantId: this.principal.tenantId ?? 'local-admin' });
     await mkdir(this.root, { recursive: true });
     return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      if (await this.git.pendingSyncSnapshot()) await this.recoverPendingLocked('maintain');
       const configPath = join(this.root, 'agent-memory.json');
       if (existsSync(configPath)) {
         await this.config();
@@ -354,7 +355,7 @@ export class MemoryVault {
         );
         const same = matching.find((memory) => normalizeStatement(memory.body) === normalizeStatement(candidate.body));
         if (same) {
-          same.meta.evidence = unique([...same.meta.evidence, ...candidate.meta.evidence]);
+          mergeDerivation(same, candidate);
           same.meta.confidence = Math.max(same.meta.confidence, candidate.meta.confidence);
           same.meta.updatedAt = nowIso();
           same.meta.validatedAt = same.meta.updatedAt;
@@ -421,7 +422,7 @@ export class MemoryVault {
       const same = conflicts.find((memory) => normalizeStatement(memory.body) === normalizeStatement(candidate.body));
       if (same) {
         const timestamp = nowIso();
-        same.meta.evidence = unique([...same.meta.evidence, ...candidate.meta.evidence]);
+        mergeDerivation(same, candidate);
         same.meta.confidence = 1;
         same.meta.updatedAt = timestamp;
         same.meta.validatedAt = timestamp;
@@ -501,7 +502,7 @@ export class MemoryVault {
     authorize(this.principal, 'admin', { tenantId: config.tenantId });
     return this.telemetry.operation('erase', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked('admin');
       const memory = await this.findOneMemory(selector, 'admin');
       if (!config.policy.requireEncryptionFor.includes(memory.meta.sensitivity)) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to memory covered by the encryption policy');
@@ -564,7 +565,7 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     authorize(this.principal, permission, { tenantId: config.tenantId });
-    const result = await this.searchIndex(config).refresh({ semantic });
+    const result = await this.searchIndex(config).refresh({ semantic, principal: this.principal, permission });
     if (result.rebuilt) await this.telemetry.increment('index_rebuilds');
     await this.telemetry.gauge('index_documents', result.documents);
     return result;
@@ -594,11 +595,9 @@ export class MemoryVault {
   }
 
   async recover(): Promise<RecoveryResult> {
-    this.assertInitialized();
     authorize(this.principal, 'maintain');
-    await this.config();
     return this.telemetry.operation('recover', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), () => withoutCancellation(async () => {
-      const result = await this.recoverPendingLocked();
+      const result = await this.recoverPendingLocked('maintain');
       if (result.rolledBack.length || result.replayed.length) {
         try { await this.reconcileAfterSync('maintain'); } catch (error) {
           if (!(error instanceof AgentMemoryError && error.code === 'CONFIG_VERSION_UNSUPPORTED')) throw error;
@@ -634,34 +633,19 @@ export class MemoryVault {
     authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_configure', this.principal, async () => {
       if (remote) validateRemote(remote.name, remote.url);
-      const current = await this.config();
-      const snapshots = new Map<string, string | null>();
-      let remoteChanged = false;
-      try {
-        const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
-          for (const name of unique([current.remote?.name, remote?.name].filter((value): value is string => Boolean(value)))) {
-            snapshots.set(name, await this.git.getRemoteUrl(name));
-          }
-          remoteChanged = true;
-          if (remote) await this.git.configureRemote(remote.name, remote.url);
-          if (current.remote && (!remote || current.remote.name !== remote.name)) await this.git.removeRemote(current.remote.name);
-          const next = { ...(await this.config()), remote };
-          await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
-          await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
-          return Boolean(remote);
-        });
-        return { configured: mutation.value, commit: mutation.commit };
-      } catch (error) {
-        if (remoteChanged && !(await this.remoteConfigMatches(remote))) {
-          await withoutCancellation(async () => {
-            for (const [name, url] of snapshots) {
-              if (url) await this.git.configureRemote(name, url);
-              else await this.git.removeRemote(name);
-            }
-          });
-        }
-        throw error;
-      }
+      const mutation = await this.withMutation('sync', this.principal, 'remote_config', 'config: update remote', async () => {
+        const current = await this.config();
+        const transaction = this.activeTransaction!;
+        if (remote) await transaction.configureRemote(remote.name, remote.url);
+        if (current.remote && (!remote || current.remote.name !== remote.name)) await transaction.configureRemote(current.remote.name, null);
+        const next = { ...(await this.config()), remote };
+        await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+        await this.appendLog('remote-config', this.principal, remote ? `${remote.name}/${remote.branch}; push=${remote.push}` : 'removed=true');
+        return Boolean(remote);
+      }, undefined, {
+        rollbackOnCommitFailure: true,
+      });
+      return { configured: mutation.value, commit: mutation.commit };
     });
   }
 
@@ -673,11 +657,11 @@ export class MemoryVault {
   }
 
   async sync(options: { push?: boolean } = {}): Promise<RemoteStatus & { pushed: boolean; merged: boolean }> {
-    const config = await this.config();
-    authorize(this.principal, 'sync', { tenantId: config.tenantId });
-    if (!config.remote) throw new AgentMemoryError('REMOTE_INVALID', 'No remote is configured');
+    authorize(this.principal, 'sync');
     return this.telemetry.operation('remote_sync', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked('sync');
+      const config = await this.config();
+      if (!config.remote) throw new AgentMemoryError('REMOTE_INVALID', 'No remote is configured');
       const integrity = await this.git.integrity();
       if (!integrity.healthy) throw new AgentMemoryError('REMOTE_CONFLICT', 'Shadow Git repository failed integrity validation', { error: integrity.error });
       if (integrity.dirty) throw new AgentMemoryError('REMOTE_CONFLICT', 'Managed vault files contain uncommitted changes');
@@ -702,7 +686,15 @@ export class MemoryVault {
   }
 
   async doctor(): Promise<DoctorReport> {
-    return this.healthReport('maintain');
+    const report = await this.healthReport('maintain');
+    // Public diagnostics must include the outer sync recovery boundary. The
+    // internal sync validator intentionally checks only canonical health while
+    // its own intent is active and the writer lock is still held.
+    if (existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+      report.healthy = false;
+      report.recovery = { pending: (report.recovery?.pending ?? 0) + 1 };
+    }
+    return report;
   }
 
   private async healthReport(permission: 'maintain' | 'sync'): Promise<DoctorReport> {
@@ -737,7 +729,7 @@ export class MemoryVault {
       this.scanDirectory<MemoryMeta>('wiki', permission),
       this.git.integrity(),
       pendingTransactionCount(this.root),
-      this.verifyEvidenceIntegrity(),
+      this.scanDirectory<EvidenceMeta>('evidence', permission),
     ]);
     const evidence = evidenceIntegrity.documents;
     const candidates = candidateScan.documents;
@@ -806,13 +798,13 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
-    const config = await this.config();
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
-      await this.recoverPendingLocked();
+      await this.recoverPendingLocked(permission);
+      const config = await this.config();
       const evidenceIntegrity = await this.verifyEvidenceIntegrity(options);
       if (evidenceIntegrity.errors.length > 0) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Immutable evidence failed integrity validation', { errors: evidenceIntegrity.errors.slice(0, 20) });
@@ -854,7 +846,7 @@ export class MemoryVault {
       } catch (error) {
         this.activeTransaction = null;
         this.activePermission = null;
-        if (!ready) await withoutCancellation(() => transaction.rollback());
+        if (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit)) await withoutCancellation(() => transaction.rollback());
         throw error;
       }
     }), resourceIds);
@@ -897,7 +889,9 @@ export class MemoryVault {
       // Sync may still roll this back; recovery reconciliation is already durable.
       if (permission === 'maintain') recordCommit('recover', commit);
     } catch (error) {
-      if (!ready) await withoutCancellation(() => transaction.rollback());
+      // The outer sync intent must restore the original Git snapshot before
+      // deleting this journal. Retain it if that restoration cannot finish.
+      if (permission === 'maintain' && !ready) await withoutCancellation(() => transaction.rollback());
       throw error;
     } finally {
       this.activeTransaction = null;
@@ -910,23 +904,35 @@ export class MemoryVault {
     await writeText(this.erasureIntentPath(intent.id), `${JSON.stringify(intent, null, 2)}\n`);
   }
 
-  private async recoverPendingLocked(): Promise<RecoveryResult> {
+  private async recoverPendingLocked(permission: Permission): Promise<RecoveryResult> {
     throwIfCancelled();
     return withoutCancellation(async () => {
+      const snapshot = await this.git.pendingSyncSnapshot();
+      if (snapshot) {
+        // A rejected merge can contain invalid JSON, a future schema, a missing
+        // config, or another tenant. Authorize against the verified original
+        // commit before performing any recovery mutation.
+        let tenantId: string;
+        try {
+          const original = JSON.parse(await this.git.run(['show', `${snapshot.originalHead}:agent-memory.json`])) as Record<string, unknown>;
+          const tenant = original.version === 1 ? original.vaultId : original.version === 2 ? original.tenantId : undefined;
+          if (typeof tenant !== 'string' || !tenant) throw new Error('Original snapshot has no supported tenant identity');
+          tenantId = tenant;
+        } catch (error) {
+          throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Cannot verify the original synchronization tenant');
+        }
+        authorize(this.principal, permission, { tenantId });
+        await this.git.recoverSync({ confirmPush: async () => authorize(this.principal, 'sync', { tenantId }) });
+        this.cachedSearchIndex?.value.invalidate();
+        this.cachedSearchIndex = null;
+      }
+      const config = await this.config();
+      authorize(this.principal, permission, { tenantId: config.tenantId });
       const result = await recoverTransactions(this.root, this.git, this.journalKey);
       for (const commit of result.commits) recordCommit('recover', commit);
       await this.recoverErasureIntentsLocked();
       return result;
     });
-  }
-
-  private async remoteConfigMatches(expected: VaultConfig['remote']): Promise<boolean> {
-    try {
-      const actual = (await readVaultConfig(this.root)).remote;
-      return JSON.stringify(actual) === JSON.stringify(expected);
-    } catch {
-      return false;
-    }
   }
 
   private async recoverErasureIntentsLocked(): Promise<string[]> {
@@ -1387,6 +1393,21 @@ function constrainToEvidence(
 function candidateBody(meta: CandidateMeta, statement: string): string {
   const evidence = meta.evidence.length ? meta.evidence.map((path) => `- [${basename(path)}](${relativeLink(`candidates/${meta.id}.md`, path)})`) : ['- _No evidence attached; manual review required._'];
   return [`# Candidate: ${meta.key}`, '', statement.trim(), '', '## Evidence', '', ...evidence].join('\n');
+}
+
+// Duplicate statements can have differently classified derivations. Preserve
+// the strongest restrictions before serializing any newly attached provenance.
+function mergeDerivation(memory: MarkdownDocument<MemoryMeta>, candidate: MarkdownDocument<CandidateMeta>): void {
+  const statement = candidateStatement(memory.body);
+  memory.meta.sensitivity = sensitivities[Math.max(
+    sensitivities.indexOf(memory.meta.sensitivity), sensitivities.indexOf(candidate.meta.sensitivity),
+  )]!;
+  memory.meta.evidence = unique([...memory.meta.evidence, ...candidate.meta.evidence]);
+  memory.meta.conditions = unique([...memory.meta.conditions, ...candidate.meta.conditions]);
+  memory.meta.tags = unique([...memory.meta.tags, ...candidate.meta.tags]);
+  const expirations = [memory.meta.expiresAt, candidate.meta.expiresAt].filter((value): value is string => Boolean(value));
+  if (expirations.length) memory.meta.expiresAt = expirations.sort((a, b) => Date.parse(a) - Date.parse(b))[0]!;
+  memory.body = memoryBody(memory.meta, statement, memory.path);
 }
 
 function memoryBody(meta: MemoryMeta, statement: string, memoryPath: string): string {

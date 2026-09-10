@@ -37,6 +37,16 @@ export interface RemoteStatus {
   lastSuccessfulSync: string | null;
 }
 
+interface SyncIntent {
+  version: 1;
+  phase: 'prepared' | 'pushing' | 'accepted';
+  originalHead: string;
+  originalSyncState: string | null;
+  baselineJournals: string[];
+  push?: { url: string; branch: string; head: string };
+  lastSuccessfulSync?: string;
+}
+
 export class GitStore {
   readonly gitDir: string;
 
@@ -46,7 +56,11 @@ export class GitStore {
 
   async run(args: string[], options: GitRunOptions = {}): Promise<string> {
     const signal = options.signal ?? operationSignal();
-    if (signal?.aborted) throw cancellationError();
+    if (signal?.aborted) {
+      const error = cancellationError();
+      if (args[0] === 'push') throw new AgentMemoryError(error.code, error.message, { ...error.safeDetails, pushNotStarted: true });
+      throw error;
+    }
     const timeoutMs = gitTimeout(options.timeoutMs);
     const actor = options.actor;
     const email = actor?.email ?? `${safeIdentity(actor?.id ?? 'system')}@agent-memory.local`;
@@ -68,11 +82,16 @@ export class GitStore {
     } catch (error) {
       // Interrupted probes must not masquerade as absent refs or remotes.
       if (error instanceof AgentMemoryError) throw error;
-      const details = error as { code?: string; stderr?: string; message?: string };
+      const details = error as { code?: string; stderr?: string; stdout?: string; message?: string };
       if (details.code === 'ENOENT') throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Git executable was not found; install Git and ensure it is on PATH');
       if (options.allowFailure) return '';
-      const code = ['fetch', 'push', 'remote'].includes(args[0] ?? '') ? 'REMOTE_TRANSPORT' : 'GIT_OPERATION_FAILED';
-      throw new AgentMemoryError(code, redactSecrets(details.stderr?.trim() || details.message || 'Git operation failed'));
+      const code = ['fetch', 'push', 'remote', 'ls-remote'].includes(args[0] ?? '') ? 'REMOTE_TRANSPORT' : 'GIT_OPERATION_FAILED';
+      // Only a normally exited, single-ref porcelain rejection proves that the
+      // remote did not accept this push. A timeout or lost response does not.
+      const refspec = args.at(-1);
+      const rejected = args[0] === 'push' && args.includes('--porcelain') && refspec?.startsWith('HEAD:refs/heads/')
+        && details.stdout?.split('\n').some((line) => line.startsWith(`!\t${refspec}\t`));
+      throw new AgentMemoryError(code, redactSecrets(details.stderr?.trim() || details.message || 'Git operation failed'), rejected ? { pushRejected: true } : undefined);
     }
   }
 
@@ -95,10 +114,32 @@ export class GitStore {
     }
     if (availablePaths.length === 0) return null;
     await this.run(['add', '-A', '--', ...availablePaths], { actor });
-    const hasChanges = await this.hasStagedChanges();
-    if (!hasChanges) return null;
-    await this.run(['commit', '--no-gpg-sign', '-m', message], { actor });
-    return this.run(['rev-parse', 'HEAD']);
+    const changedPaths = await this.stagedChanges(availablePaths);
+    if (changedPaths.length === 0) return null;
+    const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
+    // A scoped add does not scope a normal commit: unrelated staged changes
+    // must stay in the caller's index, including when a commit is retried.
+    try {
+      await this.run(['commit', '--only', '--no-gpg-sign', '-m', message, '--', ...changedPaths], { actor });
+    } catch (error) {
+      // A hook can time out after Git has advanced the ref. Settle that boundary
+      // before a transaction decides whether it can restore its original files.
+      let currentHead: string;
+      try {
+        currentHead = await withoutCancellation(() => this.run(['rev-parse', '--verify', 'HEAD']));
+      } catch {
+        // A missing outcome probe is not proof that the ref never advanced.
+        // Keep ready recovery state instead of undoing a possibly durable write.
+        throw new AgentMemoryError('GIT_OPERATION_FAILED', 'Git commit outcome is unknown; recovery is required', { commitOutcomeUnknown: true });
+      }
+      if (currentHead && currentHead !== originalHead) throw committedGitError(error, currentHead);
+      throw error;
+    }
+    try {
+      return await this.run(['rev-parse', 'HEAD']);
+    } catch (error) {
+      throw committedGitError(error);
+    }
   }
 
   async configureRemote(name: string, url: string): Promise<void> {
@@ -143,9 +184,23 @@ export class GitStore {
     branch: string,
     options: { push?: boolean; actor?: Actor; reconcile?: () => Promise<void>; validate?: () => Promise<void> } = {},
   ): Promise<RemoteStatus & { pushed: boolean; merged: boolean }> {
+    if (await this.pendingSyncSnapshot()) {
+      throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'A previous synchronization requires recovery before another sync can start');
+    }
     const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
+    if (!originalHead) throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronization requires an existing local commit');
     const syncStatePath = join(this.root, '.amem', 'sync-state.json');
     const originalSyncState = existsSync(syncStatePath) ? await readFile(syncStatePath, 'utf8') : null;
+    const intent: SyncIntent = {
+      version: 1,
+      phase: 'prepared',
+      originalHead,
+      originalSyncState,
+      baselineJournals: await this.transactionJournals(),
+    };
+    // This outer record owns the whole merge, including reconciliation journals.
+    // It must exist before Git can replace the configuration or tracked files.
+    await this.persistSyncIntent(intent);
     let pushed = false;
     try {
       const before = await this.remoteStatus(name, branch, true);
@@ -173,16 +228,46 @@ export class GitStore {
       await options.validate?.();
       if (options.push) {
         const pushedHead = await this.run(['rev-parse', 'HEAD']);
-        await this.run(['push', name, `HEAD:${branch}`], options.actor ? { actor: options.actor } : {});
+        const pushUrls = (await this.run(['remote', 'get-url', '--push', '--all', name])).split('\n').filter(Boolean);
+        if (pushUrls.length !== 1) throw new AgentMemoryError('REMOTE_INVALID', 'Recoverable synchronization requires exactly one push destination');
+        const url = pushUrls[0]!;
+        validateRemote(name, url);
+        // Resolve the actual push endpoint before crossing the external commit
+        // boundary. A missing destination is still a safe local rollback.
+        await this.run(['ls-remote', '--refs', url, `refs/heads/${branch}`]);
+        intent.phase = 'pushing';
+        intent.push = { url, branch, head: pushedHead };
+        await this.persistSyncIntent(intent);
+        try {
+          await this.run(['push', '--porcelain', name, `HEAD:refs/heads/${branch}`], options.actor ? { actor: options.actor } : {});
+        } catch (error) {
+          if (error instanceof AgentMemoryError && (error.safeDetails?.pushRejected === true || error.safeDetails?.pushNotStarted === true)) {
+            // Persist the confirmed rejection before attempting compensation;
+            // a failed reset must remain locally recoverable after restart.
+            intent.phase = 'prepared';
+            delete intent.push;
+            await this.persistSyncIntent(intent);
+          }
+          throw error;
+        }
         pushed = true;
         recordCommit('remote_sync', pushedHead);
+        await withoutCancellation(async () => {
+          intent.phase = 'accepted';
+          intent.lastSuccessfulSync = nowIso();
+          await this.persistSyncIntent(intent);
+        });
       }
       const finish = async () => {
         // Push updates the tracking ref. Avoid a second network operation after
         // the externally committed step, which could hide a successful push.
         const status = await this.remoteStatus(name, branch, !pushed);
         const lastSuccessfulSync = nowIso();
+        intent.phase = 'accepted';
+        intent.lastSuccessfulSync = lastSuccessfulSync;
+        await this.persistSyncIntent(intent);
         await writeText(syncStatePath, `${JSON.stringify({ lastSuccessfulSync }, null, 2)}\n`);
+        await rm(this.syncIntentPath(), { force: true });
         return { ...status, lastSuccessfulSync, pushed, merged };
       };
       return pushed ? await withoutCancellation(finish) : await finish();
@@ -190,16 +275,39 @@ export class GitStore {
       // A successful push is externally committed and cannot be rolled back here.
       // Keep the matching local revision so a retry is idempotent and does not
       // manufacture a local/remote divergence.
-      if (!pushed) await withoutCancellation(() => this.restoreSyncSnapshot(originalHead, syncStatePath, originalSyncState));
-      if (pushed) {
+      if (!pushed && intent.phase === 'prepared') {
+        try {
+          await withoutCancellation(() => this.restoreSyncSnapshot(intent));
+        } catch (rollbackError) {
+          throw new AgentMemoryError(
+            error instanceof AgentMemoryError ? error.code : 'REMOTE_CONFLICT',
+            error instanceof AgentMemoryError ? error.message : 'Local synchronized state failed vault validation',
+            {
+              ...(error instanceof AgentMemoryError ? error.safeDetails : {}),
+              recoveryRequired: true,
+              rollbackCause: redactSecrets(rollbackError instanceof Error ? rollbackError.message : String(rollbackError)),
+            },
+          );
+        }
+      }
+      if (pushed || intent.phase === 'accepted') {
         throw new AgentMemoryError(
           error instanceof AgentMemoryError ? error.code : 'GIT_OPERATION_FAILED',
           error instanceof AgentMemoryError ? error.message : 'Git push completed, but local synchronization bookkeeping failed',
           {
             ...(error instanceof AgentMemoryError ? error.safeDetails : { cause: redactSecrets(error instanceof Error ? error.message : String(error)) }),
-            pushed: true,
+            pushed,
             completed: true,
           },
+        );
+      }
+      if (intent.phase === 'pushing') {
+        // An interrupted transport may have updated the remote ref. Preserve
+        // both local state and intent until an authorized recovery confirms it.
+        throw new AgentMemoryError(
+          error instanceof AgentMemoryError ? error.code : 'REMOTE_TRANSPORT',
+          error instanceof AgentMemoryError ? error.message : 'Git push outcome is unknown; recovery is required',
+          { ...(error instanceof AgentMemoryError ? error.safeDetails : {}), pushOutcomeUnknown: true, recoveryRequired: true },
         );
       }
       if (error instanceof AgentMemoryError) throw error;
@@ -209,14 +317,91 @@ export class GitStore {
     }
   }
 
-  private async restoreSyncSnapshot(head: string, syncStatePath: string, syncState: string | null): Promise<void> {
-    await this.run(['merge', '--abort'], { allowFailure: true });
-    if (head) {
-      await this.run(['reset', '--hard', head], { allowFailure: true });
-      await this.run(['clean', '-fd', '--', ...trackedPaths], { allowFailure: true });
+  async pendingSyncSnapshot(): Promise<{ originalHead: string } | null> {
+    const intent = await this.readSyncIntent();
+    return intent ? { originalHead: intent.originalHead } : null;
+  }
+
+  async recoverSync(options: { confirmPush?: () => Promise<void> } = {}): Promise<void> {
+    const intent = await this.readSyncIntent();
+    if (!intent) return;
+    if (intent.phase === 'pushing') {
+      if (!options.confirmPush) throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'The pending push requires authorized remote confirmation');
+      await options.confirmPush();
+      const push = intent.push!;
+      const remote = await this.run(['ls-remote', '--refs', push.url, `refs/heads/${push.branch}`]);
+      const remoteHead = remote.split(/\s+/)[0];
+      let accepted = remoteHead === push.head;
+      if (!accepted && remoteHead && /^[a-f0-9]{40,64}$/.test(remoteHead)) {
+        // A later remote commit can still prove the attempted push was accepted.
+        await this.run(['fetch', '--no-tags', push.url, `refs/heads/${push.branch}`]);
+        try { await this.run(['merge-base', '--is-ancestor', push.head, 'FETCH_HEAD']); accepted = true; }
+        catch (error) { if (interruptedGit(error)) throw error; }
+      }
+      if (!accepted) throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'The remote does not confirm the pending push; its local state and recovery intent were retained', { pushOutcomeUnknown: true });
+      intent.phase = 'accepted';
+      intent.lastSuccessfulSync = nowIso();
+      await this.persistSyncIntent(intent);
     }
-    if (syncState === null) await rm(syncStatePath, { force: true });
-    else await writeText(syncStatePath, syncState);
+    if (intent.phase === 'prepared') await this.restoreSyncSnapshot(intent);
+    else {
+      await writeText(join(this.root, '.amem', 'sync-state.json'), `${JSON.stringify({ lastSuccessfulSync: intent.lastSuccessfulSync }, null, 2)}\n`);
+      await rm(this.syncIntentPath(), { force: true });
+    }
+  }
+
+  private syncIntentPath(): string {
+    return join(this.root, '.amem', 'sync-intent.json');
+  }
+
+  private async persistSyncIntent(intent: SyncIntent): Promise<void> {
+    await writeText(this.syncIntentPath(), `${JSON.stringify(intent, null, 2)}\n`);
+  }
+
+  private async readSyncIntent(): Promise<SyncIntent | null> {
+    if (!existsSync(this.syncIntentPath())) return null;
+    try {
+      const value = JSON.parse(await readFile(this.syncIntentPath(), 'utf8')) as SyncIntent;
+      if (value.version !== 1 || !['prepared', 'pushing', 'accepted'].includes(value.phase)
+        || typeof value.originalHead !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.originalHead)
+        || (value.originalSyncState !== null && typeof value.originalSyncState !== 'string')
+        || !Array.isArray(value.baselineJournals) || value.baselineJournals.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9._-]+\.json$/.test(name))) {
+        throw new Error('Malformed synchronization snapshot');
+      }
+      if (value.push !== undefined) {
+        validateRemote('recovery', value.push.url);
+        validateBranch(value.push.branch);
+        if (!/^[a-f0-9]{40,64}$/.test(value.push.head)) throw new Error('Malformed pending push');
+      }
+      if (value.phase === 'pushing' && !value.push) throw new Error('Missing pending push');
+      if (value.phase === 'accepted' && (typeof value.lastSuccessfulSync !== 'string' || !Number.isFinite(Date.parse(value.lastSuccessfulSync)))) throw new Error('Missing accepted sync time');
+      await this.run(['cat-file', '-e', `${value.originalHead}^{commit}`]);
+      return value;
+    } catch (error) {
+      throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Invalid synchronization recovery intent', {
+        cause: redactSecrets(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+
+  private async transactionJournals(): Promise<string[]> {
+    const directory = join(this.root, '.amem', 'transactions');
+    return existsSync(directory) ? (await readdir(directory)).filter((name) => name.endsWith('.json')).sort() : [];
+  }
+
+  private async restoreSyncSnapshot(intent: SyncIntent): Promise<void> {
+    await this.run(['merge', '--abort'], { allowFailure: true });
+    await this.run(['reset', '--hard', intent.originalHead]);
+    await this.run(['clean', '-fd', '--', ...trackedPaths]);
+    const syncStatePath = join(this.root, '.amem', 'sync-state.json');
+    if (intent.originalSyncState === null) await rm(syncStatePath, { force: true });
+    else await writeText(syncStatePath, intent.originalSyncState);
+    // Only the enclosing sync's journals are obsolete. Keep the outer intent
+    // until every cleanup succeeds so crashes cannot replay rejected contents.
+    for (const name of await this.transactionJournals()) {
+      if (!intent.baselineJournals.includes(name)) await rm(join(this.root, '.amem', 'transactions', name), { force: true });
+    }
+    await rm(this.syncIntentPath(), { force: true });
   }
 
   private async assertEvidenceAppendOnly(originalHead: string): Promise<void> {
@@ -253,8 +438,10 @@ export class GitStore {
     }
   }
 
-  private async hasStagedChanges(): Promise<boolean> {
-    return Boolean(await this.run(['diff', '--cached', '--name-only']));
+  private async stagedChanges(paths: string[]): Promise<string[]> {
+    // Resolve directories to changed files: Git cannot commit an empty directory
+    // pathspec. Disable rename folding so both sides stay in the scoped commit.
+    return (await this.run(['diff', '--cached', '--name-only', '--no-renames', '-z', '--', ...paths])).split('\0').filter(Boolean);
   }
 
   async history(limit = 20, path?: string): Promise<Array<Record<string, string>>> {
@@ -272,6 +459,14 @@ export class GitStore {
         return { sha, date, author, email, subject };
       });
   }
+}
+
+function committedGitError(error: unknown, commit?: string): AgentMemoryError {
+  return new AgentMemoryError(
+    error instanceof AgentMemoryError ? error.code : 'GIT_OPERATION_FAILED',
+    error instanceof AgentMemoryError ? error.message : redactSecrets(error instanceof Error ? error.message : String(error)),
+    { ...(error instanceof AgentMemoryError ? error.safeDetails : {}), commitCreated: true, ...(commit ? { commit } : {}) },
+  );
 }
 
 function gitTimeout(explicit?: number): number {
@@ -314,7 +509,10 @@ function executeGit(
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
       if (failure) reject(failure);
-      else if (exitCode !== 0) reject(Object.assign(new Error(`Git operation failed with exit code ${exitCode ?? 'unknown'}`), { stderr: Buffer.concat(stderr).toString('utf8') }));
+      else if (exitCode !== 0) reject(Object.assign(new Error(`Git operation failed with exit code ${exitCode ?? 'unknown'}`), {
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      }));
       else resolve(Buffer.concat(stdout).toString('utf8'));
     };
     const stop = (reason: Error) => {

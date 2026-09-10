@@ -37,9 +37,11 @@
 
 ---
 
-MemoBranch 是一个面向 AI Agent 的生产级、本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
+MemoBranch 是一个面向 AI Agent、面向生产场景的本地优先长期记忆层。它把对话中的证据、候选知识和正式记忆组织成一套可人工阅读的 Markdown Wiki，并用 Git 提供版本、归因、回滚与跨机器同步。
 
-它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。生产版采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流完成。
+它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。开发采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流；各能力是否验收，以对应版本的验证记录为准。
+
+> **核心设计约束：** LLM Wiki 以 [Karpathy 的方法](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)为准：持续编译和维护有来源、互相链接的知识，而不是仅做向量检索。详见[核心设计与实现差距](docs/design/llm-wiki-core.md)。当前已实现原子记忆基础，完整的跨来源 Wiki 编译、查询成果回存和语义 Lint 尚未验收；不将设计目标当成已交付功能。
 
 > [!IMPORTANT]
 > LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索、DeepSeek Harness 与 MCP 接入仍然可以完整工作。
@@ -480,12 +482,14 @@ curl http://127.0.0.1:9464/metrics
 
 1. 停止所有写入者和守护进程，保留完整 vault 与 `.amem/` 副本。
 2. 运行 `amem doctor --root <vault> --json`，记录配置、Git、索引和事务状态。
-3. 运行 `amem recover --root <vault> --json`；`writing` 事务回滚，`ready` 事务完整重放并提交。
+3. 运行 `amem recover --root <vault> --json`；先恢复未完成的同步快照，再回滚 `writing` 事务或重放 `ready` 事务。恢复未成功前，后续写入会被阻止。
 4. 运行 `amem reindex --root <vault> --json`，从 Markdown 重建缺失或损坏索引。
 5. 运行 `amem remote status --root <vault> --json`；出现 divergence 时人工检查，不绕过保护强推。
 6. 再次运行 `doctor`，仅在 `healthy: true` 后恢复服务和自动同步。
 
 Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.amem/git`，不要删除工作树中的 Markdown 权威数据。master key 或 wrapped key 丢失时系统会失败关闭，请从受控密钥备份恢复。
+
+同步明确失败时会恢复原 HEAD、受管文件和同步状态；重置或清理失败会保留 `.amem/sync-intent.json`，排除占用或文件系统故障后可重试恢复。远端已接收的推送不回滚。如果传输中断导致结果未知，恢复还需 `sync` 权限来确认远端包含该提交；仅有 `maintain` 权限不会访问远端。未能确认时保持阻塞，请检查远端和备份，不要直接删除恢复记录或强推。为保证这一边界，一次同步只支持一个推送目的地。
 
 </details>
 
@@ -521,18 +525,21 @@ amem config migrate --root ~/my-agent-memory --json
 ```bash
 npm run check
 npm pack --dry-run
+npm run test:package
 npm audit --omit=dev
 OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 ```
 
-| Gate | 当前状态 |
-| --- | :---: |
-| TypeScript build | ✅ PASS |
-| CLI / MCP / DeepSeek Harness / Vault tests | ✅ 63 / 63 |
-| 1,000 文档索引性能门禁 | ✅ PASS |
-| npm package dry-run | ✅ PASS |
-| 依赖漏洞审计 | ✅ 0 known vulnerabilities |
-| OpenSpec strict validation | ✅ 6 / 6 specs |
+| Gate | 验证要求 |
+| --- | --- |
+| TypeScript build | 严格编译通过 |
+| CLI / MCP / DeepSeek Harness / Vault tests | 目标提交完整套件通过；覆盖 `main` / `master` 默认分支 |
+| 1,000 文档索引性能门禁 | 索引与检索符合测试预算 |
+| 安装包 | 打包后安装到独立消费者，验证导出、Bundle 和真实 Harness 调用 |
+| 依赖漏洞审计 | 发布时重新运行生产依赖审计 |
+| OpenSpec strict validation | 规格、变更与验收记录保持一致 |
+
+结果绑定具体提交与环境，不能用这里的静态表格代替最新 [GitHub CI](https://github.com/sens-io/memobranch/actions) 或独立审查。
 
 测试覆盖租户隔离、策略化加密与迁移、恢复日志和 embedding 隔离、密码学擦除、权威索引复核、完整模式与跨文档引用、符号链接拒绝、证据不可变性、推送前后失败窗口、并发锁/租约/指标、事务回滚与重放、冲突闭环、CJK 检索、provider 边界，以及维护服务端点与优雅关闭。
 
@@ -548,6 +555,8 @@ OPENSPEC_TELEMETRY=0 openspec validate --all --strict
 
 ## 🙏 致谢
 
+- [Karpathy — LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：持久增量知识编译与 Ingest / Query / Lint 核心方法。
+- [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki)：Wiki 工作流与验收方法的实现参考；未复制其源码。
 - [OpenKnowledge](https://github.com/inkeep/open-knowledge)：Git 驱动的本地 Markdown / LLM Wiki 架构灵感。
 - [OpenSpec](https://github.com/Fission-AI/OpenSpec)：规格驱动的生产开发与归档流程。
 - [Model Context Protocol](https://modelcontextprotocol.io/)：Agent 与记忆服务之间的标准工具接口。

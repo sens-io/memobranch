@@ -757,7 +757,7 @@ test('failed remote configuration restores Git and tracked configuration togethe
   const vault = await freshVault();
   const remote = await mkdtemp(join(tmpdir(), 'memobranch-config-remote-'));
   roots.push(remote);
-  await exec('git', ['init', '--bare', remote]);
+  await exec('git', ['init', '--bare', '--initial-branch=main', remote]);
   const configure = vault.git.configureRemote.bind(vault.git);
   vault.git.configureRemote = async (name, url) => {
     await configure(name, url);
@@ -848,7 +848,7 @@ async function remoteFixture(): Promise<{ vault: MemoryVault; remote: string; cl
   const cloneParent = await mkdtemp(join(tmpdir(), 'memobranch-audit-clone-'));
   roots.push(cloneParent);
   const clone = join(cloneParent, 'clone');
-  await exec('git', ['clone', remote, clone]);
+  await exec('git', ['clone', '--branch', 'main', remote, clone]);
   await exec('git', ['config', 'user.name', 'Audit remote'], { cwd: clone });
   await exec('git', ['config', 'user.email', 'audit@example.test'], { cwd: clone });
   return { vault, remote, clone };

@@ -16,16 +16,37 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 20
+            default-branch: master
+          - os: ubuntu-latest
+            node: 22
+            default-branch: main
+          - os: macos-latest
+            node: 22
+            default-branch: main
+          - os: macos-latest
+            node: 22
+            default-branch: master
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: ${{ matrix.default-branch }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run check
       - run: npm audit --omit=dev
       - run: OPENSPEC_TELEMETRY=0 npx --yes @fission-ai/openspec@1.0.2 validate --all --strict
       - run: npm pack --dry-run
+      - run: npm run test:package
