@@ -94,6 +94,7 @@ export class MemoryVault {
       config: () => this.config(),
       read: (directory, permission) => this.readDirectory<Record<string, unknown>>(directory, permission),
       scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
+      catalogMatches: () => this.wikiCatalogMatches(),
       sign: (value) => new WikiProof(this.root).sign(value),
       verify: (value, proof) => new WikiProof(this.root).verify(value, proof),
       write: (document) => this.writeDocument(document),
@@ -785,9 +786,9 @@ export class MemoryVault {
     const candidates = candidateScan.documents;
     const memories = memoryScan.documents.filter((document) => document.meta.type === 'memory');
     const documentErrors = [...candidateScan.errors, ...memoryScan.errors];
-    if (existsSync(join(this.root, 'wiki', 'pages'))) {
+    if (existsSync(join(this.root, 'wiki', 'pages')) || existsSync(join(this.root, 'wiki', '.meta')) || existsSync(join(this.root, 'WIKI.md'))) {
       const wikiIssues = await this.wikiEngine().structuralIssues(permission);
-      const fatal = new Set(['invalid-document', 'missing-source', 'unavailable-source', 'unavailable-link', 'unavailable-rules', 'invalid-restrictions']);
+      const fatal = new Set(['invalid-document', 'missing-source', 'unavailable-source', 'unavailable-link', 'unavailable-rules', 'invalid-restrictions', 'catalog-mismatch']);
       documentErrors.push(...wikiIssues.filter((item) => fatal.has(item.kind)).map((item) => `Wiki ${item.kind}: ${item.message}`));
     }
     const managedDocuments: Array<MarkdownDocument<object>> = [...evidence, ...candidates, ...memoryScan.documents];
@@ -1223,6 +1224,23 @@ export class MemoryVault {
     if (wikiDocuments.some((document) => ['wiki-page', 'wiki-rules'].includes(String(document.meta.type)))) {
       const evidenceDocuments = await this.readProjectionDirectory<Record<string, unknown>>('evidence');
       await this.writeManaged('WIKI.md', renderPublicWikiCatalog([...wikiDocuments, ...evidenceDocuments]));
+    }
+  }
+
+  private async wikiCatalogMatches(): Promise<boolean> {
+    try {
+      const wiki = await this.readProjectionDirectory<Record<string, unknown>>('wiki');
+      const path = resolveInside(this.root, 'WIKI.md');
+      const expected = wiki.some((document) => ['wiki-page', 'wiki-rules'].includes(String(document.meta.type)));
+      if (!existsSync(path)) return !expected;
+      const info = await lstat(path);
+      if (!info.isFile() || info.isSymbolicLink()) return false;
+      const evidence = await this.readProjectionDirectory<Record<string, unknown>>('evidence');
+      return await readFile(path, 'utf8') === renderPublicWikiCatalog([...wiki, ...evidence]);
+    } catch {
+      throwIfCancelled();
+      // Diagnostics contain neither the stored catalog text nor private metadata.
+      return false;
     }
   }
 

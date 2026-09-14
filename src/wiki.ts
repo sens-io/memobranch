@@ -2,12 +2,12 @@ import { posix } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError } from './errors.js';
 import type { LlmClient } from './llm.js';
-import { extractMarkdownLinks } from './markdown.js';
+import { wikiLocalLinks } from './wiki-links.js';
 import { throwIfCancelled } from './operation.js';
 import { authorize, type Permission, type Principal } from './policy.js';
 import { scopes, sensitivities, type EvidenceMeta, type MarkdownDocument, type MemoryMeta, type Scope, type SearchHit, type Sensitivity, type VaultConfig } from './types.js';
 import { nowIso, sha256, unique } from './utils.js';
-import { assertWikiDocument, wikiPageDraftSchema, wikiPlanSchema, wikiQueryResultSchema, wikiPageId, wikiPagePath, wikiReceiptId, wikiRulesId } from './wiki-schema.js';
+import { assertWikiDocument, builtinWikiRuleId, wikiPageDraftSchema, wikiPlanSchema, wikiQueryResultSchema, wikiPageId, wikiPagePath, wikiReceiptId, wikiRulesId } from './wiki-schema.js';
 import type { WikiCatalogEntry, WikiCitation, WikiLintIssue, WikiLintResult, WikiPageDraft, WikiPageMeta, WikiPlan, WikiQueryResult, WikiReceiptMeta, WikiRulesMeta } from './wiki-types.js';
 
 type Document = MarkdownDocument<Record<string, unknown>>;
@@ -22,6 +22,7 @@ export interface WikiPort {
   config(): Promise<VaultConfig>;
   read(directory: 'wiki' | 'evidence', permission: Permission): Promise<Document[]>;
   scan(directory: 'wiki' | 'evidence', permission: Permission): Promise<{ documents: Document[]; errors: string[] }>;
+  catalogMatches(): Promise<boolean>;
   sign(value: object): Promise<string>;
   verify(value: object, proof: string): Promise<void>;
   write(document: MarkdownDocument<object>): Promise<void>;
@@ -30,6 +31,7 @@ export interface WikiPort {
 }
 
 interface State {
+  sourceIds: string[];
   permission: Permission;
   config: VaultConfig;
   documents: Map<string, Document>;
@@ -121,6 +123,7 @@ export class WikiEngine {
     const input = checked(z.object({ evidenceIds: z.array(z.string().min(1).max(100)).min(1).max(100).refine((ids) => unique(ids).length === ids.length), apply: z.boolean().optional(), maxPages: maxPagesSchema.optional() }).strict(), options);
     if (input.apply) authorize(this.port.principal, 'review');
     const state = await this.load('write');
+    state.sourceIds = input.evidenceIds;
     const sources = input.evidenceIds.map((id) => required(state.evidence.get(id), 'Wiki source is unavailable'));
     const receiptId = wikiReceiptId(input.evidenceIds);
     const signature = this.signature(state, input.evidenceIds);
@@ -151,10 +154,12 @@ export class WikiEngine {
     await this.verify(plan, 'plan');
     const result = await this.port.mutate('review', 'wiki-apply', async () => {
       const state = await this.load('review');
+      state.sourceIds = plan.sourceIds;
       if (state.config.vaultId !== plan.vaultId) fail('Wiki plan belongs to another vault');
       // Successful replay is checked against current canonical state, not a runtime cache.
       if (plan.receiptId && await this.completed(state, plan.receiptId, this.signature(state, plan.sourceIds), sha256(stable(plan)))) return [];
       if (plan.query && state.eligible.get(plan.query.key)?.meta.originHash === plan.query.hash) return [];
+      this.assertConfig(state, plan.configHash);
       this.assertSnapshot(state, plan.snapshot);
       const pages = this.prepare(state, plan, 'review');
       const changed = pages.filter((page) => {
@@ -191,7 +196,7 @@ export class WikiEngine {
     const input = checked(z.object({ maxPages: maxPagesSchema.optional() }).strict(), options);
     const keys = await this.navigate(state, { operation: 'query', question: normalized }, input.maxPages ?? 20);
     const generation = { vaultId: state.config.vaultId, model: this.port.llm.model, at: nowIso() };
-    if (!keys.length) return this.seal({ question: normalized, answer: 'No authorized supporting Wiki pages were found.', citations: [], uncertainty: ['No supporting Wiki pages were selected.'], snapshot: this.snapshot(state), ruleIds: state.rules.map((rule) => rule.meta.id), generation }, 'query');
+    if (!keys.length) return this.sealWithState(state, { question: normalized, answer: 'No authorized supporting Wiki pages were found.', citations: [], uncertainty: ['No supporting Wiki pages were selected.'], snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ruleVersions: ruleVersions(state), generation }, 'query');
     const result = checked(answerSchema, await this.request(state, 'query', { ...this.context(state, keys), question: normalized }));
     if (!result.citations.length) fail('A Wiki answer must cite pages that were actually read');
     const citations = result.citations.map((key) => {
@@ -199,7 +204,7 @@ export class WikiEngine {
       return citation(required(state.eligible.get(key), 'Wiki citation is unavailable'));
     });
     const uncertainty = unique([...result.uncertainty, ...citations.flatMap((item) => item.uncertainty)]);
-    return this.seal({ question: normalized, answer: result.answer, citations, uncertainty, snapshot: this.snapshot(state), ruleIds: state.rules.map((rule) => rule.meta.id), generation }, 'query');
+    return this.sealWithState(state, { question: normalized, answer: result.answer, citations, uncertainty, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ruleVersions: ruleVersions(state), generation }, 'query');
   }
 
   async file(value: unknown, options: { title: string; key?: string; pageType?: 'query' | 'comparison'; apply?: boolean }): Promise<{ plan: WikiPlan; commit: string | null }> {
@@ -214,14 +219,14 @@ export class WikiEngine {
     const query = { key: targetKey, hash: sha256(stable({ result, title: input.title, key: targetKey, pageType: input.pageType })), generation: result.generation };
     const existing = state.eligible.get(targetKey);
     const replay = existing?.meta.originHash === query.hash;
-    if (!replay) this.assertSnapshot(state, result.snapshot);
+    if (!replay) { this.assertSnapshot(state, result.snapshot); this.assertConfig(state, result.configHash); }
     if (!result.citations.length) fail('Filing requires actual supporting Wiki citations');
     const pages = result.citations.map((item) => {
       const page = required(state.eligible.get(item.key), 'Filed citation is unavailable');
       if (!replay && stable(citation(page)) !== stable(item)) fail('Filed citation no longer matches its canonical version');
       return page;
     });
-    if (stable([...result.ruleIds].sort()) !== stable(state.rules.map((rule) => rule.meta.id).sort())) fail('Filed result must retain the rules used for the answer');
+    if (stable([...result.ruleIds].sort()) !== stable(Object.keys(ruleVersions(state)).sort()) || stable(result.ruleVersions) !== stable(ruleVersions(state))) fail('Filed result must retain the rules used for the answer');
     const uncertainty = unique([...result.uncertainty, ...pages.flatMap((page) => page.meta.uncertainty), 'Generated analysis; not independent raw evidence.']);
     const draft: WikiPageDraft = {
       key: targetKey,
@@ -240,14 +245,16 @@ export class WikiEngine {
     const input = checked(z.object({ semantic: z.boolean().optional(), maxPages: maxPagesSchema.optional() }).strict(), options);
     const state = await this.load('maintain', true);
     const issues = [...state.issues];
+    if (!await this.port.catalogMatches()) issues.push(catalogIssue());
     const keys = [...state.eligible.keys()].sort();
     for (const page of state.eligible.values()) {
       if (page.meta.status === 'conflicted') issues.push(issue('contradiction', 'Page contains unresolved competing claims', page));
       if (!page.meta.links.length && !keys.some((key) => state.eligible.get(key)!.meta.links.includes(page.meta.key))) issues.push(issue('orphan', 'Page has no related-page connections', page));
       for (const [key, revision] of Object.entries(page.meta.dependencies)) if (state.pages.get(key)?.meta.revision !== revision) issues.push(issue('stale', 'A supporting page revision has changed', page));
-      for (const [id, revision] of Object.entries(page.meta.rules)) if (state.rules.find((rule) => rule.meta.id === id)?.meta.revision !== revision) issues.push(issue('stale', 'Operational Wiki rules have changed', page));
+      for (const [id, revision] of Object.entries(page.meta.rules)) if (ruleVersions(state)[id] !== revision) issues.push(issue('stale', 'Operational Wiki rules have changed', page));
     }
-    const base: WikiLintResult = { issues, semantic: input.semantic ? 'unavailable' : 'not-requested', plans: [], coverage: { pages: keys.length, evidence: state.evidence.size }, ruleVersions: Object.fromEntries(state.rules.map((rule) => [rule.meta.id, rule.meta.revision])) };
+    const base: WikiLintResult = { issues, semantic: input.semantic ? 'unavailable' : 'not-requested', plans: [], coverage: { pages: keys.length, evidence: state.evidence.size }, ruleVersions: ruleVersions(state) };
+    const structuralCount = issues.length;
     if (!input.semantic || !this.port.llm.configured) return base;
     try {
     const maximum = input.maxPages ?? 50;
@@ -257,7 +264,7 @@ export class WikiEngine {
       for (const key of suggestion.pageKeys) if (!keys.includes(key)) fail('Lint suggestion cites an unread page');
       const validEvidence = new Set(suggestion.pageKeys.flatMap((key) => state.eligible.get(key)!.meta.evidence.map((path) => state.documents.get(path)?.meta.id)));
       for (const id of suggestion.evidenceIds) if (!validEvidence.has(id)) fail('Lint suggestion cites unsupported evidence');
-      base.issues.push({ kind: suggestion.kind, message: suggestion.message, pageKeys: suggestion.pageKeys, evidenceIds: suggestion.evidenceIds });
+      base.issues.push({ kind: suggestion.kind, message: suggestion.message, pageKeys: suggestion.pageKeys, evidenceIds: suggestion.evidenceIds, pageVersions: Object.fromEntries(suggestion.pageKeys.map((key) => [key, state.eligible.get(key)!.meta.revision])) });
       if (suggestion.repairs) {
         const plan = await this.makePlan(state, 'repair', suggestion.repairs, keys, []);
         this.prepare(state, plan, 'maintain');
@@ -270,12 +277,15 @@ export class WikiEngine {
       base.semantic = error instanceof AgentMemoryError && error.code === 'DEPENDENCY_UNAVAILABLE' ? 'unavailable' : 'failed';
       base.semanticError = { code: error instanceof AgentMemoryError ? error.code : 'VALIDATION_FAILED', message: 'Semantic lint did not complete; structural results are still available.' };
       base.plans = [];
+      base.issues.splice(structuralCount);
     }
     return base;
   }
 
   async structuralIssues(permission: 'maintain' | 'sync'): Promise<WikiLintIssue[]> {
-    return (await this.load(permission, true)).issues;
+    const issues = (await this.load(permission, true)).issues;
+    if (!await this.port.catalogMatches()) issues.push(catalogIssue());
+    return issues;
   }
 
   async revoke(key: string, reason: string): Promise<{ commit: string | null }> {
@@ -318,7 +328,7 @@ export class WikiEngine {
     authorize(this.port.principal, permission, { tenantId: config.tenantId });
     const scans = tolerant ? await Promise.all([this.port.scan('wiki', permission), this.port.scan('evidence', permission)]) : [];
     const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission), ...await this.port.read('evidence', permission)];
-    const state: State = { permission, config, documents: new Map(), pages: new Map(), rules: [], evidence: new Map(), receipts: [], eligible: new Map(), issues: scans.flatMap((scan) => scan.errors.map(() => ({ kind: 'invalid-document', message: 'An authorized managed document failed schema or integrity validation; inspect doctor diagnostics.', pageKeys: [], evidenceIds: [] }))) };
+    const state: State = { sourceIds: [], permission, config, documents: new Map(), pages: new Map(), rules: [], evidence: new Map(), receipts: [], eligible: new Map(), issues: scans.flatMap((scan) => scan.errors.map(() => ({ kind: 'invalid-document', message: 'An authorized managed document failed schema or integrity validation; inspect doctor diagnostics.', pageKeys: [], evidenceIds: [], pageVersions: {} }))) };
     for (const document of documents) {
       state.documents.set(document.path, document);
       const type = document.meta.type;
@@ -326,7 +336,7 @@ export class WikiEngine {
         const evidence = document as unknown as Evidence;
         if (state.evidence.has(evidence.meta.id)) {
           if (!tolerant) fail('Duplicate Wiki evidence identity');
-          state.issues.push({ kind: 'invalid-document', message: 'Duplicate evidence identity', pageKeys: [], evidenceIds: [evidence.meta.id] });
+          state.issues.push({ kind: 'invalid-document', message: 'Duplicate evidence identity', pageKeys: [], evidenceIds: [evidence.meta.id], pageVersions: {} });
         }
         state.evidence.set(evidence.meta.id, evidence);
       } else if (type === 'wiki-rules') state.rules.push(document as unknown as Rules);
@@ -355,6 +365,10 @@ export class WikiEngine {
     if (!['active', 'conflicted'].includes(page.meta.status)) return 'withdrawn';
     if (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now()) return 'expired';
     if (!page.meta.evidence.length) return 'missing-source';
+    if (page.meta.pageType === 'source') {
+      const source = state.evidence.get(page.meta.key.slice(7));
+      if (!page.meta.key.startsWith('source:') || !source || !page.meta.evidence.includes(source.path)) return 'missing-source';
+    }
     const dependencies: Array<{ scope: Scope; sensitivity: Sensitivity }> = [];
     for (const path of page.meta.evidence) {
       const evidence = state.documents.get(path);
@@ -362,6 +376,7 @@ export class WikiEngine {
       dependencies.push(evidence.meta as unknown as EvidenceMeta);
     }
     for (const id of Object.keys(page.meta.rules)) {
+      if (id === builtinWikiRuleId && page.meta.rules[id] === 1) continue;
       const rule = state.rules.find((item) => item.meta.id === id);
       if (!rule) return 'unavailable-rules';
       dependencies.push(rule.meta);
@@ -375,12 +390,16 @@ export class WikiEngine {
       if (linked.meta.conditions.some((condition) => !page.meta.conditions.includes(condition)) || linked.meta.uncertainty.some((uncertainty) => !page.meta.uncertainty.includes(uncertainty))) return 'invalid-restrictions';
       if (linked.meta.expiresAt && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.parse(linked.meta.expiresAt))) return 'invalid-restrictions';
     }
-    for (const link of extractMarkdownLinks(page.body)) {
+    let links: string[];
+    try { links = wikiLocalLinks(page.body); } catch { return 'unavailable-link'; }
+    for (const link of links) {
       const path = posix.normalize(posix.join(posix.dirname(page.path), link));
       const target = state.documents.get(path);
       if (!target) return 'unavailable-link';
       if (target.meta.type === 'evidence' && !page.meta.evidence.includes(path)) return 'missing-source';
       if (target.meta.type === 'wiki-page' && !page.meta.links.includes(String(target.meta.key)) && !Object.hasOwn(page.meta.dependencies, String(target.meta.key))) return 'unavailable-link';
+      if (target.meta.type === 'memory' && !page.meta.links.includes(`legacy:${target.meta.id}`) && !Object.hasOwn(page.meta.dependencies, `legacy:${target.meta.id}`)) return 'unavailable-link';
+      if (!['evidence', 'wiki-page', 'memory'].includes(String(target.meta.type))) return 'unavailable-link';
     }
     const boundary = restrictions([...dependencies, page.meta]);
     if (boundary.scope !== page.meta.scope || boundary.sensitivity !== page.meta.sensitivity) return 'invalid-restrictions';
@@ -407,17 +426,38 @@ export class WikiEngine {
   }
 
   private async request(state: State, operation: 'navigate' | 'compile' | 'query' | 'lint', input: object): Promise<unknown> {
+    await this.revalidate(state);
     if (JSON.stringify(input).length > state.config.limits.maxContextCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Wiki context exceeds the configured budget; no source was silently truncated');
     throwIfCancelled();
-    this.assertSnapshot(await this.load(state.permission), this.snapshot(state));
     const result = await this.port.llm.wiki(operation, input);
     throwIfCancelled();
-    this.assertSnapshot(await this.load(state.permission), this.snapshot(state));
+    await this.revalidate(state);
     return result;
   }
 
-  private snapshot(state: State): Record<string, string> {
-    return Object.fromEntries([...state.documents.values()].filter((document) => document.meta.type !== 'wiki-receipt').sort((a, b) => a.path.localeCompare(b.path)).map((document) => [document.path, sha256(stable(document))]));
+  private snapshot(state: State, sourceIds = state.sourceIds): Record<string, string> {
+    const evidencePaths = new Set([...state.pages.values()].flatMap((page) => page.meta.evidence));
+    for (const id of sourceIds) { const source = state.evidence.get(id); if (source) evidencePaths.add(source.path); }
+    return Object.fromEntries([...state.documents.values()].filter((document) => document.meta.type !== 'wiki-receipt' && (document.meta.type !== 'evidence' || evidencePaths.has(document.path))).sort((a, b) => a.path.localeCompare(b.path)).map((document) => [document.path, sha256(stable(document))]));
+  }
+
+  private assertConfig(state: State, expected: string): void {
+    if (sha256(stable(state.config)) !== expected) fail('Wiki configuration changed; regenerate the plan or answer');
+  }
+
+  private async revalidate(state: State): Promise<void> {
+    const current = await this.load(state.permission);
+    current.sourceIds = state.sourceIds;
+    this.assertConfig(current, sha256(stable(state.config)));
+    this.assertSnapshot(current, this.snapshot(state));
+    if (stable([...current.eligible.keys()].sort()) !== stable([...state.eligible.keys()].sort())) fail('Wiki support lifecycle changed; regenerate the plan or answer');
+  }
+
+  private async sealWithState<T extends object>(state: State, payload: T, domain: string): Promise<T & { proof: string }> {
+    await this.revalidate(state);
+    const sealed = await this.seal(payload, domain);
+    await this.revalidate(state);
+    return sealed;
   }
 
   private assertSnapshot(state: State, snapshot: Record<string, string>): void {
@@ -425,7 +465,7 @@ export class WikiEngine {
   }
 
   private signature(state: State, sourceIds: string[]): string {
-    return sha256(stable({ sourceIds: [...sourceIds].sort(), snapshot: this.snapshot(state), config: state.config, compiler: this.port.llm.model, rulesVersion: 1 }));
+    return sha256(stable({ sourceIds: [...sourceIds].sort(), snapshot: this.snapshot(state, sourceIds), config: state.config, compiler: this.port.llm.model, rules: ruleVersions(state) }));
   }
 
   private async makePlan(state: State, kind: WikiPlan['kind'], pages: WikiPageDraft[], contextKeys: string[], sourceIds: string[], receiptId?: string, query?: WikiPlan['query']): Promise<WikiPlan> {
@@ -433,8 +473,8 @@ export class WikiEngine {
     // travel with the result, even when the model did not request the full body.
     const observedKeys = unique([...contextKeys, ...state.eligible.keys()]);
     const expanded = this.expandDependentDrafts(state, pages);
-    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), ruleIds: state.rules.map((rule) => rule.meta.id), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}) };
-    return checked(wikiPlanSchema, await this.seal(payload, 'plan'));
+    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}) };
+    return checked(wikiPlanSchema, await this.sealWithState(state, payload, 'plan'));
   }
 
   private async seal<T extends object>(payload: T, domain: string): Promise<T & { proof: string }> {
@@ -454,6 +494,7 @@ export class WikiEngine {
   }
 
   private expandDependentDrafts(state: State, drafts: WikiPageDraft[]): WikiPageDraft[] {
+    if (unique(drafts.map((draft) => draft.key)).length !== drafts.length) fail('Duplicate Wiki target');
     const expanded = new Map(drafts.map((draft) => [draft.key, draft]));
     for (let pass = 0; pass < state.eligible.size; pass++) {
       let added = false;
@@ -482,7 +523,7 @@ export class WikiEngine {
     if (unique(plan.pages.map((page) => page.key)).length !== plan.pages.length) fail('Duplicate Wiki target');
     if (this.expandDependentDrafts(state, plan.pages).length !== plan.pages.length) fail('Wiki plan omitted required dependent-page updates');
     if ([...state.eligible.keys()].some((key) => !plan.contextKeys.includes(key))) fail('Wiki plan must retain the entire catalog information boundary');
-    if (stable([...plan.ruleIds].sort()) !== stable(state.rules.map((rule) => rule.meta.id).sort())) fail('Wiki plan must retain current operational rules');
+    if (stable([...plan.ruleIds].sort()) !== stable(Object.keys(ruleVersions(state)).sort())) fail('Wiki plan must retain current operational rules');
     const consulted = plan.contextKeys.map((key) => required(state.eligible.get(key), 'Wiki supporting page is unavailable'));
     const sources = plan.sourceIds.map((id) => required(state.evidence.get(id), 'Wiki source is unavailable'));
     const availableEvidence = new Set([...sources.map((source) => source.meta.id), ...consulted.flatMap((page) => page.meta.evidence.map((path) => state.documents.get(path)?.meta.id))]);
@@ -504,7 +545,7 @@ export class WikiEngine {
       if (draft.pageType === 'source' && (!draft.key.startsWith('source:') || !draft.evidenceIds.includes(draft.key.slice(7)))) fail('Source page identity must name its immutable input');
       const expires = [draft.expiresAt, ...context.map((item) => item.meta.expiresAt)].filter((value): value is string => Boolean(value)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       const dependencies = Object.fromEntries(context.filter((item) => item.meta.key !== draft.key).map((item) => [item.meta.key, item.meta.revision]));
-      const rules = Object.fromEntries(state.rules.map((item) => [item.meta.id, item.meta.revision]));
+      const rules = ruleVersions(state);
       const conditions = unique([...draft.conditions, ...context.flatMap((item) => item.meta.conditions)]);
       const uncertainty = unique([...draft.uncertainty, ...context.flatMap((item) => item.meta.uncertainty)]);
       const path = wikiPagePath(draft.key);
@@ -522,7 +563,7 @@ export class WikiEngine {
     // Reach a fixed point over intra-plan links; cycles cannot weaken labels or lifecycle.
     for (let pass = 0; pass <= pages.length; pass++) {
       for (const page of pages) {
-        for (const key of page.meta.links) {
+        for (const key of unique([...page.meta.links, ...Object.keys(page.meta.dependencies)])) {
           const target = required(proposed.get(key) ?? state.eligible.get(key), 'Wiki link target is unavailable');
           const labels = restrictions([page.meta, target.meta]);
           Object.assign(page.meta, labels);
@@ -542,6 +583,16 @@ export class WikiEngine {
       assertWikiDocument(asDocument(page));
       if (page.body.length > state.config.limits.maxContentCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Compiled Wiki page exceeds the content limit');
     }
+    // Determine actual revisions before publishing dependency versions. An unchanged
+    // page keeps its revision; a changed target advances all in-plan dependents.
+    for (const page of pages) for (const key of Object.keys(page.meta.dependencies)) page.meta.dependencies[key] = state.pages.get(key)?.meta.revision ?? proposed.get(key)!.meta.revision;
+    const changedKeys = new Set(pages.filter((page) => !state.pages.has(page.meta.key) || contentIdentity(state.pages.get(page.meta.key)!) !== contentIdentity(page)).map((page) => page.meta.key));
+    for (let pass = 0; pass < pages.length; pass++) for (const page of pages) if (Object.keys(page.meta.dependencies).some((key) => changedKeys.has(key))) changedKeys.add(page.meta.key);
+    for (const page of pages) {
+      const old = state.pages.get(page.meta.key);
+      if (old && !changedKeys.has(page.meta.key)) { page.meta.revision = old.meta.revision; page.meta.updatedAt = old.meta.updatedAt; }
+    }
+    for (const page of pages) for (const key of Object.keys(page.meta.dependencies)) page.meta.dependencies[key] = (proposed.get(key) ?? state.pages.get(key))!.meta.revision;
     return pages;
   }
 }
@@ -574,12 +625,15 @@ function restrictions(values: Array<{ scope: Scope; sensitivity: Sensitivity }>)
 function sourceDto(source: Evidence): object { return { ...source.meta, path: source.path, body: source.body }; }
 
 function rulesDto(state: State): object[] {
-  return state.rules.length ? state.rules.map((rule) => ({ ...rule.meta, instructions: rule.body })) : [{ id: 'builtin-wiki-rules-v1', revision: 1, purpose: defaultWikiPurpose, instructions: defaultWikiInstructions }];
+  return state.rules.length ? state.rules.map((rule) => ({ ...rule.meta, instructions: rule.body })) : [{ id: builtinWikiRuleId, revision: 1, purpose: defaultWikiPurpose, instructions: defaultWikiInstructions }];
 }
+
+function ruleVersions(state: State): Record<string, number> { return state.rules.length ? Object.fromEntries(state.rules.map((rule) => [rule.meta.id, rule.meta.revision])) : { [builtinWikiRuleId]: 1 }; }
 
 function citation(page: Page): WikiCitation { return { key: page.meta.key, id: page.meta.id, path: page.path, revision: page.meta.revision, evidence: [...page.meta.evidence], conditions: [...page.meta.conditions], uncertainty: [...page.meta.uncertainty] }; }
 
-function issue(kind: string, message: string, page: Page): WikiLintIssue { return { kind, message, pageKeys: [page.meta.key], evidenceIds: [] }; }
+function issue(kind: string, message: string, page: Page): WikiLintIssue { return { kind, message, pageKeys: [page.meta.key], evidenceIds: [], pageVersions: { [page.meta.key]: page.meta.revision } }; }
+function catalogIssue(): WikiLintIssue { return { kind: 'catalog-mismatch', message: 'The public Wiki catalog is missing, invalid or differs from its canonical projection; lint did not modify it.', pageKeys: [], evidenceIds: [], pageVersions: {} }; }
 
 function contentIdentity(page: Page): string {
   const { revision: _revision, createdAt: _created, updatedAt: _updated, ...meta } = page.meta;
@@ -603,7 +657,7 @@ function renderPage(draft: WikiPageDraft, path: string, evidence: string[], stat
     const target = drafts.some((item) => item.key === key) ? wikiPagePath(key) : state.eligible.get(key)?.path;
     if (target) allowed.add(target);
   }
-  for (const link of extractMarkdownLinks(draft.body)) if (!allowed.has(posix.normalize(posix.join(posix.dirname(path), link)))) fail('Wiki body contains an unsupported local Markdown link');
+  for (const link of wikiLocalLinks(draft.body)) if (!allowed.has(posix.normalize(posix.join(posix.dirname(path), link)))) fail('Wiki body contains an unsupported local Markdown link');
   const sources = evidence.map((target) => `- [${posix.basename(target, '.md')}](${posix.relative(posix.dirname(path), target)})`);
   const links = draft.links.map((key) => {
     const target = drafts.some((item) => item.key === key) ? wikiPagePath(key) : state.eligible.get(key)?.path;
@@ -623,8 +677,26 @@ export function renderPublicWikiCatalog(documents: Document[]): string {
     visited.add(page.meta.key);
     if (!['active', 'conflicted'].includes(page.meta.status) || (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now()) || !page.meta.evidence.length) return false;
     if (page.meta.evidence.some((path) => safe.get(path)?.meta.type !== 'evidence')) return false;
-    if (Object.keys(page.meta.rules).some((id) => ![...safe.values()].some((document) => document.meta.type === 'wiki-rules' && document.meta.id === id))) return false;
-    return unique([...page.meta.links, ...Object.keys(page.meta.dependencies)]).every((key) => { const linked = byKey.get(key); return Boolean(linked && eligible(linked, visited)); });
+    if (page.meta.pageType === 'source' && !page.meta.evidence.some((path) => safe.get(path)?.meta.id === page.meta.key.slice(7))) return false;
+    if (Object.keys(page.meta.rules).some((id) => !(id === builtinWikiRuleId && page.meta.rules[id] === 1) && ![...safe.values()].some((document) => document.meta.type === 'wiki-rules' && document.meta.id === id))) return false;
+    try {
+      for (const link of wikiLocalLinks(page.body)) {
+        const path = posix.normalize(posix.join(posix.dirname(page.path), link));
+        const target = safe.get(path);
+        if (!target) return false;
+        if (target.meta.type === 'evidence') { if (!page.meta.evidence.includes(path)) return false; }
+        else if (target.meta.type === 'wiki-page') {
+          if (!page.meta.links.includes(String(target.meta.key)) && !Object.hasOwn(page.meta.dependencies, String(target.meta.key))) return false;
+        } else return false;
+      }
+    } catch { return false; }
+    return unique([...page.meta.links, ...Object.keys(page.meta.dependencies)]).every((key) => {
+      const linked = byKey.get(key);
+      return Boolean(linked && eligible(linked, visited)
+        && linked.meta.conditions.every((condition) => page.meta.conditions.includes(condition))
+        && linked.meta.uncertainty.every((uncertainty) => page.meta.uncertainty.includes(uncertainty))
+        && (!linked.meta.expiresAt || (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.parse(linked.meta.expiresAt))));
+    });
   };
   const rows = pages.filter((page) => eligible(page)).sort((a, b) => a.meta.pageType.localeCompare(b.meta.pageType) || a.meta.key.localeCompare(b.meta.key));
   const escape = (value: string): string => value.replace(/[\[\]<>`|\\]/g, (character) => `\\${character}`).replace(/[\r\n]+/g, ' ');

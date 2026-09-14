@@ -10,6 +10,8 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const evidenceId = z.string().regex(/^ev-[a-f0-9]{12,64}$/);
 const pageId = z.string().regex(/^wp-[a-f0-9]{24}$/);
 const rulesId = z.string().regex(/^wr-[a-f0-9]{24}$/);
+export const builtinWikiRuleId = 'builtin-wiki-rules-v1';
+const effectiveRuleId = z.union([rulesId, z.literal(builtinWikiRuleId)]);
 const receiptId = z.string().regex(/^wi-[a-f0-9]{24}$/);
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const date = z.string().datetime({ offset: true });
@@ -33,7 +35,7 @@ export const wikiPageDraftSchema = z.object({
 export const wikiPageMetaSchema = z.object({
   ...common, id: pageId, type: z.literal('wiki-page'), key, pageType: z.enum(pageTypes), title: clean(300), summary: clean(2000), revision,
   status: z.enum(['active', 'conflicted', 'revoked']), evidence: uniqueArray(evidencePath).min(1), links: uniqueArray(key),
-  dependencies: record(key, revision, 100), rules: record(rulesId, revision, 100), conditions: uniqueArray(clean(4000)), uncertainty: uniqueArray(clean(4000)), expiresAt: date.optional(), originHash: digest.optional(),
+  dependencies: record(key, revision, 100), rules: record(effectiveRuleId, revision, 100), conditions: uniqueArray(clean(4000)), uncertainty: uniqueArray(clean(4000)), expiresAt: date.optional(), originHash: digest.optional(),
 }).strict();
 
 export const wikiRulesMetaSchema = z.object({ ...common, id: rulesId, type: z.literal('wiki-rules'), revision, purpose: z.string().trim().min(1).max(4000) }).strict();
@@ -41,12 +43,12 @@ export const wikiReceiptMetaSchema = z.object({ ...common, id: receiptId, type: 
 
 export const wikiPlanSchema = z.object({
   version: z.literal(1), vaultId: clean(200), kind: z.enum(['compile', 'file', 'repair']), sourceIds: uniqueArray(evidenceId),
-  snapshot, contextKeys: uniqueArray(key), ruleIds: uniqueArray(rulesId), pages: z.array(wikiPageDraftSchema).min(1).max(40), receiptId: receiptId.optional(), proof: digest,
+  snapshot, configHash: digest, contextKeys: uniqueArray(key), ruleIds: uniqueArray(effectiveRuleId), pages: z.array(wikiPageDraftSchema).min(1).max(40), receiptId: receiptId.optional(), proof: digest,
   query: z.object({ key, hash: digest, generation }).strict().optional(),
 }).strict();
 
 export const wikiQueryResultSchema = z.object({
-  answer: body, question: z.string().trim().min(1).max(8000), uncertainty: uniqueArray(clean(4000)), snapshot, ruleIds: uniqueArray(rulesId), generation, proof: digest,
+  answer: body, question: z.string().trim().min(1).max(8000), uncertainty: uniqueArray(clean(4000)), snapshot, configHash: digest, ruleIds: uniqueArray(effectiveRuleId), ruleVersions: record(effectiveRuleId, revision, 100), generation, proof: digest,
   citations: z.array(z.object({
     key, id: clean(100), path: canonicalPath.refine((path) => path.startsWith('wiki/')), revision,
     evidence: uniqueArray(evidencePath).min(1), conditions: uniqueArray(clean(4000)), uncertainty: uniqueArray(clean(4000)),

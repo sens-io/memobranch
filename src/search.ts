@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
-import { readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
 import { isEncryptedEnvelope } from './encryption.js';
 import type { LlmClient } from './llm.js';
@@ -451,19 +450,10 @@ export class PersistentSearchIndex {
 }
 
 export async function searchVault(root: string, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
-  const config = await readVaultConfig(root);
-  const principal = options.principal ?? localAdminPrincipal();
-  assertTenant(principal, config.tenantId);
-  const index = new PersistentSearchIndex(root, config, undefined, async (relativePath) => {
-    const parsed = parseMarkdown<Record<string, unknown>>(await readFile(join(root, relativePath), 'utf8'));
-    if (config.policy.requireEncryptionFor.includes(sensitivityOf(parsed.meta)) || isEncryptedEnvelope(parsed.meta)) {
-      throw new Error('Confidential documents require a keyed vault reader');
-    }
-    const document = { path: relativePath, meta: parsed.meta, body: parsed.body };
-    assertManagedDocument(document);
-    return document;
-  });
-  return (await index.search(query, { ...options, principal })).hits;
+  // Use the same authenticated canonical reader and Wiki lifecycle checks as the
+  // public vault API. Lazy import avoids the vault/index module dependency cycle.
+  const { MemoryVault } = await import('./vault.js');
+  return new MemoryVault(root, { principal: options.principal ?? localAdminPrincipal() }).search(query, options);
 }
 
 function indexDocument(relativePath: string, raw: string, contentHash: string, sourceSize: number, sourceMtimeMs: number, sourceIdentity: string): IndexedDocument {

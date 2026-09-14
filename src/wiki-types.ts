@@ -71,6 +71,7 @@ export interface WikiPlan {
   kind: 'compile' | 'file' | 'repair';
   sourceIds: string[];
   snapshot: Record<string, string>;
+  configHash: string;
   contextKeys: string[];
   ruleIds: string[];
   pages: WikiPageDraft[];
@@ -115,7 +116,9 @@ export interface WikiQueryResult {
   citations: WikiCitation[];
   uncertainty: string[];
   snapshot: Record<string, string>;
+  configHash: string;
   ruleIds: string[];
+  ruleVersions: Record<string, number>;
   question: string;
   generation: WikiGeneration;
   proof: string;
@@ -126,6 +129,7 @@ export interface WikiLintIssue {
   message: string;
   pageKeys: string[];
   evidenceIds: string[];
+  pageVersions: Record<string, number>;
 }
 
 export interface WikiLintResult {
