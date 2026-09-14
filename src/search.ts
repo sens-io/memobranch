@@ -11,7 +11,7 @@ import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permissio
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
-const INDEX_VERSION = 4 as const;
+const INDEX_VERSION = 5 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
 
 export interface IndexedDocument {
@@ -133,6 +133,7 @@ export class PersistentSearchIndex {
           continue;
         }
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const sensitivity = sensitivityOf(outer);
         if (this.config.policy.requireEncryptionFor.includes(sensitivity) || isEncryptedEnvelope(outer)) {
           confidentialSkipped += 1;
@@ -281,6 +282,7 @@ export class PersistentSearchIndex {
     for (const file of await listMarkdown(join(this.root, 'wiki'))) {
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         if (this.config.policy.requireEncryptionFor.includes(sensitivityOf(outer)) || isEncryptedEnvelope(outer)) continue;
         const raw = await readFile(file, 'utf8');
         const source = await stat(file);
@@ -329,6 +331,7 @@ export class PersistentSearchIndex {
     for (const file of await listMarkdown(join(this.root, 'wiki'))) {
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const sensitivity = sensitivityOf(outer);
         if (this.config.policy.requireEncryptionFor.includes(sensitivity) || isEncryptedEnvelope(outer)) continue;
         visible += 1;
@@ -350,6 +353,7 @@ export class PersistentSearchIndex {
       if (!selectedArea(relativePath, options)) continue;
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const scope = scopeOf(outer);
         const sensitivity = sensitivityOf(outer);
         if (!this.config.policy.requireEncryptionFor.includes(sensitivity) && !isEncryptedEnvelope(outer) && relativePath.startsWith('wiki/')) continue;

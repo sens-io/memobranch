@@ -1,6 +1,7 @@
 import { AgentMemoryError } from './errors.js';
 import { assertEvidenceDocument } from './evidence.js';
 import { memoryKinds, scopes, sensitivities, type MarkdownDocument } from './types.js';
+import { assertWikiDocument } from './wiki-schema.js';
 
 const candidateStatuses = ['pending', 'promoted', 'rejected'] as const;
 const memoryStatuses = ['active', 'conflicted', 'superseded', 'revoked'] as const;
@@ -17,6 +18,7 @@ export function assertManagedDocument(document: MarkdownDocument<Record<string, 
   if (document.path.startsWith('wiki/')) {
     if (document.meta.type === 'memory') assertMemoryDocument(document);
     else if (document.meta.type === 'memory-erased') assertErasedMemoryDocument(document);
+    else if (['wiki-page', 'wiki-rules', 'wiki-receipt'].includes(String(document.meta.type))) assertWikiDocument(document);
     else fail(document.path, 'unknown Wiki document type');
   }
 }

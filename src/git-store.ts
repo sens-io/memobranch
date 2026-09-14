@@ -8,7 +8,7 @@ import { cancellationError, operationSignal, recordCommit, throwIfCancelled, wit
 import type { Actor } from './types.js';
 import { nowIso, writeText } from './utils.js';
 
-const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md', '.gitignore'];
+const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'WIKI.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md', '.gitignore'];
 
 export interface GitRunOptions {
   allowFailure?: boolean;

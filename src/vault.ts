@@ -29,6 +29,9 @@ import type {
 } from './types.js';
 import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
+import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
+import { WikiProof } from './wiki-proof.js';
+import type { WikiPageMeta } from './wiki-types.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -83,6 +86,36 @@ export class MemoryVault {
   private activeTransaction: VaultTransaction | null = null;
   private activePermission: Permission | null = null;
   private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
+
+  private wikiEngine(): WikiEngine {
+    return new WikiEngine({
+      principal: this.principal,
+      llm: this.llm,
+      config: () => this.config(),
+      read: (directory, permission) => this.readDirectory<Record<string, unknown>>(directory, permission),
+      scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
+      sign: (value) => new WikiProof(this.root).sign(value),
+      verify: (value, proof) => new WikiProof(this.root).verify(value, proof),
+      write: (document) => this.writeDocument(document),
+      log: async (operation, pageIds) => {
+        const parentCommit = (await this.git.run(['rev-parse', 'HEAD'])).trim();
+        // Opaque identities only: this globally visible journal must not expose logical keys.
+        await this.appendManaged('log.md', `\n<!-- wiki-event ${JSON.stringify({ version: 1, at: nowIso(), operation, actor: safeLogToken(this.principal.id), pageIds, parentCommit })} -->\n`);
+      },
+      mutate: (permission, operation, action) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action),
+    });
+  }
+
+  async wikiCatalog() { return this.wikiEngine().catalog(); }
+  async wikiRules() { return this.wikiEngine().rules(); }
+  async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }
+  async wikiMigrate() { return this.wikiEngine().migrate(); }
+  async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
+  async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
+  async wikiQuery(question: string, options: Parameters<WikiEngine['query']>[1] = {}) { return this.wikiEngine().query(question, options); }
+  async wikiFile(result: unknown, options: Parameters<WikiEngine['file']>[1]) { return this.wikiEngine().file(result, options); }
+  async wikiLint(options: Parameters<WikiEngine['lint']>[0] = {}) { return this.wikiEngine().lint(options); }
+  async wikiRevoke(key: string, reason: string) { return this.wikiEngine().revoke(key, reason); }
 
   constructor(root = process.cwd(), options: MemoryVaultOptions | LlmClient = {}) {
     this.root = resolve(root);
@@ -503,8 +536,18 @@ export class MemoryVault {
     return this.telemetry.operation('erase', this.principal, () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
       await this.git.initialize();
       await this.recoverPendingLocked('admin');
-      const memory = await this.findOneMemory(selector, 'admin');
-      if (!config.policy.requireEncryptionFor.includes(memory.meta.sensitivity)) {
+      const memory = await this.findErasureTarget(selector);
+      if (memory.meta.type === 'wiki-page') {
+        // The authorized read authenticated the envelope before target selection.
+        // Retained Wiki ciphertext remains erasable after policy relaxation.
+        const stored = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, memory.path), 'utf8'));
+        if (!isEncryptedEnvelope(stored.meta)) {
+          throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure requires an encrypted Wiki page');
+        }
+        if (stored.meta.keyRef !== memory.meta.id) {
+          throw new AgentMemoryError('ENCRYPTION_FAILED', 'Wiki erasure requires the canonical document data key');
+        }
+      } else if (!config.policy.requireEncryptionFor.includes(memory.meta.sensitivity)) {
         throw new AgentMemoryError('VALIDATION_FAILED', 'Cryptographic erasure only applies to memory covered by the encryption policy');
       }
       const intent: ErasureIntent = {
@@ -535,6 +578,7 @@ export class MemoryVault {
     authorize(this.principal, 'read', { tenantId: config.tenantId });
     for (const directory of ['wiki', 'candidates', 'evidence']) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
+      if (found?.meta.type === 'wiki-page') return this.wikiEngine().get(id);
       if (found && found.meta.type !== 'memory-erased') return found;
     }
     throw new AgentMemoryError('NOT_FOUND', `Document not found: ${id}`);
@@ -553,6 +597,11 @@ export class MemoryVault {
     if (normalized.length > config.limits.maxQueryCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Search query exceeds the configured limit');
     const index = this.searchIndex(config);
     const result = await index.search(normalized, { ...options, principal: this.principal });
+    if (existsSync(join(this.root, 'wiki', 'pages'))) {
+      const wikiHits = await this.wikiEngine().search(normalized, options);
+      const limit = Math.max(1, Math.min(options.limit ?? 8, config.limits.maxResults));
+      result.hits = [...result.hits, ...wikiHits].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+    }
     if (result.indexRebuilt) await this.telemetry.increment('index_rebuilds');
     return result;
   }
@@ -613,6 +662,7 @@ export class MemoryVault {
       const expired: string[] = [];
       const timestamp = nowIso();
       for (const memory of await this.readDirectory<MemoryMeta>('wiki', 'maintain')) {
+        if (memory.meta.type !== 'memory') continue;
         if (memory.meta.status !== 'active' || !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now()) continue;
         memory.meta.status = 'revoked';
         memory.meta.revokedAt = timestamp;
@@ -735,6 +785,11 @@ export class MemoryVault {
     const candidates = candidateScan.documents;
     const memories = memoryScan.documents.filter((document) => document.meta.type === 'memory');
     const documentErrors = [...candidateScan.errors, ...memoryScan.errors];
+    if (existsSync(join(this.root, 'wiki', 'pages'))) {
+      const wikiIssues = await this.wikiEngine().structuralIssues(permission);
+      const fatal = new Set(['invalid-document', 'missing-source', 'unavailable-source', 'unavailable-link', 'unavailable-rules', 'invalid-restrictions']);
+      documentErrors.push(...wikiIssues.filter((item) => fatal.has(item.kind)).map((item) => `Wiki ${item.kind}: ${item.message}`));
+    }
     const managedDocuments: Array<MarkdownDocument<object>> = [...evidence, ...candidates, ...memoryScan.documents];
     documentErrors.push(...metadataReferenceErrors(managedDocuments));
     const documents = [...evidence, ...candidates, ...memories];
@@ -1081,6 +1136,17 @@ export class MemoryVault {
     return matches[0]!;
   }
 
+  private async findErasureTarget(selector: string): Promise<MarkdownDocument<MemoryMeta | WikiPageMeta>> {
+    const records = (await this.readDirectory<MemoryMeta | WikiPageMeta>('wiki', 'admin'))
+      .filter((document) => document.meta.type === 'memory' || document.meta.type === 'wiki-page');
+    const matches = records.filter(({ meta }) => meta.id === selector || (meta.type === 'wiki-page'
+      ? meta.key === selector
+      : normalizeKey(meta.key) === normalizeKey(selector)));
+    if (matches.length === 0) throw new AgentMemoryError('NOT_FOUND', 'Memory or Wiki page not found');
+    if (matches.length > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Selector is ambiguous; use an id');
+    return matches[0]!;
+  }
+
   private async promoteCandidate(candidate: MarkdownDocument<CandidateMeta>, superseded: Array<MarkdownDocument<MemoryMeta>>, reviewed: boolean): Promise<MarkdownDocument<MemoryMeta>> {
     const statement = candidateStatement(candidate.body);
     const id = `mem-${shortId(`${candidate.meta.scope}\0${candidate.meta.kind}\0${candidate.meta.key}\0${statement}`)}`;
@@ -1151,6 +1217,13 @@ export class MemoryVault {
       ...(rows.length ? rows : ['| _None_ |  |  |  |  |']), '', `Pending non-confidential candidates: ${pending.length}.`,
       ...(pending.length ? ['', ...pending.map((candidate) => `- [${candidate.meta.id}](./${candidate.path}): ${candidate.meta.key}`)] : []), '',
     ].join('\n'));
+    // Global projection intentionally exposes public/public pages only. Authenticated
+    // catalog calls provide the caller's complete authorized navigation instead.
+    const wikiDocuments = await this.readProjectionDirectory<Record<string, unknown>>('wiki');
+    if (wikiDocuments.some((document) => ['wiki-page', 'wiki-rules'].includes(String(document.meta.type)))) {
+      const evidenceDocuments = await this.readProjectionDirectory<Record<string, unknown>>('evidence');
+      await this.writeManaged('WIKI.md', renderPublicWikiCatalog([...wikiDocuments, ...evidenceDocuments]));
+    }
   }
 
   private async appendLog(action: string, actor: Actor, detail: string): Promise<void> {
@@ -1199,7 +1272,10 @@ export class MemoryVault {
     const scope = scopeOf(document.meta as Record<string, unknown>);
     authorize(this.principal, this.activePermission ?? 'write', { scope, sensitivity });
     const config = await readVaultConfig(this.root);
-    const serialized = config.policy.requireEncryptionFor.includes(sensitivity)
+    const oldPath = resolveInside(this.root, document.path);
+    const retainWikiEncryption = String((document.meta as Record<string, unknown>).type).startsWith('wiki-') && existsSync(oldPath)
+      && isEncryptedEnvelope(parseMarkdown<Record<string, unknown>>(await readFile(oldPath, 'utf8')).meta);
+    const serialized = config.policy.requireEncryptionFor.includes(sensitivity) || retainWikiEncryption
       ? serializeMarkdown(...encryptedParts(await this.encryption.encrypt(document.meta, document.body)))
       : serializeMarkdown(document.meta, document.body);
     await this.writeManaged(document.path, serialized);
