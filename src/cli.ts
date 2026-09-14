@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
-import { localAdminPrincipal, principalFromEnv } from './policy.js';
+import { authorize, localAdminPrincipal, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
 
@@ -133,6 +133,9 @@ async function main(): Promise<void> {
     case 'remote':
       await remoteCommand(vault, parsed);
       return;
+    case 'wiki':
+      await wikiCommand(vault, parsed);
+      return;
     case 'maintenance':
       print(await new MaintenanceService(vault).runOnce());
       return;
@@ -142,6 +145,76 @@ async function main(): Promise<void> {
     default:
       throw new Error(`Unknown command: ${parsed.command}`);
   }
+}
+
+async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
+  const action = args.positionals[0] ?? 'catalog';
+  const input = { ...args, positionals: args.positionals.slice(1) };
+  const maxPages = args.flags.has('max-pages') ? Number(requiredFlag(args, 'max-pages')) : undefined;
+  if (maxPages !== undefined && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50)) {
+    throw new Error('--max-pages must be an integer between 1 and 50');
+  }
+  const budget = maxPages === undefined ? {} : { maxPages };
+  if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
+  switch (action) {
+    case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'rules': print(await vault.wikiRules()); return;
+    case 'migrate': print(await vault.wikiMigrate()); return;
+    case 'set-rules': {
+      const expectedRevision = args.flags.has('expected-revision') ? Number(requiredFlag(args, 'expected-revision')) : undefined;
+      if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) {
+        throw new Error('--expected-revision must be a nonnegative integer');
+      }
+      print(await vault.wikiSetRules({
+        purpose: requiredFlag(args, 'purpose'),
+        instructions: await contentFrom(input),
+        scope: enumFlag(args, 'scope', scopes, 'user'),
+        sensitivity: enumFlag(args, 'sensitivity', sensitivities, 'internal'),
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }));
+      return;
+    }
+    case 'ingest':
+      print(await vault.wikiIngest({
+        evidenceIds: [...input.positionals, ...csvFlag(args, 'evidence')],
+        apply: flagBoolean(args, 'apply'),
+        ...budget,
+      }));
+      return;
+    case 'apply': {
+      const document = await jsonFileFrom(args);
+      const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
+      print(await vault.wikiApply(plan));
+      return;
+    }
+    case 'query':
+      print(await vault.wikiQuery(requiredText(input.positionals.join(' '), 'A Wiki question is required'), budget));
+      return;
+    case 'file': {
+      const key = flagString(args, 'key');
+      print(await vault.wikiFile(await jsonFileFrom(args), {
+        title: requiredFlag(args, 'title'),
+        ...(key === undefined ? {} : { key }),
+        pageType: enumFlag(args, 'page-type', ['query', 'comparison'] as const, 'query'),
+        apply: flagBoolean(args, 'apply'),
+      }));
+      return;
+    }
+    case 'lint':
+      print(await vault.wikiLint({ semantic: flagBoolean(args, 'semantic'), ...budget }));
+      return;
+    case 'revoke':
+      print(await vault.wikiRevoke(requiredPositional(input, 0, 'Wiki page key'), requiredFlag(args, 'reason')));
+      return;
+    default: throw new Error(`Unknown wiki action: ${action}`);
+  }
+}
+
+async function jsonFileFrom(args: ParsedArgs): Promise<unknown> {
+  const file = requiredFlag(args, 'file');
+  const text = file === '-' ? await stdinContent() : await readFile(resolve(file), 'utf8');
+  try { return JSON.parse(text) as unknown; }
+  catch { throw new Error('--file must contain valid JSON'); }
 }
 
 async function remoteCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
@@ -200,6 +273,10 @@ async function contentFrom(args: ParsedArgs): Promise<string> {
   if (file) return readFile(resolve(file), 'utf8');
   const content = args.positionals.join(' ').trim();
   if (content !== '-') return requiredText(content, 'Content is required (argument, --file, or - for stdin)');
+  return stdinContent();
+}
+
+async function stdinContent(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks).toString('utf8');
@@ -295,11 +372,20 @@ Usage:
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove
+  amem wiki catalog | rules | migrate
+  amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
+  amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
+  amem wiki apply --file <plan.json|->
+  amem wiki query <question> [--max-pages N]
+  amem wiki file --file <query-result.json|-> --title TEXT [--page-type query|comparison] [--apply]
+  amem wiki lint [--semantic] [--max-pages N]
+  amem wiki revoke <page-key> --reason TEXT
   amem serve [--host 127.0.0.1] [--port 0]
 
 Common options: --root PATH, --actor ID, --actor-name NAME, --actor-email EMAIL.
 LLM: AMEM_LLM_API_KEY, AMEM_LLM_MODEL, AMEM_LLM_BASE_URL, AMEM_EMBEDDING_MODEL.
 Security: AMEM_MASTER_KEY, AMEM_PERMISSIONS, AMEM_ALLOWED_SCOPES, AMEM_MAX_SENSITIVITY, AMEM_TENANT_ID.
+Wiki planning is not applied by default; catalog, rules, query, and lint do not write canonical knowledge.
 `;
 }
 

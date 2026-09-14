@@ -5,7 +5,7 @@ import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
 import { throwIfCancelled, withOperation } from './operation.js';
-import { principalFromEnv, type Permission, type Principal } from './policy.js';
+import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
 
@@ -78,6 +78,175 @@ export function apply(ctx: Context, config: Config): void {
   if (granted(principal, 'admin')) registerAdminTools(ctx, vault);
   if (granted(principal, 'maintain')) registerMaintenanceTools(ctx, vault);
   if (granted(principal, 'sync')) registerSyncTools(ctx, vault);
+  registerWikiTools(ctx, vault, principal, resolved);
+}
+
+function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
+  if (granted(principal, 'read')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_catalog',
+      description: 'Read authorized Wiki categories, summaries, page links, and revisions without writing knowledge.',
+      parameters: {},
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, []);
+        return runJson(vault, exec.signal, () => vault.wikiCatalog());
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_rules',
+      description: 'Read authorized versioned Wiki purpose and maintenance rules.',
+      parameters: {},
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, []);
+        return runJson(vault, exec.signal, () => vault.wikiRules());
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_query',
+      description: 'Navigate the authorized Wiki and return a cited answer with uncertainty. Filing requires a separate explicit operation.',
+      parameters: {
+        question: { type: 'string', required: true, description: 'Question to answer from Wiki pages.' },
+        maxPages: { type: 'integer', description: 'Maximum pages to read (1-50).' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['question', 'maxPages']);
+        const question = boundedString(args.question, 'question', 8_000);
+        const options = wikiPageBudget(args.maxPages);
+        return runJson(vault, exec.signal, () => vault.wikiQuery(question, options));
+      },
+    }));
+  }
+  if (granted(principal, 'write')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_ingest',
+      description: 'Prepare a bounded linked-page plan from immutable evidence. apply=true additionally requires review permission before compilation.',
+      parameters: {
+        evidenceIds: { type: 'array', items: { type: 'string' }, required: true, description: 'One to 100 immutable evidence IDs.' },
+        apply: { type: 'boolean', description: 'Explicitly apply the plan with additional review permission (default false).' },
+        maxPages: { type: 'integer', description: 'Maximum planned pages (1-50).' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['evidenceIds', 'apply', 'maxPages']);
+        const evidenceIds = boundedStringArray(args.evidenceIds, 'evidenceIds', 100, 512);
+        if (!evidenceIds.length) failValidation('evidenceIds is required');
+        const options = wikiPageBudget(args.maxPages);
+        return runJson(vault, exec.signal, () => {
+          if (args.apply) authorize(principal, 'review');
+          return vault.wikiIngest({ evidenceIds, apply: args.apply ?? false, ...options });
+        });
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_file',
+      description: 'Prepare a reviewable query or comparison page from a cited Wiki answer. apply=true additionally requires review permission before any work.',
+      parameters: {
+        result: { type: 'object', additionalProperties: true, required: true, description: 'Complete result returned by memory_wiki_query; revalidated by the vault.' },
+        title: { type: 'string', required: true, description: 'Page title (up to 300 characters).' },
+        key: { type: 'string', description: 'Optional stable page key (up to 200 characters).' },
+        pageType: { type: 'string', enum: ['query', 'comparison'], description: 'Page purpose (default query).' },
+        apply: { type: 'boolean', description: 'Explicitly apply with additional review permission (default false).' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['result', 'title', 'key', 'pageType', 'apply']);
+        const title = boundedString(args.title, 'title', 300);
+        const key = optionalBoundedString(args.key, 'key', 200);
+        const pageType = oneOf(args.pageType ?? 'query', ['query', 'comparison'] as const, 'pageType');
+        return runJson(vault, exec.signal, () => {
+          if (args.apply) authorize(principal, 'review');
+          return vault.wikiFile(args.result, { title, pageType, apply: args.apply ?? false, ...(key === undefined ? {} : { key }) });
+        });
+      },
+    }));
+  }
+  if (granted(principal, 'review')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_apply',
+      description: 'Validate and atomically apply an explicit Wiki ingest, filing, or repair plan. Requires review permission.',
+      parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete untrusted Wiki plan; paths, citations, authorization, and revisions are revalidated.' } },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['plan']);
+        return runJson(vault, exec.signal, () => vault.wikiApply(args.plan));
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_revoke',
+      description: 'Revoke a Wiki page by key while retaining auditable history.',
+      parameters: {
+        key: { type: 'string', required: true, description: 'Wiki page key (up to 200 characters).' },
+        reason: { type: 'string', required: true, description: 'Revocation reason.' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['key', 'reason']);
+        const key = boundedString(args.key, 'key', 200);
+        const reason = boundedString(args.reason, 'reason', 4_000);
+        return runJson(vault, exec.signal, () => vault.wikiRevoke(key, reason));
+      },
+    }));
+  }
+  if (granted(principal, 'maintain')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_migrate',
+      description: 'Explicitly initialize compatible Wiki storage and default purpose/rules. Safe to repeat.',
+      parameters: {},
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, []);
+        return runJson(vault, exec.signal, () => vault.wikiMigrate());
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_set_rules',
+      description: 'Create or revise Wiki purpose and instructions with maintain permission and an optional expected revision.',
+      parameters: {
+        purpose: { type: 'string', required: true, description: 'User-directed purpose (up to 4000 characters).' },
+        instructions: { type: 'string', required: true, description: 'Wiki maintenance instructions (up to 100000 characters).' },
+        scope: { type: 'string', enum: scopes, description: 'Rules scope.' },
+        sensitivity: { type: 'string', enum: sensitivities, description: 'Rules sensitivity.' },
+        expectedRevision: { type: 'integer', description: 'Expected current revision; 0 requires creation.' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['purpose', 'instructions', 'scope', 'sensitivity', 'expectedRevision']);
+        const purpose = boundedString(args.purpose, 'purpose', 4_000);
+        const instructions = boundedString(args.instructions, 'instructions', 100_000);
+        const expectedRevision = args.expectedRevision === undefined ? undefined
+          : boundedInteger(args.expectedRevision, 'expectedRevision', 0, Number.MAX_SAFE_INTEGER);
+        const scope = oneOf(args.scope ?? config.defaultScope, scopes, 'scope');
+        const sensitivity = oneOf(args.sensitivity ?? config.defaultSensitivity, sensitivities, 'sensitivity');
+        return runJson(vault, exec.signal, () => vault.wikiSetRules({ purpose, instructions, scope, sensitivity,
+          ...(expectedRevision === undefined ? {} : { expectedRevision }) }));
+      },
+    }));
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_lint',
+      description: 'Check Wiki structure and optionally return cited semantic suggestions. Never applies repairs; reports unavailable semantic analysis.',
+      parameters: {
+        semantic: { type: 'boolean', description: 'Request semantic suggestions (default false).' },
+        maxPages: { type: 'integer', description: 'Maximum pages for semantic analysis (1-50).' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['semantic', 'maxPages']);
+        const options = wikiPageBudget(args.maxPages);
+        return runJson(vault, exec.signal, () => vault.wikiLint({ semantic: args.semantic ?? false, ...options }));
+      },
+    }));
+  }
+}
+
+function wikiArguments(args: object, allowed: readonly string[]): void {
+  if (Object.keys(args).some((key) => !allowed.includes(key))) failValidation('Unsupported Wiki tool argument');
+}
+
+function wikiPageBudget(value: number | undefined): { maxPages?: number } {
+  return value === undefined ? {} : { maxPages: boundedInteger(value, 'maxPages', 1, 50) };
 }
 
 function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
