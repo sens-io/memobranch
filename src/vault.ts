@@ -1291,7 +1291,12 @@ export class MemoryVault {
     authorize(this.principal, this.activePermission ?? 'write', { scope, sensitivity });
     const config = await readVaultConfig(this.root);
     const oldPath = resolveInside(this.root, document.path);
-    const retainWikiEncryption = String((document.meta as Record<string, unknown>).type).startsWith('wiki-') && existsSync(oldPath)
+    const wikiWrite = String((document.meta as Record<string, unknown>).type).startsWith('wiki-');
+    // Semantic Wiki identities are global even when the caller's catalog is
+    // filtered. A hidden existing target is not a new writable page. Reauthorize
+    // its current envelope and authenticated metadata under the writer lock.
+    if (wikiWrite && existsSync(oldPath)) await this.readDocument(document.path, this.activePermission ?? 'write');
+    const retainWikiEncryption = wikiWrite && existsSync(oldPath)
       && isEncryptedEnvelope(parseMarkdown<Record<string, unknown>>(await readFile(oldPath, 'utf8')).meta);
     const serialized = config.policy.requireEncryptionFor.includes(sensitivity) || retainWikiEncryption
       ? serializeMarkdown(...encryptedParts(await this.encryption.encrypt(document.meta, document.body)))

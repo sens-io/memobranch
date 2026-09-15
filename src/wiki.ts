@@ -293,7 +293,7 @@ export class WikiEngine {
     const result = await this.port.mutate('review', 'wiki-revoke', async () => {
       const state = await this.load('review');
       const page = required(state.pages.get(key), 'Wiki page is unavailable');
-      if (page.meta.type !== 'wiki-page') fail('Use the existing memory revocation API for legacy atomic memories');
+      if (page.meta.key.startsWith('legacy:')) fail('Use the existing memory revocation API for legacy atomic memories');
       if (page.meta.status === 'revoked') return;
       page.meta = { ...page.meta, status: 'revoked', revision: page.meta.revision + 1, updatedAt: nowIso() };
       await this.port.write(page);
@@ -671,7 +671,8 @@ function renderPage(draft: WikiPageDraft, path: string, evidence: string[], stat
 export function renderPublicWikiCatalog(documents: Document[]): string {
   const safe = new Map(documents.filter((document) => document.meta.scope === 'public' && document.meta.sensitivity === 'public' && !('encrypted' in document.meta)).map((document) => [document.path, document]));
   const pages = [...safe.values()].filter((document) => document.meta.type === 'wiki-page') as unknown as Page[];
-  const byKey = new Map(pages.map((page) => [page.meta.key, page]));
+  const legacy = [...safe.values()].filter((document) => document.meta.type === 'memory').map((document) => legacyPage(document as unknown as MarkdownDocument<MemoryMeta>));
+  const byKey = new Map([...pages, ...legacy].map((page) => [page.meta.key, page]));
   const eligible = (page: Page, visited = new Set<string>()): boolean => {
     if (visited.has(page.meta.key)) return true;
     visited.add(page.meta.key);
@@ -685,8 +686,9 @@ export function renderPublicWikiCatalog(documents: Document[]): string {
         const target = safe.get(path);
         if (!target) return false;
         if (target.meta.type === 'evidence') { if (!page.meta.evidence.includes(path)) return false; }
-        else if (target.meta.type === 'wiki-page') {
-          if (!page.meta.links.includes(String(target.meta.key)) && !Object.hasOwn(page.meta.dependencies, String(target.meta.key))) return false;
+        else if (target.meta.type === 'wiki-page' || target.meta.type === 'memory') {
+          const key = target.meta.type === 'memory' ? `legacy:${target.meta.id}` : String(target.meta.key);
+          if (!page.meta.links.includes(key) && !Object.hasOwn(page.meta.dependencies, key)) return false;
         } else return false;
       }
     } catch { return false; }
