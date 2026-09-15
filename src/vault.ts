@@ -1366,7 +1366,8 @@ export class MemoryVault {
       try {
         documents.push(await this.readDocument<T>(toPosix(relative(this.root, file)), permission));
       } catch (error) {
-        if (error instanceof AgentMemoryError && error.code !== 'AUTHORIZATION_DENIED') throw error;
+        if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') continue;
+        throw error;
       }
     }
     return documents;
