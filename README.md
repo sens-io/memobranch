@@ -46,6 +46,8 @@ MemoBranch 是一个面向 AI Agent、面向生产场景的本地优先长期记
 > [!IMPORTANT]
 > LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索、DeepSeek Harness 与 MCP 接入仍然可以完整工作。
 
+Wiki 新接口已进入验收阶段：见 [Ingest / Query / Lint 使用指南](docs/wiki.md)，包含多页待审计划、显式答案回存和独立授权修复。完整验收完成前，继续保留上述状态说明。
+
 ## 💡 为什么需要它
 
 普通 Agent 记忆常常只有一个向量库：内容从哪里来、为什么可信、谁修改过、冲突如何处理，都很难回答。
@@ -507,6 +509,9 @@ Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.a
 | 远端 | `amem remote set` / `status` / `sync` / `remove` |
 | 服务 | `amem serve [--host 127.0.0.1] [--port 0]` |
 | 信息 | `amem version` / `config` / `policy` / `history` |
+| Wiki 编译 / 审核 | `amem wiki ingest <evidence-id>` / `wiki apply --file PLAN.json` |
+| Wiki 导航 / 回存 | `amem wiki catalog` / `wiki query <question>` / `wiki file --file ANSWER.json --title TITLE` |
+| Wiki 规则 / 维护 | `amem wiki rules` / `set-rules` / `migrate` / `lint [--semantic]` / `revoke` |
 
 所有命令都支持 `--root PATH`；自动化场景建议统一使用 `--json`。
 
