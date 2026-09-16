@@ -174,42 +174,46 @@ export class LlmClient {
   }
 
   private async requestJson(path: string, payload: object): Promise<unknown> {
+    throwIfCancelled();
     const callerSignal = operationSignal();
-    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
-      throwIfCancelled();
-      const controller = new AbortController();
-      const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
-      const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-      timer.unref();
-      this.pending.add(controller);
-      try {
-        const response = await fetch(`${this.baseUrl}${path}`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal,
-        });
-        throwIfCancelled();
-        if (!response.ok) {
-          await response.body?.cancel();
-          if ((response.status === 429 || response.status >= 500) && attempt < this.maxRetries) continue;
-          throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request failed with HTTP ${response.status}`);
+    const controller = new AbortController();
+    const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
+    // One deadline owns every retry and response body for this request.
+    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    timer.unref();
+    this.pending.add(controller);
+    try {
+      for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+        try {
+          signal.throwIfAborted();
+          const response = await fetch(`${this.baseUrl}${path}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal,
+          });
+          signal.throwIfAborted();
+          if (!response.ok) {
+            await response.body?.cancel();
+            if ((response.status === 429 || response.status >= 500) && attempt < this.maxRetries) continue;
+            throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request failed with HTTP ${response.status}`);
+          }
+          const value = await boundedJson(response, this.maxResponseBytes);
+          signal.throwIfAborted();
+          return value;
+        } catch (error) {
+          if (callerSignal?.aborted) throw cancellationError();
+          if (error instanceof AgentMemoryError) throw error;
+          if (attempt < this.maxRetries && !controller.signal.aborted) continue;
+          const reason = controller.signal.aborted ? 'timed out or was cancelled' : 'failed';
+          throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request ${reason}`);
         }
-        const value = await boundedJson(response, this.maxResponseBytes);
-        throwIfCancelled();
-        return value;
-      } catch (error) {
-        if (callerSignal?.aborted) throw cancellationError();
-        if (error instanceof AgentMemoryError) throw error;
-        if (attempt < this.maxRetries && !controller.signal.aborted) continue;
-        const reason = controller.signal.aborted ? 'timed out or was cancelled' : 'failed';
-        throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', `LLM request ${reason}`);
-      } finally {
-        clearTimeout(timer);
-        this.pending.delete(controller);
       }
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM request failed');
+    } finally {
+      clearTimeout(timer);
+      this.pending.delete(controller);
     }
-    throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM request failed');
   }
 }
 

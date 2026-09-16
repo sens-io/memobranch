@@ -226,6 +226,40 @@ test('Wiki rejects invalid HTTP JSON after bounded transport retries', async (t)
   assert.equal(fixture.requests.length, 2);
 });
 
+test('Wiki uses one request deadline across delayed HTTP and network retries', { timeout: 5_000 }, async (t) => {
+  for (const failure of [429, 503, 'connection'] as const) {
+    await t.test(String(failure), async (t) => {
+      const fixture = await provider(t, (_request, response) => {
+        const timer = setTimeout(() => {
+          if (failure === 'connection') response.destroy();
+          else { response.statusCode = failure; json(response, { error: 'temporary' }); }
+        }, 80);
+        response.once('close', () => clearTimeout(timer));
+      });
+      const started = performance.now();
+      await assert.rejects(configured(fixture.baseUrl, { requestTimeoutMs: 100, maxRetries: 4 }).wiki('query', {}), hasCode('DEPENDENCY_UNAVAILABLE', /timed out or was cancelled/));
+      assert.ok(performance.now() - started < 300, 'retries must share the 100ms deadline rather than each getting 100ms');
+      assert.ok(fixture.requests.length > 0 && fixture.requests.length <= 2, 'the deadline must stop later retry attempts');
+    });
+  }
+});
+
+test('Wiki retry response bodies share the original request deadline', { timeout: 5_000 }, async (t) => {
+  let attempts = 0;
+  const fixture = await provider(t, (_request, response) => {
+    attempts += 1;
+    const first = attempts === 1;
+    if (!first) { response.writeHead(200, { 'content-type': 'application/json' }); response.write('{"choices":'); }
+    const timer = setTimeout(() => {
+      if (first) { response.statusCode = 503; json(response, { error: 'temporary' }); }
+      else response.end(JSON.stringify(message(JSON.stringify(results.navigate))).slice('{"choices":'.length));
+    }, 300);
+    response.once('close', () => clearTimeout(timer));
+  });
+  await assert.rejects(configured(fixture.baseUrl, { requestTimeoutMs: 500, maxRetries: 4 }).wiki('navigate', {}), hasCode('DEPENDENCY_UNAVAILABLE', /timed out or was cancelled/));
+  assert.equal(fixture.requests.length, 2, 'the successful retry must not receive a new deadline for its body');
+});
+
 for (const phase of ['response headers', 'response body'] as const) {
   test(`Wiki timeout aborts while waiting for ${phase} without retrying`, { timeout: 5_000 }, async (t) => {
     const closed = deferred();
