@@ -32,12 +32,14 @@ amem capture 'AtlasStore 支持每日快照。' --scope project --root ./knowled
 ```bash
 umask 077
 amem wiki ingest ev-REPLACE_WITH_RETURNED_ID --root ./knowledge > wiki-plan.json
-# 阅读 JSON 中的 pages、snapshot、contextKeys 和来源，再明确批准
+# 核对 pages、expectedRevisions、relevantPageVersions、ruleVersions 和 sourceHashes
 amem wiki apply --file wiki-plan.json --root ./knowledge
 amem wiki catalog --root ./knowledge
 ```
 
 摄取另一份相关资料时，模型会读取目录及相关页面，更新共享实体／概念和综合页面，而不只追加独立摘要。已有来源、条件、到期时间和更严格的分类会保留。依赖页面需要同步更新时，它们也会出现在待审计划中。
+
+计划包含受校验保护的版本清单：`expectedRevisions` 标明每个目标将替换的修订（`0` 表示新建）；`relevantPageVersions` 标明观察到的目录／页面版本；`ruleVersions` 是实际使用的规则版本；`sourceHashes` 按证据 ID 记录完整规范化明文正文的 SHA-256。`snapshot` 另行绑定包含元数据的输入快照。这些字段便于人工核对，不能手工更改来跳过过期检查；升级前生成、缺少清单的待审计划需重新生成。
 
 去重覆盖输入资料、已观察目录／页面、规则及配置版本。仅捕获尚未编译、也未被页面引用的无关原始资料，不使已完成摄取失效；目录中的新增页面及规则或配置变更会使相关计划重新验证。没有自定义规则时，运行时使用并记录 `builtin-wiki-rules-v1` 第 1 版。待审期间的配置变更、来源撤回或到期会使旧结果失效。
 
@@ -52,6 +54,8 @@ amem wiki apply --file wiki-file-plan.json --root ./knowledge
 ```
 
 `query` 不创建 Wiki 页面。回存记录问题、回答、生成模型和时间、实际引用版本及不确定性，并继承所用知识的限制。修改返回 JSON、删除不确定性或改写引用会使校验失败；需要重新生成，不要手工修改校验字段。
+
+问题长度服从 vault 配置；有来源的答案在返回前也检查回存后的总预算，包括标题预留、来源链接、生成信息及继承的不确定性。超限会明确失败，不返回一个当时已无法回存的签名结果，也不会截断回答或删除 caveat。问题等元数据按原文保存在代码块中，不作为可执行指令或额外的 Markdown 链接。无来源的空结果不能回存为知识。
 
 计划和答案由 vault 本机的 `.amem/wiki-proof-key` 校验。该密钥是本地运行态，不进入 Git。跨机器复制的待审计划或答案、密钥丢失后的旧结果需要在目标 vault 重新生成；已批准的 Markdown 知识仍可正常同步和阅读。该校验不替代权限、证据、版本或事务检查。
 
