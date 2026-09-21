@@ -1,5 +1,5 @@
 import { AsyncResource } from 'node:async_hooks';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { cancellationError, operationSignal, recordCommit, throwIfCancelled, wit
 import type { Actor } from './types.js';
 import { nowIso, writeText } from './utils.js';
 
-const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md', '.gitignore'];
+const trackedPaths = ['evidence', 'candidates', 'wiki', 'MEMORY.md', 'INDEX.md', 'WIKI.md', 'log.md', 'agent-memory.json', 'agent-memory.json.v1.bak', 'AGENTS.md', '.gitignore'];
 
 export interface GitRunOptions {
   allowFailure?: boolean;
@@ -567,21 +567,28 @@ async function terminateGit(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  const killGroup = (signal: NodeJS.Signals) => {
+  const killGroup = async (signal: NodeJS.Signals) => {
     try { process.kill(-child.pid!, signal); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      if (process.platform === 'darwin' && (error as NodeJS.ErrnoException).code === 'EPERM' && !await hasRunningDarwinGroup(child.pid!)) return;
+      throw error;
+    }
   };
   // Separate process groups catch shell/SSH helpers even when they ignore TERM
   // or close stdio. Escalation must finish even if the Git leader closes first.
-  killGroup('SIGTERM');
+  await killGroup('SIGTERM');
   await new Promise<void>((resolve) => setTimeout(resolve, 100));
-  killGroup('SIGKILL');
+  await killGroup('SIGKILL');
   // Signal delivery precedes actual process exit. Keep the caller's lock until
   // the group has exited, including helpers that no longer own a stdout pipe.
   while (true) {
     try { process.kill(-child.pid, 0); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      // Darwin killpg excludes zombies and can report EPERM for a group with
+      // no remaining signalable member. Verify state, never ignore EPERM.
+      if (process.platform === 'darwin' && (error as NodeJS.ErrnoException).code === 'EPERM' && !await hasRunningDarwinGroup(child.pid)) return;
       throw error;
     }
     // Container init processes may leave terminated orphans as zombies. Those
@@ -589,6 +596,22 @@ async function terminateGit(child: ChildProcess): Promise<void> {
     if (process.platform === 'linux' && !await hasRunningLinuxGroup(child.pid)) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
+}
+
+async function hasRunningDarwinGroup(group: number): Promise<boolean> {
+  // Fixed executable/arguments, bounded output and deadline; failure is not
+  // evidence of exit. This also distinguishes a genuinely protected live group.
+  const output = await new Promise<string>((resolve, reject) => {
+    execFile('/bin/ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8', timeout: 1_000, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+  const lines = output.trim().split('\n');
+  if (!output.trim()) throw new Error('Process-group state is unavailable');
+  for (const line of lines) {
+    const match = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) throw new Error('Process-group state is invalid');
+    if (Number(match[1]) === group && !match[2]!.startsWith('Z')) return true;
+  }
+  return false;
 }
 
 async function hasRunningLinuxGroup(group: number): Promise<boolean> {

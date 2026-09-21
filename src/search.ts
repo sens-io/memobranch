@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
-import { readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
 import { isEncryptedEnvelope } from './encryption.js';
 import type { LlmClient } from './llm.js';
@@ -11,7 +10,7 @@ import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permissio
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
-const INDEX_VERSION = 4 as const;
+const INDEX_VERSION = 5 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
 
 export interface IndexedDocument {
@@ -133,6 +132,7 @@ export class PersistentSearchIndex {
           continue;
         }
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const sensitivity = sensitivityOf(outer);
         if (this.config.policy.requireEncryptionFor.includes(sensitivity) || isEncryptedEnvelope(outer)) {
           confidentialSkipped += 1;
@@ -281,6 +281,7 @@ export class PersistentSearchIndex {
     for (const file of await listMarkdown(join(this.root, 'wiki'))) {
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         if (this.config.policy.requireEncryptionFor.includes(sensitivityOf(outer)) || isEncryptedEnvelope(outer)) continue;
         const raw = await readFile(file, 'utf8');
         const source = await stat(file);
@@ -329,6 +330,7 @@ export class PersistentSearchIndex {
     for (const file of await listMarkdown(join(this.root, 'wiki'))) {
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const sensitivity = sensitivityOf(outer);
         if (this.config.policy.requireEncryptionFor.includes(sensitivity) || isEncryptedEnvelope(outer)) continue;
         visible += 1;
@@ -350,6 +352,7 @@ export class PersistentSearchIndex {
       if (!selectedArea(relativePath, options)) continue;
       try {
         const outer = await readOuterMeta(file);
+        if (String(outer.type).startsWith('wiki-')) continue;
         const scope = scopeOf(outer);
         const sensitivity = sensitivityOf(outer);
         if (!this.config.policy.requireEncryptionFor.includes(sensitivity) && !isEncryptedEnvelope(outer) && relativePath.startsWith('wiki/')) continue;
@@ -447,19 +450,10 @@ export class PersistentSearchIndex {
 }
 
 export async function searchVault(root: string, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
-  const config = await readVaultConfig(root);
-  const principal = options.principal ?? localAdminPrincipal();
-  assertTenant(principal, config.tenantId);
-  const index = new PersistentSearchIndex(root, config, undefined, async (relativePath) => {
-    const parsed = parseMarkdown<Record<string, unknown>>(await readFile(join(root, relativePath), 'utf8'));
-    if (config.policy.requireEncryptionFor.includes(sensitivityOf(parsed.meta)) || isEncryptedEnvelope(parsed.meta)) {
-      throw new Error('Confidential documents require a keyed vault reader');
-    }
-    const document = { path: relativePath, meta: parsed.meta, body: parsed.body };
-    assertManagedDocument(document);
-    return document;
-  });
-  return (await index.search(query, { ...options, principal })).hits;
+  // Use the same authenticated canonical reader and Wiki lifecycle checks as the
+  // public vault API. Lazy import avoids the vault/index module dependency cycle.
+  const { MemoryVault } = await import('./vault.js');
+  return new MemoryVault(root, { principal: options.principal ?? localAdminPrincipal() }).search(query, options);
 }
 
 function indexDocument(relativePath: string, raw: string, contentHash: string, sourceSize: number, sourceMtimeMs: number, sourceIdentity: string): IndexedDocument {

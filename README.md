@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/MCP-ready-111827?style=flat-square" alt="MCP ready">
   <img src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" alt="DeepSeek Harness plugin">
   <a href="https://github.com/sens-io/memobranch/actions/workflows/ci.yml"><img src="https://github.com/sens-io/memobranch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-63%20passed-22C55E?style=flat-square" alt="63 tests passed">
+  <a href="openspec/changes/align-karpathy-llm-wiki/verification.md"><img src="https://img.shields.io/badge/local%20verification-documented-22C55E?style=flat-square" alt="Local verification documented"></a>
   <img src="https://img.shields.io/badge/license-MIT-2563EB?style=flat-square" alt="MIT License">
   <a href="https://github.com/sens-io/memobranch/stargazers"><img src="https://img.shields.io/github/stars/sens-io/memobranch?style=flat-square&logo=github" alt="GitHub Stars"></a>
 </p>
@@ -41,10 +41,12 @@ MemoBranch 是一个面向 AI Agent、面向生产场景的本地优先长期记
 
 它借鉴 [OpenKnowledge](https://github.com/inkeep/open-knowledge) 的 Git + LLM Wiki 思路并独立实现，不包含其源码。开发采用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的 proposal → specs → design → tasks → implementation → verification 工作流；各能力是否验收，以对应版本的验证记录为准。
 
-> **核心设计约束：** LLM Wiki 以 [Karpathy 的方法](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)为准：持续编译和维护有来源、互相链接的知识，而不是仅做向量检索。详见[核心设计与实现差距](docs/design/llm-wiki-core.md)。当前已实现原子记忆基础，完整的跨来源 Wiki 编译、查询成果回存和语义 Lint 尚未验收；不将设计目标当成已交付功能。
+> **核心设计约束：** LLM Wiki 以 [Karpathy 的方法](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)为准：持续编译和维护有来源、互相链接的知识，而不是仅做向量检索。跨来源增量编译、显式查询成果回存和语义 Lint 已通过本地功能验收与隔离独立审查；详见[核心设计](docs/design/llm-wiki-core.md)和[逐项验收记录](openspec/changes/align-karpathy-llm-wiki/verification.md)。本地验收不等于 GitHub 托管 CI、真实模型效果或生产发布验证。
 
 > [!IMPORTANT]
 > LLM 不是数据源。即使没有模型 API，捕获、审核、Git 版本、恢复、中文/英文检索、DeepSeek Harness 与 MCP 接入仍然可以完整工作。
+
+从原始资料到持续维护的知识网络，见 [Ingest / Query / Lint 使用指南](docs/wiki.md)：先查看多页待审计划，再显式应用；普通问答只读，答案回存和 Lint 修复均需单独授权。模型驱动的编译、问答和语义检查需要聊天模型，结构检查及原有记忆流程不依赖模型。
 
 ## 💡 为什么需要它
 
@@ -77,6 +79,9 @@ flowchart LR
 | | 能力 | 说明 |
 | :---: | --- | --- |
 | 📚 | **Git-native Wiki** | Markdown 是权威数据；每次逻辑变更都有身份归因的 Git 提交 |
+| 🕸️ | **跨来源知识编译** | 规则和目录引导增量维护来源、实体、概念、综合、比较与查询页面；多页变更原子提交 |
+| 💬 | **有来源问答与回存** | 先导航再读取页面，答案绑定实际引用版本；显式保存保留来源限制和不确定性 |
+| 🧭 | **结构与语义维护** | 无模型也能检查结构；模型提供有证据的维护建议，修复需独立授权 |
 | 🧾 | **证据驱动记忆** | `evidence → candidates → wiki`，保留来源、置信度、条件与修订链 |
 | 🛡️ | **服务端访问控制** | 按 permission、scope、sensitivity、tenant 在读取内容前授权 |
 | 🔐 | **策略化信封加密** | 策略指定的任意敏感级别使用每记录 DEK + AES-256-GCM，并支持密码学擦除 |
@@ -507,6 +512,9 @@ Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.a
 | 远端 | `amem remote set` / `status` / `sync` / `remove` |
 | 服务 | `amem serve [--host 127.0.0.1] [--port 0]` |
 | 信息 | `amem version` / `config` / `policy` / `history` |
+| Wiki 编译 / 审核 | `amem wiki ingest <evidence-id>` / `wiki apply --file PLAN.json` |
+| Wiki 导航 / 回存 | `amem wiki catalog` / `wiki query <question>` / `wiki file --file ANSWER.json --title TITLE` |
+| Wiki 规则 / 维护 | `amem wiki rules` / `set-rules` / `migrate` / `lint [--semantic]` / `revoke` |
 
 所有命令都支持 `--root PATH`；自动化场景建议统一使用 `--json`。
 

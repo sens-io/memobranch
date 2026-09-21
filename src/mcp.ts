@@ -5,7 +5,8 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
-import { principalFromEnv } from './policy.js';
+import { throwIfCancelled, withOperation } from './operation.js';
+import { authorize, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault } from './vault.js';
 
@@ -208,7 +209,123 @@ function createServer(): McpServer {
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
   }, async () => execute(() => new MaintenanceService(vault).runOnce()));
 
+  server.registerTool('memory_wiki_catalog', {
+    title: 'Navigate Wiki pages',
+    description: 'Read the authorized Wiki catalog with page categories, summaries, and revisions.',
+    inputSchema: z.strictObject({}),
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async (_input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiCatalog()));
+
+  server.registerTool('memory_wiki_rules', {
+    title: 'Read Wiki purpose and rules',
+    description: 'Read authorized versioned purpose and maintenance rules.',
+    inputSchema: z.strictObject({}),
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async (_input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiRules()));
+
+  server.registerTool('memory_wiki_set_rules', {
+    title: 'Set Wiki purpose and rules',
+    description: 'Create or revise Wiki rules with maintain permission and optional revision precondition.',
+    inputSchema: z.strictObject({
+      purpose: z.string().trim().min(1).max(4_000),
+      instructions: z.string().trim().min(1).max(100_000),
+      scope: z.enum(scopes).default('user'),
+      sensitivity: z.enum(sensitivities).default('internal'),
+      expectedRevision: z.number().int().min(0).optional(),
+    }),
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiSetRules({
+    purpose: input.purpose,
+    instructions: input.instructions,
+    scope: input.scope,
+    sensitivity: input.sensitivity,
+    ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
+  })));
+
+  server.registerTool('memory_wiki_migrate', {
+    title: 'Initialize Wiki storage',
+    description: 'Explicitly initialize compatible Wiki storage and default rules with maintain permission.',
+    inputSchema: z.strictObject({}),
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+  }, async (_input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiMigrate()));
+
+  server.registerTool('memory_wiki_ingest', {
+    title: 'Compile evidence into Wiki pages',
+    description: 'Prepare a bounded linked-page plan with write permission. Only apply=true commits it, requiring review permission before compilation.',
+    inputSchema: z.strictObject({
+      evidenceIds: z.array(z.string().trim().min(1).max(512)).min(1).max(100),
+      apply: z.boolean().default(false),
+      maxPages: z.number().int().min(1).max(50).optional(),
+    }),
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => {
+    if (input.apply) authorize(principal, 'review');
+    return vault.wikiIngest({ evidenceIds: input.evidenceIds, apply: input.apply,
+      ...(input.maxPages === undefined ? {} : { maxPages: input.maxPages }) });
+  }));
+
+  server.registerTool('memory_wiki_apply', {
+    title: 'Apply an approved Wiki plan',
+    description: 'Validate and atomically apply an explicit ingest, filing, or repair plan with review permission. Plans remain untrusted input.',
+    inputSchema: z.strictObject({ plan: z.record(z.string(), z.unknown()) }),
+    annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiApply(input.plan)));
+
+  server.registerTool('memory_wiki_query', {
+    title: 'Ask a cited Wiki question',
+    description: 'Navigate authorized Wiki pages and return a cited answer with uncertainty. Never files the answer automatically.',
+    inputSchema: z.strictObject({
+      question: z.string().trim().min(1).max(8_000),
+      maxPages: z.number().int().min(1).max(50).optional(),
+    }),
+    annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiQuery(input.question,
+    input.maxPages === undefined ? {} : { maxPages: input.maxPages })));
+
+  server.registerTool('memory_wiki_file', {
+    title: 'File an explicit Wiki answer',
+    description: 'Prepare a reviewable query or comparison page from a Wiki query result with write permission. apply=true additionally requires review before any work.',
+    inputSchema: z.strictObject({
+      result: z.record(z.string(), z.unknown()),
+      title: z.string().trim().min(1).max(300),
+      key: z.string().trim().min(1).max(200).optional(),
+      pageType: z.enum(['query', 'comparison']).default('query'),
+      apply: z.boolean().default(false),
+    }),
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => {
+    if (input.apply) authorize(principal, 'review');
+    return vault.wikiFile(input.result, { title: input.title, pageType: input.pageType, apply: input.apply,
+      ...(input.key === undefined ? {} : { key: input.key }) });
+  }));
+
+  server.registerTool('memory_wiki_lint', {
+    title: 'Inspect Wiki health',
+    description: 'Check Wiki structure and optionally request cited semantic suggestions with maintain permission. No repairs are applied; semantic analysis may be unavailable.',
+    inputSchema: z.strictObject({
+      semantic: z.boolean().default(false),
+      maxPages: z.number().int().min(1).max(50).optional(),
+    }),
+    annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiLint({ semantic: input.semantic,
+    ...(input.maxPages === undefined ? {} : { maxPages: input.maxPages }) })));
+
+  server.registerTool('memory_wiki_revoke', {
+    title: 'Revoke a Wiki page',
+    description: 'Revoke a Wiki page by key with review permission, retaining its auditable history.',
+    inputSchema: z.strictObject({ key: z.string().trim().min(1).max(200), reason: z.string().trim().min(1).max(4_000) }),
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiRevoke(input.key, input.reason)));
+
   return server;
+}
+
+async function executeWiki(signal: AbortSignal, action: () => Promise<unknown>) {
+  return execute(() => withOperation(signal, async () => {
+    const value = await action();
+    throwIfCancelled();
+    return value;
+  }));
 }
 
 async function execute(action: () => Promise<unknown>) {

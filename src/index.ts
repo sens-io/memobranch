@@ -10,5 +10,6 @@ export type { Permission, Principal } from './policy.js';
 export { PersistentSearchIndex, searchVault } from './search.js';
 export type { ReindexResult, SearchIndexHealth, SearchOptions, SearchResult } from './search.js';
 export type * from './types.js';
+export type * from './wiki-types.js';
 export { MemoryVault } from './vault.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions } from './vault.js';

@@ -132,6 +132,58 @@ test('SSH fetch timeout kills transport descendants and cannot be swallowed by a
   }
 });
 
+test('Darwin zombie-only process-group EPERM does not replace the original cancellation', { skip: process.platform !== 'darwin' }, async (t) => {
+  const git = await freshGit();
+  const controller = new AbortController();
+  const originalKill = process.kill.bind(process);
+  let killedGroup: number | undefined;
+  let probes = 0;
+  t.mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+    if (pid === killedGroup && signal === 0) {
+      probes += 1;
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    }
+    const result = originalKill(pid, signal);
+    if (pid < 0 && signal === 'SIGKILL') killedGroup = pid;
+    return result;
+  });
+  const pending = git.run(slowArgs(git.root), { signal: controller.signal });
+  const rejected = assert.rejects(pending, cancelled);
+  await waitForHelper(git.root);
+  controller.abort();
+  await rejected;
+  assert.ok(probes > 0, 'force the Darwin zombie-group errno independently of scheduler timing');
+  await assertHelperStopped(git.root);
+  await delay(750);
+  assert.equal(existsSync(join(git.root, 'late-write')), false);
+});
+
+test('Darwin EPERM with a live process group remains a cleanup failure', { skip: process.platform !== 'darwin' }, async (t) => {
+  const git = await freshGit();
+  const controller = new AbortController();
+  const originalKill = process.kill.bind(process);
+  const lock = join(git.root, '.amem', 'write.lock');
+  let deniedGroup: number | undefined;
+  t.mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+    if (pid < 0 && signal === 'SIGTERM') {
+      deniedGroup = pid;
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    }
+    return originalKill(pid, signal);
+  });
+  const pending = withFileLock(lock, () => git.run(slowArgs(git.root), { signal: controller.signal }));
+  const rejected = assert.rejects(pending, (error: unknown) => error instanceof AgentMemoryError && /Could not terminate Git subprocesses/.test(error.message));
+  await waitForHelper(git.root);
+  controller.abort();
+  try {
+    await delay(150);
+    assert.ok(deniedGroup && existsSync(lock), 'live helpers cannot be mistaken for an exited process group');
+  } finally {
+    if (deniedGroup) { try { originalKill(deniedGroup, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }
+  }
+  await rejected;
+});
+
 test('Git timeout configuration validates finite bounds and honors the environment', { skip: process.platform === 'win32' }, async () => {
   const git = await freshGit();
   for (const timeoutMs of [0, -1, NaN, Infinity, 300_001, 1.1]) {

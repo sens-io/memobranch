@@ -1,4 +1,5 @@
 import { parse, stringify } from 'yaml';
+import { AgentMemoryError } from './errors.js';
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
@@ -12,10 +13,12 @@ export function parseMarkdown<T extends object>(content: string): {
   body: string;
 } {
   const match = content.match(FRONTMATTER);
-  if (!match?.[1]) throw new Error('Document is missing YAML frontmatter');
-  const parsed = parse(match[1]);
+  if (!match?.[1]) throw new AgentMemoryError('VALIDATION_FAILED', 'Document is missing YAML frontmatter');
+  let parsed: unknown;
+  try { parsed = parse(match[1]); }
+  catch { throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid YAML frontmatter'); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Frontmatter must be an object');
+    throw new AgentMemoryError('VALIDATION_FAILED', 'Frontmatter must be an object');
   }
   return { meta: parsed as T, body: content.slice(match[0].length).trim() };
 }
