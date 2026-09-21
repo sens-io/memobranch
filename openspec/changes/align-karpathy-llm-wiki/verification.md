@@ -17,7 +17,7 @@ The compiler, multi-type pages, operational rules, catalog-first navigation, cit
 
 ## Runtime candidate (2026-09-21)
 
-Current runtime candidate: `73d6b73c9221507fb83c7e40f4ef02eaa5c6c3c6` (`codex/deepseek-harness-plugin`), following `3216198`. **Acceptance pending**: the runtime, adapters and tests now exist, but the final environment gates and isolated review must finish before the implementation checklist or full-compliance claim is approved. No push or release is part of this acceptance run.
+Current runtime candidate: `73d6b73c9221507fb83c7e40f4ef02eaa5c6c3c6` (`codex/deepseek-harness-plugin`), following `3216198`. Documentation candidate `91969dbb5a42e3f81c05fcc58b15f0377c3b3c01` has identical runtime, tests, scripts and package inputs. **Acceptance pending**: the isolated review found no remaining confirmed code defect in its reviewed scope, but the required Linux environment gates remain incomplete. No push or release is part of this acceptance run.
 
 The isolated review of `090859d` returned four confirmed defects: inconsistent query/filing limits; retries resetting the total provider timeout; imported conflicted support leaving active dependent claims; and missing reviewable version/source manifests. It also found missing E1→E2→E4 provider-protocol evidence. The candidate addresses these in local commits `a8b30a2`, `4a2517a`, `dd55775` and `3216198`; the next independent review must verify closure rather than trusting this description.
 
@@ -78,9 +78,23 @@ Paths below are repository-relative. This is an index into executable assertions
 | G02 | P/D/R: Wiki provider bounded retry/total deadline/header/body/cancellation cases, provider schema/collection cases, retained `test/provider.test.ts` and cancellation suites. |
 | G03 | A: `test/wiki-adapters.test.ts` table-driven CLI/MCP/official-Harness compile→apply→query→file→lint→repair→revoke with persistent readback, plus permissions, annotations and cancellation. |
 | G04 | A/R: Wiki adapter rejection/subsequent-call tests plus `test/deepseek-harness.test.ts`, `test/mcp.test.ts`, `test/cli.test.ts`, `test/harness-package.test.ts`; deployment owns identity and credentials. |
-| G05 | A: `scripts/verify-package.mjs` packs and installs into a new consumer, checks shipped Wiki code/types/guide, compiles external TypeScript and executes `scripts/verify-installed-wiki.mjs` API/CLI/MCP/official-Harness persistent workflows and least-privilege refusal. Final candidate gate pending below. |
+| G05 | A: `scripts/verify-package.mjs` packs and installs into a new consumer, checks shipped Wiki code/types/guide, compiles external TypeScript and executes `scripts/verify-installed-wiki.mjs` API/CLI/MCP/official-Harness persistent workflows and least-privilege refusal. Completed macOS gates and pending Linux gates are recorded below. |
 | G06 | R: exact-candidate full `npm run check`, audit, strict OpenSpec, pack and installed consumer gates across supported Node/default-branch combinations. Final results pending below; the 1,000-document corpus is in `test/production.test.ts`. |
-| G07 | R: prior isolated `090859d` verdict is “return for repair”; final exact-candidate isolated review remains required. No approval is inferred from this coverage index. |
+| G07 | R: isolated `91969db` review found no remaining confirmed code defect in the reviewed scope and independently reran the original future-reference reproductions plus 30 regressions. It explicitly withheld full acceptance because Linux G06 evidence is missing. See the dated review record below. |
+
+### Isolated review of `91969db` (2026-09-21)
+
+The existing isolated, read-only reviewer resumed successfully after its earlier workspace-credit failure. It independently verified the clean commit and the unchanged runtime/test/script/package inputs, inspected the original requirements and raw macOS gate logs, and reported **no remaining confirmed code defect in the reviewed scope**. This is a bounded code-review verdict, not full acceptance or proof that unknown defects cannot exist. The reviewer explicitly left G06 open for Linux Node 20/master and Node 22/main.
+
+Executed by the reviewer in `/Users/imac/code/memobranch`:
+
+```sh
+/Users/imac/.nvm/versions/node/v22.17.0/bin/node --import tsx --test --test-concurrency=1 test/wiki-import-lifecycle.test.ts test/wiki-review-regressions.test.ts
+/Users/imac/.nvm/versions/node/v22.17.0/bin/node --import tsx /private/tmp/memobranch-wiki-independent-3216198.mts dependency
+/Users/imac/.nvm/versions/node/v22.17.0/bin/node --import tsx /private/tmp/memobranch-wiki-independent-3216198.mts rule
+```
+
+The test command passed 30/30, with zero failures/cancellations/skips, in 19,160.912458 ms (exit 0). Both original independent reproductions now stop at sync validation with `REMOTE_CONFLICT: Synchronized vault failed health validation`. The original scripts do not catch that newly expected rejection, so **both reproduction processes exit 1**, not 0; their observed rejection demonstrates closure of the earlier acceptance defect. Their exact durations were not recorded. Raw reviewer TAP/reproduction output remains in the task's tool records; no separate log file was saved. The reviewer changed no repository files, tests, permissions or release gates.
 
 ### Exact-candidate release gates
 
@@ -90,9 +104,12 @@ Current full-gate logs: `/private/tmp/memobranch-wiki-gates-73d6b73-GRWmjw`. Ear
 | --- | --- | --- | --- |
 | macOS arm64 / Node 22.17.0 / main | 446/446, zero failures/skips; 103,894.037750 ms | Production audit: 0 vulnerabilities; strict OpenSpec: 8/8; pack + independently installed API/CLI/MCP/Harness: 84 entries, passed | `macos22-main.log`; exit 0 |
 | macOS arm64 / Node 22.17.0 / master | 446/446, zero failures/skips; 94,418.251416 ms | Production audit: 0 vulnerabilities; strict OpenSpec: 8/8; pack + independently installed API/CLI/MCP/Harness: 84 entries, passed | `macos22-master.log`; exit 0 |
+| macOS arm64 / Node 20.20.2 / master (supplementary) | 446/446, zero failures/skips; 70,226.423375 ms | Fresh `npm ci`; production audit: 0 vulnerabilities; strict OpenSpec: 8/8; pack + independently installed API/CLI/MCP/Harness: 84 entries, passed | `/private/tmp/memobranch-node20-acceptance-lmrr6j/macos20-master.log`; exit 0 |
 | Linux / Node 20 / master | Not complete | Docker unresponsive; older candidate run is not final evidence | No completed result |
 | Linux / Node 22 / main | Not run on final candidate | Docker recovery required | No result |
 
-A Linux Node 20.20.2/arm64/master run for the older candidate printed its runtime identification but has not completed dependency installation; Docker status requests also remain unresponsive. Restarting Docker requires user approval because it can interrupt unrelated containers. No Linux result is marked passed. Only completed exit-zero results may be entered as passed. These are local equivalents of the version/default-branch matrix, not evidence of a GitHub-hosted Actions run. Final independent review is additionally pending workspace-credit recovery.
+The supplementary Node 20 gate used an isolated `git archive` of `91969db`, a fresh dependency install and the official Darwin arm64 v20.20.2 distribution verified against its HTTPS `SHASUMS256.txt`. It ran the same check/audit/OpenSpec/pack/installed-package sequence and produced the same 84-entry tarball SHA-1 (`df902ba1bd5f0f9162be287a124e5f212b60138c`). It is additional minimum-runtime evidence, **not a substitute for Linux**.
+
+A Linux Node 20.20.2/arm64/master run for the older candidate printed its runtime identification but has not completed dependency installation; Docker status requests also remain unresponsive. A fresh read-only `/_ping` probe timed out after 5 seconds with no response. Restarting Docker requires user approval because it can interrupt unrelated containers. No Linux result is marked passed. Only completed exit-zero results may be entered as passed. These are local environment checks, not evidence of a GitHub-hosted Actions run. Independent review is no longer blocked by workspace credits, but full acceptance remains blocked by the missing Linux results.
 
 Hosted-model observation (`L`) has not been run. Deterministic fixtures and local HTTP services establish runtime/protocol behavior, not real-model synthesis quality. Windows process-tree behavior, remote production credentials, distributed writes and actual power-loss durability have not been tested by this run. The matrix does not make those release requirements; their limitations remain explicit.

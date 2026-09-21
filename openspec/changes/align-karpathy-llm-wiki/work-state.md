@@ -17,21 +17,25 @@ Status: **in progress, not release-approved**. Current files, Git and fresh tool
 - Post-fix Git/transaction/sync/Harness cancellation selection: 33/33, no skips, 12,428.101959 ms. Git cancellation suite then passed 9/9 in each of five runs (14,058 / 12,281 / 12,129 / 12,173 / 11,878 ms). Darwin-only regressions are inapplicable on Linux and must be reported as platform skips there.
 - Earlier development evidence: query/manifest+schema 125/125; provider/operation 113/113; Wiki integration 38/38. Those do not substitute for the final candidate matrix.
 - Exact runtime `73d6b73` macOS Node 22.17.0/arm64 full gates completed for both `main` and `master`: each 446/446, no failures/skips; durations 103,894.037750 and 94,418.251416 ms. Each also passed production audit (0 vulnerabilities), strict OpenSpec (8/8), pack and independent installed API/CLI/MCP/Harness (84 entries). Both process exits were 0. This is not Linux or hosted-CI evidence.
+- The isolated reviewer resumed and reviewed `91969db` (runtime/tests/scripts/package inputs unchanged from `73d6b73`). Verdict: no remaining confirmed code defect in its reviewed scope; full acceptance remains pending Linux G06. Independently rerun import/review regressions: 30/30, zero skips, 19,160.912458 ms, exit 0. Both original remote future-reference scripts now reject with `REMOTE_CONFLICT` (uncaught expected rejection, process exit 1). Raw review output is in task tool records, not a separate log. The reviewer made no repository changes.
+- Supplementary macOS arm64 / Node 20.20.2 / master gate on an isolated `git archive` of `91969db`: fresh `npm ci`, 446/446 tests (70,226.423375 ms, zero skips), audit 0, strict OpenSpec 8/8, pack/installed API/CLI/MCP/Harness 84 entries, exit 0. Official temporary Node runtime was checksum-verified. This does not replace Linux evidence.
 - `verification.md` now indexes all 44 criteria to actual tests and records failures/history. It is not approval. `tasks.md` implementation checkboxes deliberately remain unchecked until complete evidence and independent review.
 
 ## Live operations and external dependencies (revalidate handles)
 
 - Final macOS gate session `36899` is completed (exit 0); do not poll/restart it. Logs `/private/tmp/memobranch-wiki-gates-73d6b73-GRWmjw/macos22-main.log` and `macos22-master.log` contain full results.
+- Supplementary Node 20 session `10673` is completed (exit 0); log `/private/tmp/memobranch-node20-acceptance-lmrr6j/macos20-master.log`. Temporary runtime/source copies are isolated under that directory; the installed system Node was not changed.
 - Older Linux Node 20.20.2/arm64/master gate: exec session `45532`; log `/private/tmp/memobranch-wiki-gates-3216198-TFHuRL/linux20-master.log`. It printed runtime identification but dependency installation did not finish. Docker status session `85470` also remained live without output. No success evidence.
 - Docker became unresponsive after low disk space. Only the newly downloaded, unused Node 22 image was removed; no user volumes or project files were deleted. Space later recovered to approximately 19 GiB. Node 20 image may remain. An asynchronous question asks permission to restart Docker Desktop; no approval has arrived and no restart is authorized yet.
-- Independent review requires restored workspace credits or a completed reviewer turn. No alternative model/provider has been used to bypass the credit failure.
+- Fresh Docker socket `/_ping` probe completed with exit 28 after 5 seconds without response (session `78718`, terminal). Existing Linux/status handles remained live; an observation timeout is not their termination. No Docker restart or new Linux run was initiated.
+- Independent review is completed with the bounded verdict above. No alternative model/provider was used to bypass the earlier credit failure. Review final Linux evidence once those gates can execute; re-review runtime if any repair changes it.
 - During a broad process diagnostic, a separate service's command-line credential was inadvertently returned. The user was informed without repeating the value; do not inspect broad process arguments or copy that output into repository artifacts.
 
 ## Remaining acceptance work
 
 1. Preserve the completed exact-candidate macOS logs; rerun affected gates if runtime changes again.
 2. Once Docker recovers with user direction, verify terminal state of the older run, then complete Linux Node 20/master and Node 22/main full gates for the final candidate. Use isolated read-only source copies and record actual OS/architecture/runtime; do not call local containers GitHub-hosted CI.
-3. Obtain an isolated read-only review of the current commit, original core/spec, all 44 matrix rows and fresh raw evidence. Resolve confirmed findings, revalidate and make split local commits as needed. No missing gate may be approved by narration.
+3. Preserve the isolated `91969db` review and obtain review of the remaining Linux evidence when available. If runtime changes, resolve confirmed findings, revalidate and re-review the new candidate. No missing gate may be approved by narration.
 4. Update core design status, README/guide and implementation checklist only to the level actually established; commit the final evidence record.
 5. Mark the active goal complete only after every mandatory requirement has adequate evidence and no confirmed issue remains. Finite tests do not prove absence of unknown bugs. Do not push or publish.
 
