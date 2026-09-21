@@ -1,6 +1,6 @@
 # Implementation checkpoint
 
-Status: **local implementation acceptance approved; documentation closeout in progress; not published**. Current files, Git and fresh tool output are authoritative; this checkpoint is not completion evidence.
+Status: **local implementation acceptance and documentation/package closeout completed; independently approved; not pushed or published**. Current files, Git and fresh tool output are authoritative; the detailed evidence is in `verification.md`.
 
 ## Candidate and implemented work
 
@@ -21,6 +21,7 @@ Status: **local implementation acceptance approved; documentation closeout in pr
 - Supplementary macOS arm64 / Node 20.20.2 / master gate on an isolated `git archive` of `91969db`: fresh `npm ci`, 446/446 tests (70,226.423375 ms, zero skips), audit 0, strict OpenSpec 8/8, pack/installed API/CLI/MCP/Harness 84 entries, exit 0. Official temporary Node runtime was checksum-verified. This does not replace Linux evidence.
 - Fresh Linux Debian/arm64 gates on an isolated `git archive` of `cd89f79` (runtime/package inputs unchanged): Node 20.20.2/master and Node 22.23.2/main each passed 444 tests with zero failures and 2 Darwin-only skips (446 total), in 31,418.597598 / 26,521.274678 ms. Both also passed fresh install, audit 0, OpenSpec 8/8, pack and all installed consumers (84 entries), exit 0. These are local Linux results, not hosted CI.
 - Final isolated review approved `cd89f79` against all 44 criteria after independently verifying all five local gate logs and all 166 tracked Linux archive files against Git object hashes. No remaining confirmed defect, mandatory feature gap or local-gate evidence gap was found in the reviewed scope. Approval excludes hosted CI/Ubuntu x64/hosted-model quality/production deployment and does not authorize publication.
+- Documentation/package closeout `ff92289` also received isolated approval. Four additional macOS22/main+master and Linux20/master+22/main runs passed build/test typing, audit 0, OpenSpec 8/8, pack and all independently installed consumers, exit 0. These are package closeout runs, not another full 446-test suite. Final 84-entry package SHA-1: `456613f7d9106fa0be59e8edf7130c84cead0b8d`; only packaged README/guide content differs from the earlier package.
 - `verification.md` indexes all 44 criteria, actual results, failures/history and the bounded independent approval. `tasks.md` implementation checkboxes are now supported by completed evidence and review, not only implementation intent.
 
 ## Live operations and external dependencies (revalidate handles)
@@ -31,12 +32,13 @@ Status: **local implementation acceptance approved; documentation closeout in pr
 - Docker recovered externally and a fresh socket `/_ping` returned `OK`. The task did not restart Docker. Disk had approximately 24 GiB free before the new runs. Only this task's earlier unused Node 22 image was removed during the disk incident; no user volumes or project files were deleted. Node 22 was subsequently downloaded again for verification.
 - New Linux sessions `42266` (Node 20/master) and `6336` (Node 22/main) completed with exit 0; logs `/private/tmp/memobranch-linux-gates-cd89f79-IVRgab/linux20-master.log` and `linux22-main.log`. Both disposable named containers were confirmed absent after automatic cleanup. Do not poll/restart completed handles.
 - `/root/wiki_candidate_independent_review` completed the final evidence review and approved local implementation acceptance of `cd89f79`. Documentation now reflects that verdict; no runtime code is being changed by closeout.
+- Final package sessions `92323` (macOS main/master) and `11131` (Linux20/master+22/main) completed with exit 0. Logs are under `/private/tmp/memobranch-wiki-closeout-4YVGIE/`. The reviewer independently approved `ff92289` documentation and package closeout; no active test/review remains.
 - During a broad process diagnostic, a separate service's command-line credential was inadvertently returned. The user was informed without repeating the value; do not inspect broad process arguments or copy that output into repository artifacts.
 
-## Remaining acceptance work
+## Completion boundary
 
-1. Verify the documentation-only closeout: strict OpenSpec, diff checks and final package/installed consumers after README/guide updates; record its package identity separately from the earlier identical-runtime packages.
-2. Commit closeout and have the isolated reviewer check that final documentation/packaging changes do not overstate the approved local scope. Runtime changes would require new affected gates and review.
-3. Mark the active goal complete only after closeout verification/review. Preserve actual platforms, skips, historical failures and explicit limitations. Finite tests do not prove absence of unknown bugs. Do not push or publish.
+No mandatory feature, confirmed issue or local acceptance gate remains open within the documented 44-criterion scope. The final record update only appends actual results and closes this checkpoint; runtime and packaged inputs remain unchanged from the reviewed candidates. Existing source/permission/encryption/Git/cancellation/recovery contracts remain covered by the retained full suites.
+
+Do not reinterpret this as proof of no unknown bugs, a GitHub-hosted CI result, hosted-model quality, Ubuntu x64/Windows validation, production credentials/remotes or power-loss testing. Those limitations remain explicit in `verification.md`. No push or publication was authorized or performed. A later runtime change requires appropriate regression gates and independent review; publication requires a separate request.
 
 Node: `/Users/imac/.nvm/versions/node/v22.17.0/bin/node`. Source is outside current writable roots; use scoped approvals for writes and executing tests. Use `apply_patch` for edits; discover its current absolute path when the default cwd causes failures. CodeGraph is unavailable for this repository; do not initialize without consent. A prior initialization question remains unanswered.
