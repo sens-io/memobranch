@@ -788,7 +788,7 @@ export class MemoryVault {
     const documentErrors = [...candidateScan.errors, ...memoryScan.errors];
     if (existsSync(join(this.root, 'wiki', 'pages')) || existsSync(join(this.root, 'wiki', '.meta')) || existsSync(join(this.root, 'WIKI.md'))) {
       const wikiIssues = await this.wikiEngine().structuralIssues(permission);
-      const fatal = new Set(['invalid-document', 'missing-source', 'unavailable-source', 'unavailable-link', 'unavailable-rules', 'invalid-restrictions', 'catalog-mismatch']);
+      const fatal = new Set(['invalid-document', 'missing-source', 'unavailable-source', 'unavailable-link', 'unavailable-rules', 'invalid-restrictions', 'invalid-revision', 'catalog-mismatch']);
       documentErrors.push(...wikiIssues.filter((item) => fatal.has(item.kind)).map((item) => `Wiki ${item.kind}: ${item.message}`));
     }
     const managedDocuments: Array<MarkdownDocument<object>> = [...evidence, ...candidates, ...memoryScan.documents];

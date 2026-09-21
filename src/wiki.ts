@@ -402,11 +402,13 @@ export class WikiEngine {
       if (id === builtinWikiRuleId && page.meta.rules[id] === 1) continue;
       const rule = state.rules.find((item) => item.meta.id === id);
       if (!rule) return 'unavailable-rules';
+      if (page.meta.rules[id]! > rule.meta.revision) return 'invalid-revision';
       dependencies.push(rule.meta);
     }
     for (const key of unique([...page.meta.links, ...Object.keys(page.meta.dependencies)])) {
       const linked = state.pages.get(key);
       if (!linked) return 'unavailable-link';
+      if ((page.meta.dependencies[key] ?? 0) > linked.meta.revision) return 'invalid-revision';
       const reason = this.ineligible(state, linked, visited);
       if (reason) return reason;
       dependencies.push(linked.meta);
@@ -732,7 +734,7 @@ export function renderPublicWikiCatalog(documents: Document[]): string {
     if (!['active', 'conflicted'].includes(page.meta.status) || (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now()) || !page.meta.evidence.length) return false;
     if (page.meta.evidence.some((path) => safe.get(path)?.meta.type !== 'evidence')) return false;
     if (page.meta.pageType === 'source' && !page.meta.evidence.some((path) => safe.get(path)?.meta.id === page.meta.key.slice(7))) return false;
-    if (Object.keys(page.meta.rules).some((id) => !(id === builtinWikiRuleId && page.meta.rules[id] === 1) && ![...safe.values()].some((document) => document.meta.type === 'wiki-rules' && document.meta.id === id))) return false;
+    if (Object.keys(page.meta.rules).some((id) => !(id === builtinWikiRuleId && page.meta.rules[id] === 1) && ![...safe.values()].some((document) => document.meta.type === 'wiki-rules' && document.meta.id === id && Number(document.meta.revision) >= page.meta.rules[id]!))) return false;
     try {
       for (const link of wikiLocalLinks(page.body)) {
         const path = posix.normalize(posix.join(posix.dirname(page.path), link));
@@ -748,6 +750,7 @@ export function renderPublicWikiCatalog(documents: Document[]): string {
     return unique([...page.meta.links, ...Object.keys(page.meta.dependencies)]).every((key) => {
       const linked = byKey.get(key);
       return Boolean(linked && eligible(linked, visited)
+        && (page.meta.dependencies[key] ?? 0) <= linked.meta.revision
         && (linked.meta.status !== 'conflicted' || page.meta.status === 'conflicted')
         && linked.meta.conditions.every((condition) => page.meta.conditions.includes(condition))
         && linked.meta.uncertainty.every((uncertainty) => page.meta.uncertainty.includes(uncertainty))

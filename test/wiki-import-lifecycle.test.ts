@@ -157,6 +157,32 @@ test('S05 retention: an older dependency revision remains usable when its restri
   assert.deepEqual(await canonical(fresh, keys, evidence.evidencePath), before);
 });
 
+for (const reference of ['dependency', 'stored rule', 'built-in rule'] as const) {
+  test(`W03 I05 S10: imported future ${reference} revisions cannot become active knowledge`, async () => {
+    const { vault, sourceKey, keys, evidence } = await fixture();
+    let ruleId = 'builtin-wiki-rules-v1';
+    if (reference === 'stored rule') ruleId = (await vault.wikiSetRules({ purpose: 'Versioned rules', instructions: 'Retain real revisions.', scope: 'public', sensitivity: 'public' })).id;
+    const changes: Partial<WikiPageMeta> = reference === 'dependency' ? { dependencies: { [sourceKey]: 999 } } : { rules: { [ruleId]: 999 } };
+    await editPage(vault.root, entityKey, changes);
+    // Include the stored rule when independently rebuilding the global projection.
+    const documents = await Promise.all([...keys.map(wikiPagePath), evidence.evidencePath, ...(reference === 'stored rule' ? [`wiki/.meta/${ruleId}.md`] : [])].map(async (path): Promise<MarkdownDocument<Record<string, unknown>>> => ({ path, ...parseMarkdown<Record<string, unknown>>(await readFile(join(vault.root, path), 'utf8')) })));
+    const projection = renderPublicWikiCatalog(documents);
+    await writeFile(join(vault.root, 'WIKI.md'), projection);
+    const before = await canonical(vault, keys, evidence.evidencePath);
+    const fresh = new MemoryVault(vault.root, { llm: new ImportClient() });
+    for (const key of [entityKey, synthesisKey]) {
+      assert.ok(!(await fresh.wikiCatalog()).some((entry) => entry.key === key));
+      await assert.rejects(fresh.get(wikiPageId(key)), (error) => error instanceof AgentMemoryError && error.code === 'NOT_FOUND');
+      assert.ok(!(await fresh.search('Atlas')).some((entry) => entry.id === wikiPageId(key)));
+      assert.ok(!projection.includes(`./${wikiPagePath(key)}`));
+    }
+    assert.deepEqual((await fresh.wikiQuery('Atlas?')).citations.map((citation) => citation.key), [sourceKey]);
+    assert.equal((await fresh.doctor()).healthy, false);
+    assert.ok((await fresh.wikiLint()).issues.some((issue) => ['invalid-revision', 'unavailable-rules'].includes(issue.kind) && issue.pageKeys.includes(entityKey)));
+    assert.deepEqual(await canonical(fresh, keys, evidence.evidencePath), before);
+  });
+}
+
 for (const relationship of ['links only', 'dependency versions only'] as const) {
   test(`S05: imported conflict propagates transitively through ${relationship}`, async () => {
     const { vault, sourceKey, keys, evidence } = await fixture();
@@ -201,8 +227,10 @@ test('S05 Q04 retention: imported conflict stays queryable with caveats when eve
   assert.equal(await readFile(join(vault.root, evidence.evidencePath), 'utf8'), before.files[evidence.evidencePath]);
 });
 
-test('S10: real Git sync rejects imported active claims with conflicted support and restores canonical state', { timeout: 30_000 }, async () => {
+for (const fault of ['conflicted support', 'future dependency revision', 'future rule revision'] as const) {
+test(`S10: real Git sync rejects imported ${fault} and restores canonical state`, { timeout: 30_000 }, async () => {
   const { vault, sourceKey, keys, evidence } = await fixture();
+  const rule = await vault.wikiSetRules({ purpose: 'Remote provenance', instructions: 'Use actual versions.', scope: 'public', sensitivity: 'public' });
   const remote = await temporary('remote.git');
   await exec('git', ['init', '--bare', '--initial-branch=main', remote]);
   await vault.configureRemote({ name: 'origin', url: remote, branch: 'main', push: false });
@@ -211,9 +239,10 @@ test('S10: real Git sync rejects imported active claims with conflicted support 
   await exec('git', ['clone', '--branch', 'main', remote, clone]);
   await exec('git', ['config', 'user.name', 'Wiki import fixture'], { cwd: clone });
   await exec('git', ['config', 'user.email', 'wiki-import@example.invalid'], { cwd: clone });
-  await editPage(clone, sourceKey, { status: 'conflicted', uncertainty: [] });
+  if (fault === 'conflicted support') await editPage(clone, sourceKey, { status: 'conflicted', uncertainty: [] });
+  else await editPage(clone, entityKey, fault === 'future dependency revision' ? { dependencies: { [sourceKey]: 999 } } : { rules: { [rule.id]: 999 } });
   await project(clone, keys, evidence.evidencePath);
-  await exec('git', ['add', '--', wikiPagePath(sourceKey), 'WIKI.md'], { cwd: clone });
+  await exec('git', ['add', '--', wikiPagePath(sourceKey), wikiPagePath(entityKey), 'WIKI.md'], { cwd: clone });
   await exec('git', ['commit', '-m', 'fixture: import inconsistent Wiki lifecycle'], { cwd: clone });
   await exec('git', ['push', 'origin', 'main'], { cwd: clone });
   const before = await canonical(vault, keys, evidence.evidencePath);
@@ -225,3 +254,4 @@ test('S10: real Git sync rejects imported active claims with conflicted support 
   assert.equal((await fresh.doctor()).healthy, true);
   assert.ok((await fresh.search('Atlas')).some((hit) => hit.id === wikiPageId(entityKey)));
 });
+}
