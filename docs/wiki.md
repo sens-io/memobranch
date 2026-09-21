@@ -1,6 +1,6 @@
 # LLM Wiki 工作流
 
-> 当前功能已进入实现验收阶段，完整状态以 `openspec/changes/align-karpathy-llm-wiki/` 的验证记录为准。下面描述可调用的接口，不代表发布验收已经完成。
+> Ingest / Query / Lint 已通过本地功能验收与隔离独立审查。源码中的 `openspec/changes/align-karpathy-llm-wiki/verification.md` 记录具体提交、环境、测试与限制；这不代表 GitHub 托管 CI、真实模型效果或生产发布已经验证。
 
 Wiki 把原始资料编译成能持续修订的知识网络。`capture` 保存不可变证据；`wiki ingest` 结合规则、目录和已有页面提出变更；明确批准后，页面、目录和日志在同一个可恢复事务中提交。
 

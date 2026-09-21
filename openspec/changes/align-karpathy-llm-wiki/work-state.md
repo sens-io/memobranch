@@ -1,6 +1,6 @@
 # Implementation checkpoint
 
-Status: **in progress, not release-approved**. Current files, Git and fresh tool output are authoritative; this checkpoint is not completion evidence.
+Status: **local implementation acceptance approved; documentation closeout in progress; not published**. Current files, Git and fresh tool output are authoritative; this checkpoint is not completion evidence.
 
 ## Candidate and implemented work
 
@@ -19,24 +19,24 @@ Status: **in progress, not release-approved**. Current files, Git and fresh tool
 - Exact runtime `73d6b73` macOS Node 22.17.0/arm64 full gates completed for both `main` and `master`: each 446/446, no failures/skips; durations 103,894.037750 and 94,418.251416 ms. Each also passed production audit (0 vulnerabilities), strict OpenSpec (8/8), pack and independent installed API/CLI/MCP/Harness (84 entries). Both process exits were 0. This is not Linux or hosted-CI evidence.
 - The isolated reviewer resumed and reviewed `91969db` (runtime/tests/scripts/package inputs unchanged from `73d6b73`). Verdict: no remaining confirmed code defect in its reviewed scope; full acceptance remains pending Linux G06. Independently rerun import/review regressions: 30/30, zero skips, 19,160.912458 ms, exit 0. Both original remote future-reference scripts now reject with `REMOTE_CONFLICT` (uncaught expected rejection, process exit 1). Raw review output is in task tool records, not a separate log. The reviewer made no repository changes.
 - Supplementary macOS arm64 / Node 20.20.2 / master gate on an isolated `git archive` of `91969db`: fresh `npm ci`, 446/446 tests (70,226.423375 ms, zero skips), audit 0, strict OpenSpec 8/8, pack/installed API/CLI/MCP/Harness 84 entries, exit 0. Official temporary Node runtime was checksum-verified. This does not replace Linux evidence.
-- `verification.md` now indexes all 44 criteria to actual tests and records failures/history. It is not approval. `tasks.md` implementation checkboxes deliberately remain unchecked until complete evidence and independent review.
+- Fresh Linux Debian/arm64 gates on an isolated `git archive` of `cd89f79` (runtime/package inputs unchanged): Node 20.20.2/master and Node 22.23.2/main each passed 444 tests with zero failures and 2 Darwin-only skips (446 total), in 31,418.597598 / 26,521.274678 ms. Both also passed fresh install, audit 0, OpenSpec 8/8, pack and all installed consumers (84 entries), exit 0. These are local Linux results, not hosted CI.
+- Final isolated review approved `cd89f79` against all 44 criteria after independently verifying all five local gate logs and all 166 tracked Linux archive files against Git object hashes. No remaining confirmed defect, mandatory feature gap or local-gate evidence gap was found in the reviewed scope. Approval excludes hosted CI/Ubuntu x64/hosted-model quality/production deployment and does not authorize publication.
+- `verification.md` indexes all 44 criteria, actual results, failures/history and the bounded independent approval. `tasks.md` implementation checkboxes are now supported by completed evidence and review, not only implementation intent.
 
 ## Live operations and external dependencies (revalidate handles)
 
 - Final macOS gate session `36899` is completed (exit 0); do not poll/restart it. Logs `/private/tmp/memobranch-wiki-gates-73d6b73-GRWmjw/macos22-main.log` and `macos22-master.log` contain full results.
 - Supplementary Node 20 session `10673` is completed (exit 0); log `/private/tmp/memobranch-node20-acceptance-lmrr6j/macos20-master.log`. Temporary runtime/source copies are isolated under that directory; the installed system Node was not changed.
-- Older Linux Node 20.20.2/arm64/master gate: exec session `45532`; log `/private/tmp/memobranch-wiki-gates-3216198-TFHuRL/linux20-master.log`. It printed runtime identification but dependency installation did not finish. Docker status session `85470` also remained live without output. No success evidence.
-- Docker became unresponsive after low disk space. Only the newly downloaded, unused Node 22 image was removed; no user volumes or project files were deleted. Space later recovered to approximately 19 GiB. Node 20 image may remain. An asynchronous question asks permission to restart Docker Desktop; no approval has arrived and no restart is authorized yet.
-- Fresh Docker socket `/_ping` probe completed with exit 28 after 5 seconds without response (session `78718`, terminal). Existing Linux/status handles remained live; an observation timeout is not their termination. No Docker restart or new Linux run was initiated.
-- Independent review is completed with the bounded verdict above. No alternative model/provider was used to bypass the earlier credit failure. Review final Linux evidence once those gates can execute; re-review runtime if any repair changes it.
+- Older Linux session `45532` is terminal (exit 125, Docker unexpected EOF); its status session `85470` is terminal (exit 1, daemon unavailable). Their historical log is `/private/tmp/memobranch-wiki-gates-3216198-TFHuRL/linux20-master.log`; neither passed.
+- Docker recovered externally and a fresh socket `/_ping` returned `OK`. The task did not restart Docker. Disk had approximately 24 GiB free before the new runs. Only this task's earlier unused Node 22 image was removed during the disk incident; no user volumes or project files were deleted. Node 22 was subsequently downloaded again for verification.
+- New Linux sessions `42266` (Node 20/master) and `6336` (Node 22/main) completed with exit 0; logs `/private/tmp/memobranch-linux-gates-cd89f79-IVRgab/linux20-master.log` and `linux22-main.log`. Both disposable named containers were confirmed absent after automatic cleanup. Do not poll/restart completed handles.
+- `/root/wiki_candidate_independent_review` completed the final evidence review and approved local implementation acceptance of `cd89f79`. Documentation now reflects that verdict; no runtime code is being changed by closeout.
 - During a broad process diagnostic, a separate service's command-line credential was inadvertently returned. The user was informed without repeating the value; do not inspect broad process arguments or copy that output into repository artifacts.
 
 ## Remaining acceptance work
 
-1. Preserve the completed exact-candidate macOS logs; rerun affected gates if runtime changes again.
-2. Once Docker recovers with user direction, verify terminal state of the older run, then complete Linux Node 20/master and Node 22/main full gates for the final candidate. Use isolated read-only source copies and record actual OS/architecture/runtime; do not call local containers GitHub-hosted CI.
-3. Preserve the isolated `91969db` review and obtain review of the remaining Linux evidence when available. If runtime changes, resolve confirmed findings, revalidate and re-review the new candidate. No missing gate may be approved by narration.
-4. Update core design status, README/guide and implementation checklist only to the level actually established; commit the final evidence record.
-5. Mark the active goal complete only after every mandatory requirement has adequate evidence and no confirmed issue remains. Finite tests do not prove absence of unknown bugs. Do not push or publish.
+1. Verify the documentation-only closeout: strict OpenSpec, diff checks and final package/installed consumers after README/guide updates; record its package identity separately from the earlier identical-runtime packages.
+2. Commit closeout and have the isolated reviewer check that final documentation/packaging changes do not overstate the approved local scope. Runtime changes would require new affected gates and review.
+3. Mark the active goal complete only after closeout verification/review. Preserve actual platforms, skips, historical failures and explicit limitations. Finite tests do not prove absence of unknown bugs. Do not push or publish.
 
 Node: `/Users/imac/.nvm/versions/node/v22.17.0/bin/node`. Source is outside current writable roots; use scoped approvals for writes and executing tests. Use `apply_patch` for edits; discover its current absolute path when the default cwd causes failures. CodeGraph is unavailable for this repository; do not initialize without consent. A prior initialization question remains unanswered.
