@@ -9,6 +9,7 @@ import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
 import { searchVault } from '../src/search.js';
 import { wikiPageId, wikiPagePath } from '../src/wiki-schema.js';
 import { renderPublicWikiCatalog } from '../src/wiki.js';
+import { sha256 } from '../src/utils.js';
 import type { WikiPageDraft, WikiPageMeta } from '../src/wiki-types.js';
 
 const roots: string[] = [];
@@ -58,6 +59,76 @@ async function alterConfig(vault: MemoryVault): Promise<void> {
   config.limits.maxContextCharacters = 500;
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
 }
+
+test('I04 I06: serialized plans expose signed actual input and expected target versions', async () => {
+  const { vault, source } = await fixture(true);
+  const second = await vault.capture({ content: 'Marker complementary evidence.', scope: 'public', sensitivity: 'public' });
+  const catalog = await vault.wikiCatalog();
+  const before = await canonical(vault);
+  const plan = JSON.parse(JSON.stringify((await vault.wikiIngest({ evidenceIds: [second.evidenceId] })).plan!));
+  assert.deepEqual(plan.ruleVersions, { 'builtin-wiki-rules-v1': 1 });
+  assert.deepEqual(plan.relevantPageVersions, Object.fromEntries(catalog.map((page) => [page.key, page.revision])));
+  assert.deepEqual(plan.expectedRevisions, Object.fromEntries(plan.pages.map((page: WikiPageDraft) => [page.key, catalog.find((old) => old.key === page.key)?.revision ?? 0])));
+  assert.deepEqual(plan.sourceHashes, {
+    [source.evidenceId]: sha256((await vault.get(source.evidenceId)).body),
+    [second.evidenceId]: sha256((await vault.get(second.evidenceId)).body),
+  });
+  assert.equal(await canonical(vault), before, 'manifest construction is canonical-read-only');
+  for (const field of ['expectedRevisions', 'relevantPageVersions', 'ruleVersions', 'sourceHashes']) {
+    const tampered = structuredClone(plan);
+    const key = Object.keys(tampered[field])[0]!;
+    tampered[field][key] = field === 'sourceHashes' ? '0'.repeat(64) : tampered[field][key] + 1;
+    await assert.rejects(vault.wikiApply(tampered), /proof|signature/i);
+    assert.equal(await canonical(vault), before);
+  }
+  const applied = await vault.wikiApply(plan);
+  assert.ok(applied.commit);
+  const reopened = new MemoryVault(vault.root);
+  for (const [key, revision] of Object.entries(plan.expectedRevisions)) assert.ok(Number((await reopened.get(wikiPageId(key))).meta.revision) >= Number(revision));
+});
+
+test('Q03 Q04: long accepted questions and maximum uncertainty survive explicit filing', async () => {
+  const { vault, llm } = await fixture(true);
+  const path = join(vault.root, 'agent-memory.json');
+  const config = JSON.parse(await readFile(path, 'utf8'));
+  config.limits.maxQueryCharacters = 9000;
+  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+  const uncertainty = Array.from({ length: 100 }, (_, index) => `Uncertainty ${index}`);
+  llm.hook = (operation, _input, output) => operation === 'query' ? { ...(output as object), uncertainty } : output;
+  const question = 'q'.repeat(8001);
+  const before = await canonical(vault);
+  const answer = await vault.wikiQuery(question);
+  assert.equal(answer.question, question);
+  assert.deepEqual(answer.uncertainty, uncertainty);
+  assert.equal(await canonical(vault), before);
+  const saved = await vault.wikiFile(JSON.parse(JSON.stringify(answer)), { title: 'Long supported analysis', apply: true });
+  assert.ok(saved.commit);
+  const page = await new MemoryVault(vault.root).get(wikiPageId(saved.plan.query!.key));
+  assert.ok(page.body.includes(question));
+  assert.deepEqual(page.meta.uncertainty, uncertainty);
+  assert.match(page.body, /Generated analysis; not independent raw evidence\./);
+});
+
+test('Q03 G02: query validates combined filing budgets before returning a signed result', async () => {
+  const { vault, llm } = await fixture(true);
+  const before = await canonical(vault);
+  llm.hook = (operation, _input, output) => operation === 'query' ? { ...(output as object), answer: 'a'.repeat(100_000) } : output;
+  await assert.rejects(vault.wikiQuery('Marker?'), (error: unknown) => (error as { code?: string }).code === 'CONTENT_TOO_LARGE');
+  assert.equal(await canonical(vault), before);
+  llm.hook = (operation, _input, output) => operation === 'query' ? { ...(output as object), uncertainty: Array.from({ length: 100 }, (_, index) => `${index}: ${'u'.repeat(3990)}`) } : output;
+  await assert.rejects(vault.wikiQuery('Marker?'), (error: unknown) => (error as { code?: string }).code === 'CONTENT_TOO_LARGE');
+  assert.equal(await canonical(vault), before);
+});
+
+test('Q03: literal question metadata is not interpreted as generated Markdown instructions', async () => {
+  const { vault } = await fixture(true);
+  const question = 'What does [local](../../private.md) mean? <script>untrusted</script> ``` ~~~';
+  const answer = await vault.wikiQuery(question);
+  const saved = await vault.wikiFile(answer, { title: '[Literal](../../private.md)', apply: true });
+  const page = await vault.get(wikiPageId(saved.plan.query!.key));
+  assert.ok(page.body.includes(question), 'literal question remains complete in a fenced block');
+  assert.ok(saved.commit);
+});
 
 test('I05: duplicate provider targets are rejected before expansion without a write', async () => {
   const { vault, llm, source } = await fixture();

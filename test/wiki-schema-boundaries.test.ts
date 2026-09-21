@@ -146,6 +146,12 @@ test('I05: public apply rejects malformed serialized plans with all files and Gi
     { name: 'too many snapshot entries', mutate: (plan) => { plan.snapshot = Object.fromEntries(many('evidence/source-', 2001).map((key) => [`${key}.md`, 'a'.repeat(64)])); } },
     { name: 'too many context keys', mutate: (plan) => { plan.contextKeys = many('entity:context-'); } },
     { name: 'forbidden context key', mutate: (plan) => { plan.contextKeys = ['constructor']; } },
+    ...['expectedRevisions', 'relevantPageVersions', 'ruleVersions', 'sourceHashes'].flatMap((field) => [
+      { name: `missing ${field}`, mutate: (plan: RecordValue) => { delete plan[field]; } },
+      { name: `invalid ${field} collection`, mutate: (plan: RecordValue) => { plan[field] = []; } },
+      { name: `forbidden ${field} key`, mutate: (plan: RecordValue) => { plan[field] = { constructor: field === 'sourceHashes' ? 'a'.repeat(64) : 1 }; } },
+      { name: `invalid ${field} value`, mutate: (plan: RecordValue) => { const values = plan[field] as RecordValue; values[Object.keys(values)[0] ?? 'entity:absent'] = field === 'sourceHashes' ? canary : -1; } },
+    ]),
     ...draftCases.filter((entry) => entry.name !== 'unknown response field').map((entry) => ({ name: entry.name, mutate: (plan: RecordValue) => { entry.mutate(plan as Response); } })),
   ];
   for (const entry of cases) await t.test(entry.name, async () => {

@@ -74,6 +74,12 @@ export interface WikiPlan {
   configHash: string;
   contextKeys: string[];
   ruleIds: string[];
+  /** Zero identifies a new target; positive values identify the revision being replaced. */
+  expectedRevisions: Record<string, number>;
+  relevantPageVersions: Record<string, number>;
+  ruleVersions: Record<string, number>;
+  /** SHA-256 of the complete canonical plaintext source body, keyed by evidence ID. */
+  sourceHashes: Record<string, string>;
   pages: WikiPageDraft[];
   receiptId?: string | undefined;
   proof: string;

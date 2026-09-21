@@ -44,11 +44,13 @@ export const wikiReceiptMetaSchema = z.object({ ...common, id: receiptId, type: 
 export const wikiPlanSchema = z.object({
   version: z.literal(1), vaultId: clean(200), kind: z.enum(['compile', 'file', 'repair']), sourceIds: uniqueArray(evidenceId),
   snapshot, configHash: digest, contextKeys: uniqueArray(key), ruleIds: uniqueArray(effectiveRuleId), pages: z.array(wikiPageDraftSchema).min(1).max(40), receiptId: receiptId.optional(), proof: digest,
+  expectedRevisions: record(key, z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), 40),
+  relevantPageVersions: record(key, revision, 100), ruleVersions: record(effectiveRuleId, revision, 100), sourceHashes: record(evidenceId, digest, 100),
   query: z.object({ key, hash: digest, generation }).strict().optional(),
 }).strict();
 
 export const wikiQueryResultSchema = z.object({
-  answer: body, question: z.string().trim().min(1).max(8000), uncertainty: uniqueArray(clean(4000)), snapshot, configHash: digest, ruleIds: uniqueArray(effectiveRuleId), ruleVersions: record(effectiveRuleId, revision, 100), generation, proof: digest,
+  answer: body, question: z.string().trim().min(1).max(100_000), uncertainty: uniqueArray(clean(4000)), snapshot, configHash: digest, ruleIds: uniqueArray(effectiveRuleId), ruleVersions: record(effectiveRuleId, revision, 100), generation, proof: digest,
   citations: z.array(z.object({
     key, id: clean(100), path: canonicalPath.refine((path) => path.startsWith('wiki/')), revision,
     evidence: uniqueArray(evidencePath).min(1), conditions: uniqueArray(clean(4000)), uncertainty: uniqueArray(clean(4000)),
