@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
-import { Script } from 'node:vm';
+import { Script, createContext, runInContext } from 'node:vm';
 import { test, type TestContext } from 'node:test';
 import { LlmClient } from '../src/llm.js';
 import { MemoryVault } from '../src/vault.js';
@@ -11,6 +11,8 @@ import { startWebServer, type WebHandle } from '../src/web.js';
 import { webScript } from '../src/web-ui.js';
 import type { Principal } from '../src/policy.js';
 import { operationSignal } from '../src/operation.js';
+import { defaultVaultConfig } from '../src/config.js';
+import { publicSettings } from '../src/settings.js';
 
 async function fixture(t: TestContext, llm = new LlmClient({ apiKey: '', embeddingModel: '' })) {
   const root = await mkdtemp(join(tmpdir(), 'memobranch-web-'));
@@ -243,4 +245,33 @@ test('web: shutdown cancels provider work and awaits cleanup', async t => {
 test('web: rejects invalid listening ports before binding', async t => {
   const { root } = await fixture(t);
   for (const port of [-1, 65536, 1.2, NaN]) await assert.rejects(startWebServer(root, { port }), /port/);
+});
+
+test('web UI: configured embedding model remains optional so it can be cleared to default', async () => {
+  // Exercise the actual UI builder without network: native-browser rendering is checked separately.
+  class Element {
+    children: Element[] = [];
+    name = '';
+    required = false;
+    value = '';
+    classList = { add() {} };
+    append(...children: Element[]) { this.children.push(...children); }
+    replaceChildren(...children: Element[]) { this.children = children; }
+    addEventListener() {}
+    setAttribute() {}
+    focus() {}
+  }
+  const values = publicSettings(defaultVaultConfig('UI fixture', 'test'));
+  values.index.embeddingModel = 'configured-embedding-model';
+  const context = createContext({ document: {
+    getElementById: () => new Element(), createElement: () => new Element(),
+  }, setTimeout, clearTimeout, fixture: { values, revision: 'a'.repeat(64) } });
+  runInContext(webScript, context);
+  runInContext("principal = {permissions:['admin'],scopes:['user'],maxSensitivity:'internal'}; api = async op => op === 'settings' ? fixture : [];", context);
+  const output = await runInContext('settings()', context) as Element;
+  const nodes = (node: Element): Element[] => [node, ...node.children.flatMap(nodes)];
+  const input = nodes(output).find(node => node?.name === 'index.embeddingModel');
+  assert.ok(input);
+  assert.equal(input.value, 'configured-embedding-model');
+  assert.equal(input.required, false);
 });
