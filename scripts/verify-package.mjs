@@ -16,6 +16,7 @@ try {
   for (const expected of [
     'README.md', 'README_CN.md',
     'dist/index.js', 'dist/index.d.ts', 'dist/cli.js', 'dist/mcp.js',
+    'dist/web.js', 'dist/web.d.ts', 'dist/web-ui.js', 'dist/settings.js',
     'dist/deepseek-harness.js', 'dist/deepseek-harness.d.ts', 'cordis.patch.yml',
     'dist/wiki.js', 'dist/wiki.d.ts', 'dist/wiki-types.js', 'dist/wiki-types.d.ts',
     'dist/wiki-schema.js', 'dist/wiki-schema.d.ts',
@@ -44,11 +45,23 @@ try {
     import { Context } from '@deepseek-ai/cordis';
     import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
     import { ToolRuntime } from '@deepseek-ai/dsh-tools';
-    import { MemoryVault } from 'memobranch';
+    import { MemoryVault, startWebServer } from 'memobranch';
     import * as plugin from 'memobranch/deepseek-harness';
     const vaultRoot = join(process.cwd(), 'vault');
     const admin = new MemoryVault(vaultRoot);
     await admin.initialize('installed package smoke');
+    const web = await startWebServer(vaultRoot);
+    try {
+      const page = await fetch(web.url);
+      assert.equal(page.status, 200);
+      assert.match(await page.text(), /app.js/);
+      const response = await fetch(web.url + '/api/session', { method: 'POST',
+        headers: { Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).result.name, 'installed package smoke');
+      assert.equal((await fetch(web.url + '/app.js')).status, 200);
+      console.log('Installed package: authenticated Web console and bundled assets passed.');
+    } finally { await web.stop(); }
     const metadata = JSON.parse(await readFile('node_modules/memobranch/package.json', 'utf8'));
     const patch = await readFile(join('node_modules/memobranch', metadata.dsh.bundle.patch), 'utf8');
     assert.match(patch, /name: memobranch\\/deepseek-harness/);

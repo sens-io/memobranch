@@ -6,6 +6,7 @@ import { MaintenanceService } from './maintenance.js';
 import { authorize, localAdminPrincipal, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
+import { startWebServer } from './web.js';
 
 const VERSION = '1.0.0';
 
@@ -142,6 +143,17 @@ async function main(): Promise<void> {
     case 'serve':
       await serve(vault, parsed);
       return;
+    case 'web': {
+      if (parsed.flags.has('host')) throw new Error('Web management binds only to 127.0.0.1; --host is not supported');
+      const handle = await startWebServer(root, { principal, port: numberFlag(parsed, 'port', 0) });
+      print({ status: 'web', url: handle.url, token: handle.token, notice: 'Enter this token in the browser. Keep it private; restart rotates it.' });
+      await new Promise<void>((resolveStop) => {
+        const stop = () => { void handle.stop().finally(resolveStop); };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+      return;
+    }
     default:
       throw new Error(`Unknown command: ${parsed.command}`);
   }
@@ -381,6 +393,7 @@ Usage:
   amem wiki lint [--semantic] [--max-pages N]
   amem wiki revoke <page-key> --reason TEXT
   amem serve [--host 127.0.0.1] [--port 0]
+  amem web [--port 0] --root PATH
 
 Common options: --root PATH, --actor ID, --actor-name NAME, --actor-email EMAIL.
 LLM: AMEM_LLM_API_KEY, AMEM_LLM_MODEL, AMEM_LLM_BASE_URL, AMEM_EMBEDDING_MODEL.

@@ -29,6 +29,7 @@ Auditable, searchable, portable long-term memory for AI agents
   <a href="#-why-memobranch">Why MemoBranch</a> •
   <a href="#-core-capabilities">Capabilities</a> •
   <a href="#-quick-start">Quick Start</a> •
+  <a href="#-web-management">Web Console</a> •
   <a href="#-how-it-works">Architecture</a> •
   <a href="#-deepseek-harness-plugin">DeepSeek Harness</a> •
   <a href="#-mcp-integration">MCP</a> •
@@ -95,7 +96,7 @@ flowchart LR
 | 🧩 | **OpenSpec-driven development** | Traceable proposals, specifications, designs, tasks, verification evidence, and archives |
 
 > [!NOTE]
-> MemoBranch is a local service with one tenant per vault. It does not include a browser editor, hosted control plane, multi-tenant database, distributed write consensus, or automatic semantic conflict resolution.
+> MemoBranch is a local service with one tenant per vault. The local Web console provides structured management, not arbitrary file editing. It does not include a hosted control plane, multi-tenant database, distributed write consensus, or automatic semantic conflict resolution.
 
 ## 🚀 Quick Start
 
@@ -381,6 +382,28 @@ Cancellation is isolated per invocation and does not stop model requests belongi
 
 Git commands run for at most 30 seconds by default, configurable through `AMEM_GIT_TIMEOUT_MS` (`1..300000` milliseconds). Cancellation or timeout terminates the associated transport processes. A confirmed successful push is not rolled back locally. If a push is interrupted before confirmation, the remote outcome may be unknown; inspect remote status before retrying. Agents should call `memory_context` before tasks that need long-term context.
 
+## 🖥 Web Management
+
+The local management console offers a dashboard, authorized memory/evidence browsing, capture and candidate review, Wiki workflows, configuration, health checks and Git history.
+
+> [!NOTE]
+> This feature is available in the current source tree; the published npm `1.0.0` does not include it. Build this revision before starting it:
+
+```bash
+npm ci
+npm run build
+node dist/cli.js web --root /absolute/path/to/memory-vault --port 0
+```
+
+Initialize the vault first with `node dist/cli.js init /absolute/path/to/memory-vault` if needed. Open the printed `http://127.0.0.1:<port>` URL, then enter the separately printed token. `--port 0` selects a free port; a fixed port such as `--port 3210` is also supported. Stop with Ctrl+C.
+
+- **Memory:** filter and paginate records, inspect provenance, capture evidence, propose, approve/reject and revoke memories.
+- **LLM Wiki:** browse pages, prepare ingestion plans, run read-only queries, explicitly prepare answer-filing plans, run structural/semantic lint and separately approve plans. Edit purpose/rules with revision checks.
+- **Configuration:** edit non-secret operational settings with administrator authorization and stale-write protection. Identity, tenant, credentials, encryption policy and remote URLs stay outside the browser.
+- **Operations:** inspect health and history, rebuild the lexical index, recover transactions and explicitly synchronize an already-configured Git remote. Web mode does not start the background maintenance scheduler.
+
+The Chinese-language UI is bundled locally with no CDN dependencies. It binds only to `127.0.0.1`, requires a token plus exact Host/Origin checks, and inherits the launching process's `AMEM_*` identity and access restrictions. Keep the token private; it is held only in page memory and rotates on restart. Desktop/browser refresh requires entering it again. Do not expose this console through a public proxy. Irreversible key erasure remains CLI-only in the Web workflow.
+
 ## 🔌 MCP Integration
 
 After `npm install -g memobranch`, add the following configuration to an MCP-compatible agent tool. Initialize the vault first (see Quick Start), replace its path with an actual absolute path, and copy its `tenantId` from `agent-memory.json` into `AMEM_TENANT_ID`:
@@ -531,6 +554,7 @@ When synchronization definitively fails, the original HEAD, managed files, and s
 | Diagnose / recover | `amem doctor` / `recover` / `reindex` / `maintenance` |
 | Remote | `amem remote set` / `status` / `sync` / `remove` |
 | Service | `amem serve [--host 127.0.0.1] [--port 0]` |
+| Web console (source build) | `amem web --root PATH [--port 0]` |
 | Information | `amem version` / `config` / `policy` / `history` |
 | Wiki compilation / review | `amem wiki ingest <evidence-id>` / `wiki apply --file PLAN.json` |
 | Wiki navigation / filing | `amem wiki catalog` / `wiki query <question>` / `wiki file --file ANSWER.json --title TITLE` |

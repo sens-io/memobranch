@@ -29,6 +29,7 @@
   <a href="#-为什么需要它">为什么</a> •
   <a href="#-核心能力">核心能力</a> •
   <a href="#-快速开始">快速开始</a> •
+  <a href="#-web-管理界面">Web 管理</a> •
   <a href="#-工作原理">工作原理</a> •
   <a href="#-deepseek-harness-插件">DeepSeek Harness</a> •
   <a href="#-mcp-接入">MCP 接入</a> •
@@ -95,7 +96,7 @@ flowchart LR
 | 🧩 | **OpenSpec 驱动** | proposal、规格、设计、任务、验证证据与归档完整留痕 |
 
 > [!NOTE]
-> 当前定位是“一租户一个 vault”的本地服务。它不包含浏览器编辑器、托管控制面、多租户数据库、分布式写入共识或自动语义冲突裁决。
+> 当前定位是“一租户一个 vault”的本地服务。Web 界面提供结构化管理，不支持任意编辑底层文件；不包含托管控制面、多租户数据库、分布式写入共识或自动语义冲突裁决。
 
 ## 🚀 快速开始
 
@@ -381,6 +382,28 @@ Git 安装会通过 `prepare` 构建 TypeScript。pnpm 10 及更新版本需要�
 
 Git 命令默认最多运行 30 秒，可通过 `AMEM_GIT_TIMEOUT_MS` 调整（`1..300000` 毫秒），取消或超时会终止所属传输进程。已确认成功的推送不会被本地回滚；若推送在确认前被中断，远端结果可能不确定，应先检查远端状态再重试。建议 Agent 在需要长期上下文的任务开始前调用 `memory_context`。
 
+## 🖥 Web 管理界面
+
+本机管理台提供总览、授权记忆与证据浏览、捕获和候选审核、Wiki 工作流、配置、健康检查及 Git 历史。
+
+> [!NOTE]
+> 此功能已加入当前源码，已发布的 npm `1.0.0` 尚不包含。请先构建当前版本再启动：
+
+```bash
+npm ci
+npm run build
+node dist/cli.js web --root /absolute/path/to/memory-vault --port 0
+```
+
+如尚未初始化 vault，先运行 `node dist/cli.js init /absolute/path/to/memory-vault`。打开终端显示的 `http://127.0.0.1:<port>` 地址，再输入单独显示的 token。`--port 0` 自动选择空闲端口，也可指定 `--port 3210` 等固定端口；按 Ctrl+C 停止。
+
+- **记忆管理：** 筛选与分页、查看来源、捕获证据、提出候选、批准／拒绝及撤回记忆。
+- **LLM Wiki：** 浏览页面、生成摄取计划、只读问答、明确生成答案回存计划、结构／语义 Lint，以及单独批准计划；目的与规则编辑带版本检查。
+- **配置：** 管理员可修改不含秘密的运行参数，过期页面无法覆盖较新的配置；身份、租户、凭据、加密策略和远端 URL 不在网页中管理。
+- **运维：** 健康检查、历史、词法索引重建、事务恢复，以及显式同步已配置的 Git 远端。Web 模式不会启动后台维护调度器。
+
+中文界面随包提供，不依赖 CDN。服务仅监听 `127.0.0.1`，校验访问令牌及精确 Host/Origin，并继承启动进程的 `AMEM_*` 身份与权限限制。请保管好令牌；它仅留在页面内存，刷新页面需重新输入，重启服务会轮换。不要通过公共代理暴露此管理台。Web 工作流不提供不可逆密钥擦除，请使用可信终端操作。
+
 ## 🔌 MCP 接入
 
 执行 `npm install -g memobranch` 后，把以下配置加入支持 MCP 的 Agent 工具。请先初始化 vault（见快速开始），将其路径替换为实际绝对路径，并将 `agent-memory.json` 中的 `tenantId` 填入 `AMEM_TENANT_ID`：
@@ -531,6 +554,7 @@ Git 对象损坏时，同步会被禁止。应从可信远端或备份恢复 `.a
 | 诊断 / 恢复 | `amem doctor` / `recover` / `reindex` / `maintenance` |
 | 远端 | `amem remote set` / `status` / `sync` / `remove` |
 | 服务 | `amem serve [--host 127.0.0.1] [--port 0]` |
+| Web 管理（源码构建） | `amem web --root PATH [--port 0]` |
 | 信息 | `amem version` / `config` / `policy` / `history` |
 | Wiki 编译 / 审核 | `amem wiki ingest <evidence-id>` / `wiki apply --file PLAN.json` |
 | Wiki 导航 / 回存 | `amem wiki catalog` / `wiki query <question>` / `wiki file --file ANSWER.json --title TITLE` |
