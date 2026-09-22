@@ -13,7 +13,7 @@ Auditable, searchable, portable long-term memory for AI agents
 **Markdown is the source of truth · Git tracks every change · LLMs provide optional enhancements**
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.0-6C63FF?style=flat-square" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/version-1.1.0-6C63FF?style=flat-square" alt="Version 1.1.0">
   <img src="https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 20+">
   <img src="https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
@@ -114,7 +114,7 @@ npm install -g memobranch
 memobranch --help
 ```
 
-For a pinned installation, use `npm install -g memobranch@1.0.0`. The package provides `memobranch` and `memobranch-mcp`, plus the equivalent aliases `amem` and `amem-mcp` used in the examples below.
+For a pinned installation, use `npm install -g memobranch@1.1.0`. The package provides `memobranch` and `memobranch-mcp`, plus the equivalent aliases `amem` and `amem-mcp` used in the examples below.
 
 #### From Source (Development)
 
@@ -387,15 +387,16 @@ Git commands run for at most 30 seconds by default, configurable through `AMEM_G
 The local management console offers a dashboard, authorized memory/evidence browsing, capture and candidate review, Wiki workflows, configuration, health checks and Git history.
 
 > [!NOTE]
-> This feature is available in the current source tree; the published npm `1.0.0` does not include it. Build this revision before starting it:
+> Available starting with npm version `1.1.0`. Install or upgrade, then start the console:
 
 ```bash
-npm ci
-npm run build
-node dist/cli.js web --root /absolute/path/to/memory-vault --port 0
+npm install -g memobranch@1.1.0
+memobranch web --root /absolute/path/to/memory-vault --port 0
 ```
 
-Initialize the vault first with `node dist/cli.js init /absolute/path/to/memory-vault` if needed. Open the printed `http://127.0.0.1:<port>` URL, then enter the separately printed token. `--port 0` selects a free port; a fixed port such as `--port 3210` is also supported. Stop with Ctrl+C.
+Initialize the vault first with `memobranch init /absolute/path/to/memory-vault` if needed. Open the printed `http://127.0.0.1:<port>` URL, then enter the separately printed token. `--port 0` selects a free port; a fixed port such as `--port 3210` is also supported. Stop with Ctrl+C.
+
+Maintainers: [one-command npm release and recovery guide](https://github.com/sens-io/memobranch/blob/main/docs/releasing.md).
 
 - **Memory:** filter and paginate records, inspect provenance, capture evidence, propose, approve/reject and revoke memories.
 - **LLM Wiki:** browse pages, prepare ingestion plans, run read-only queries, explicitly prepare answer-filing plans, run structural/semantic lint and separately approve plans. Edit purpose/rules with revision checks.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -11,7 +11,10 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporary = await mkdtemp(join(tmpdir(), 'memobranch-package-'));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 try {
-  const packed = await exec(npm, ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
+  if (process.argv.length > 3) throw new Error('Usage: npm run test:package -- [tarball]');
+  const supplied = process.argv[2] ? resolve(process.argv[2]) : undefined;
+  const packed = await exec(npm, supplied ? ['pack', supplied, '--dry-run', '--json', '--ignore-scripts']
+    : ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
   const [{ filename, files }] = JSON.parse(packed.stdout);
   for (const expected of [
     'README.md', 'README_CN.md',
@@ -34,7 +37,7 @@ try {
   const consumer = join(temporary, 'consumer');
   await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ name: 'memobranch-package-consumer', private: true, type: 'module' }));
-  await exec(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(temporary, filename), ...sdk], {
+  await exec(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', supplied ?? join(temporary, filename), ...sdk], {
     cwd: consumer, maxBuffer: 4 * 1024 * 1024,
   });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));

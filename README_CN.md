@@ -13,7 +13,7 @@
 **Markdown 是事实源 · Git 记录每次演化 · LLM 只做可选增强**
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.0.0-6C63FF?style=flat-square" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/version-1.1.0-6C63FF?style=flat-square" alt="Version 1.1.0">
   <img src="https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 20+">
   <img src="https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Git-native-F05032?style=flat-square&logo=git&logoColor=white" alt="Git native">
@@ -114,7 +114,7 @@ npm install -g memobranch
 memobranch --help
 ```
 
-如需固定版本，使用 `npm install -g memobranch@1.0.0`。包提供 `memobranch` 和 `memobranch-mcp` 命令，以及下方示例使用的等价别名 `amem` 和 `amem-mcp`。
+如需固定版本，使用 `npm install -g memobranch@1.1.0`。包提供 `memobranch` 和 `memobranch-mcp` 命令，以及下方示例使用的等价别名 `amem` 和 `amem-mcp`。
 
 #### 从源码安装（开发用途）
 
@@ -387,15 +387,16 @@ Git 命令默认最多运行 30 秒，可通过 `AMEM_GIT_TIMEOUT_MS` 调整（`
 本机管理台提供总览、授权记忆与证据浏览、捕获和候选审核、Wiki 工作流、配置、健康检查及 Git 历史。
 
 > [!NOTE]
-> 此功能已加入当前源码，已发布的 npm `1.0.0` 尚不包含。请先构建当前版本再启动：
+> 自 npm `1.1.0` 起提供。安装或升级后即可启动：
 
 ```bash
-npm ci
-npm run build
-node dist/cli.js web --root /absolute/path/to/memory-vault --port 0
+npm install -g memobranch@1.1.0
+memobranch web --root /absolute/path/to/memory-vault --port 0
 ```
 
-如尚未初始化 vault，先运行 `node dist/cli.js init /absolute/path/to/memory-vault`。打开终端显示的 `http://127.0.0.1:<port>` 地址，再输入单独显示的 token。`--port 0` 自动选择空闲端口，也可指定 `--port 3210` 等固定端口；按 Ctrl+C 停止。
+如尚未初始化 vault，先运行 `memobranch init /absolute/path/to/memory-vault`。打开终端显示的 `http://127.0.0.1:<port>` 地址，再输入单独显示的 token。`--port 0` 自动选择空闲端口，也可指定 `--port 3210` 等固定端口；按 Ctrl+C 停止。
+
+维护者：[一键 npm 发布与失败恢复指南](https://github.com/sens-io/memobranch/blob/main/docs/releasing.md)。
 
 - **记忆管理：** 筛选与分页、查看来源、捕获证据、提出候选、批准／拒绝及撤回记忆。
 - **LLM Wiki：** 浏览页面、生成摄取计划、只读问答、明确生成答案回存计划、结构／语义 Lint，以及单独批准计划；目的与规则编辑带版本检查。
