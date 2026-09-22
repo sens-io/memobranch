@@ -14,6 +14,7 @@ try {
   const packed = await exec(npm, ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
   const [{ filename, files }] = JSON.parse(packed.stdout);
   for (const expected of [
+    'README.md', 'README_CN.md',
     'dist/index.js', 'dist/index.d.ts', 'dist/cli.js', 'dist/mcp.js',
     'dist/deepseek-harness.js', 'dist/deepseek-harness.d.ts', 'cordis.patch.yml',
     'dist/wiki.js', 'dist/wiki.d.ts', 'dist/wiki-types.js', 'dist/wiki-types.d.ts',

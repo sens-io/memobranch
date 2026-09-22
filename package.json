@@ -27,6 +27,7 @@
     "dist",
     "cordis.patch.yml",
     "README.md",
+    "README_CN.md",
     "docs/wiki.md",
     ".env.example",
     "LICENSE"
