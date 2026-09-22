@@ -66,6 +66,7 @@ try {
       console.log('Installed package: authenticated Web console and bundled assets passed.');
     } finally { await web.stop(); }
     const metadata = JSON.parse(await readFile('node_modules/memobranch/package.json', 'utf8'));
+    assert.equal(plugin.VERSION, metadata.version);
     const patch = await readFile(join('node_modules/memobranch', metadata.dsh.bundle.patch), 'utf8');
     assert.match(patch, /name: memobranch\\/deepseek-harness/);
     Object.assign(process.env, { AMEM_PERMISSIONS: 'write', AMEM_ALLOWED_SCOPES: 'user',
@@ -88,6 +89,9 @@ try {
   `], { cwd: consumer, env, maxBuffer: 4 * 1024 * 1024 });
   process.stdout.write(result.stdout);
   await exec(process.execPath, [join(consumer, 'node_modules/memobranch/dist/cli.js'), '--help'], { cwd: consumer, env });
+  const version = await exec(process.execPath, [join(consumer, 'node_modules/memobranch/dist/cli.js'), '--version'], { cwd: consumer, env });
+  const metadata = JSON.parse(await readFile(join(consumer, 'node_modules/memobranch/package.json'), 'utf8'));
+  assert.equal(JSON.parse(version.stdout).version, metadata.version);
   await writeFile(join(consumer, 'wiki-public-types.ts'), `
     import { MemoryVault, type WikiCatalogEntry, type WikiCitation, type WikiLintResult,
       type WikiPageDraft, type WikiPageMeta, type WikiPageType, type WikiPlan,

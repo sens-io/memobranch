@@ -8,7 +8,7 @@ import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type S
 import { MemoryVault } from './vault.js';
 import { startWebServer } from './web.js';
 
-const VERSION = '1.0.0';
+import { VERSION } from './version.js';
 
 interface ParsedArgs {
   command: string;

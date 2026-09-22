@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import semver from 'semver';
+import { createRequire } from 'node:module';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const registry = '--registry=https://registry.npmjs.org';
@@ -22,6 +22,9 @@ export function release(args, io) {
   };
   clean();
   const head = run('git', ['rev-parse', 'HEAD'], true).trim();
+  // Bootstrap before loading development dependencies, including on a fresh clone.
+  run('npm', ['ci', '--include=dev']);
+  const semver = createRequire(import.meta.url)('semver');
   const pkg = io.readJson('package.json');
   const lock = io.readJson('package-lock.json');
   if (pkg.name !== 'memobranch' || !semver.valid(pkg.version) || semver.prerelease(pkg.version)
@@ -37,7 +40,6 @@ export function release(args, io) {
   if (publish && run('npm', ['whoami', registry], true).trim() !== 'sens-io') {
     throw new Error('Log in to npm as sens-io before publishing.');
   }
-  run('npm', ['ci']);
   run('npm', ['run', 'check']);
   run('npm', ['audit', '--omit=dev', registry]);
   run('npm', ['exec', '--yes', '--package=@fission-ai/openspec@1.0.2', '--', 'openspec', 'validate', '--all', '--strict']);

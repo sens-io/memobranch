@@ -396,7 +396,7 @@ memobranch web --root /absolute/path/to/memory-vault --port 0
 
 Initialize the vault first with `memobranch init /absolute/path/to/memory-vault` if needed. Open the printed `http://127.0.0.1:<port>` URL, then enter the separately printed token. `--port 0` selects a free port; a fixed port such as `--port 3210` is also supported. Stop with Ctrl+C.
 
-Maintainers: [one-command npm release and recovery guide](https://github.com/sens-io/memobranch/blob/main/docs/releasing.md).
+Maintainers: [one-command npm release and recovery guide](docs/releasing.md).
 
 - **Memory:** filter and paginate records, inspect provenance, capture evidence, propose, approve/reject and revoke memories.
 - **LLM Wiki:** browse pages, prepare ingestion plans, run read-only queries, explicitly prepare answer-filing plans, run structural/semantic lint and separately approve plans. Edit purpose/rules with revision checks.

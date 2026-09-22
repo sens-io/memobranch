@@ -8,10 +8,11 @@ import { throwIfCancelled, withOperation } from './operation.js';
 import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
+import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
 export const inject = ['tools'] as const;
-export const VERSION = '1.0.0';
+export { VERSION } from './version.js';
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -12,10 +12,11 @@ test('CLI returns stable JSON for version and invalid input', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amem-cli-'));
   const base = ['--import', 'tsx', join(process.cwd(), 'src', 'cli.ts')];
   try {
+    const metadata = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
     const version = await exec(process.execPath, [...base, 'version', '--json']);
-    assert.deepEqual(JSON.parse(version.stdout), { version: '1.0.0' });
+    assert.deepEqual(JSON.parse(version.stdout), { version: metadata.version });
     const versionFlag = await exec(process.execPath, [...base, '--version']);
-    assert.deepEqual(JSON.parse(versionFlag.stdout), { version: '1.0.0' });
+    assert.deepEqual(JSON.parse(versionFlag.stdout), { version: metadata.version });
     const initialized = await exec(process.execPath, [...base, 'init', root, '--json']);
     assert.equal((JSON.parse(initialized.stdout) as { created: boolean }).created, true);
     await assert.rejects(

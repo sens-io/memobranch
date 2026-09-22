@@ -396,7 +396,7 @@ memobranch web --root /absolute/path/to/memory-vault --port 0
 
 如尚未初始化 vault，先运行 `memobranch init /absolute/path/to/memory-vault`。打开终端显示的 `http://127.0.0.1:<port>` 地址，再输入单独显示的 token。`--port 0` 自动选择空闲端口，也可指定 `--port 3210` 等固定端口；按 Ctrl+C 停止。
 
-维护者：[一键 npm 发布与失败恢复指南](https://github.com/sens-io/memobranch/blob/main/docs/releasing.md)。
+维护者：[一键 npm 发布与失败恢复指南](docs/releasing.md)。
 
 - **记忆管理：** 筛选与分页、查看来源、捕获证据、提出候选、批准／拒绝及撤回记忆。
 - **LLM Wiki：** 浏览页面、生成摄取计划、只读问答、明确生成答案回存计划、结构／语义 Lint，以及单独批准计划；目的与规则编辑带版本检查。

@@ -36,6 +36,8 @@ test('release defaults to dry-run and verifies the exact artifact before publica
   assert.equal(publish[2], calls.find(c => c[2] === 'test:package')[4]);
   assert.ok(calls.findIndex(c => c[2] === 'test:package') < calls.indexOf(publish));
   assert.equal(calls.at(-1)[0], 'cleanup');
+  assert.ok(calls.findIndex(c => c[1] === 'ci') < calls.findIndex(c => c[1] === 'view'));
+  assert.ok(calls.find(c => c[1] === 'ci').includes('--include=dev'));
 });
 
 test('explicit publication verifies registry integrity and latest tag', () => {

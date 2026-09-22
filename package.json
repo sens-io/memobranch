@@ -29,6 +29,7 @@
     "README.md",
     "README_CN.md",
     "docs/wiki.md",
+    "docs/releasing.md",
     ".env.example",
     "LICENSE"
   ],
