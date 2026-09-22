@@ -106,6 +106,17 @@ flowchart LR
 
 ### Installation
 
+Install the published package from [npm](https://www.npmjs.com/package/memobranch); no source checkout or build is required:
+
+```bash
+npm install -g memobranch
+memobranch --help
+```
+
+For a pinned installation, use `npm install -g memobranch@1.0.0`. The package provides `memobranch` and `memobranch-mcp`, plus the equivalent aliases `amem` and `amem-mcp` used in the examples below.
+
+#### From Source (Development)
+
 ```bash
 git clone https://github.com/sens-io/memobranch.git
 cd memobranch
@@ -300,6 +311,16 @@ The plugin has been verified with `@deepseek-ai/dsh-tools@0.1.2-rc.1`. Its decla
 > [!NOTE]
 > MemoBranch itself supports Node.js 20+. The dependency chain of the official `@deepseek-ai/dsh@0.1.2-rc.1` requires Node.js 22.19+. Follow the `engines` declaration of the Harness version you install.
 
+### Install from npm
+
+With DeepSeek Harness already installed, add MemoBranch directly to a Harness profile. A separate global MemoBranch installation is not required:
+
+```bash
+dsh plugin --profile personal-agent add memobranch
+dsh --profile personal-agent --dump-config
+dsh --profile personal-agent
+```
+
 ### Install from Local Source
 
 Build MemoBranch, then install the project directory into a Harness profile:
@@ -312,12 +333,6 @@ npm run build
 dsh plugin --profile personal-agent add /absolute/path/to/memobranch
 dsh --profile personal-agent --dump-config
 dsh --profile personal-agent
-```
-
-Once published to npm, it can also be installed directly:
-
-```bash
-dsh plugin --profile personal-agent add memobranch
 ```
 
 When installing from GitHub, pin a commit:
@@ -368,15 +383,14 @@ Git commands run for at most 30 seconds by default, configurable through `AMEM_G
 
 ## 🔌 MCP Integration
 
-After building, add the following configuration to an MCP-compatible agent tool. Replace the paths with actual absolute paths:
+After `npm install -g memobranch`, add the following configuration to an MCP-compatible agent tool. Initialize the vault first (see Quick Start), replace its path with an actual absolute path, and copy its `tenantId` from `agent-memory.json` into `AMEM_TENANT_ID`:
 
 ```json
 {
   "mcpServers": {
     "agent-memory": {
-      "command": "node",
+      "command": "memobranch-mcp",
       "args": [
-        "/absolute/path/to/memobranch/dist/mcp.js",
         "/absolute/path/to/memory-vault"
       ],
       "env": {
@@ -391,6 +405,10 @@ After building, add the following configuration to an MCP-compatible agent tool.
   }
 }
 ```
+
+The MCP client must be able to find Node.js, Git, and `memobranch-mcp` on its `PATH`. Desktop clients may not inherit your shell's `PATH`; configure it explicitly if needed. You can locate the installed executable with `command -v memobranch-mcp` (Windows: `where memobranch-mcp`).
+
+For a source installation, keep the same `env` settings and use `"command": "node"` with `"args": ["/absolute/path/to/memobranch/dist/mcp.js", "/absolute/path/to/memory-vault"]` after building.
 
 ### MCP Tools
 

@@ -106,6 +106,17 @@ flowchart LR
 
 ### 安装
 
+从 [npm](https://www.npmjs.com/package/memobranch) 安装已发布的包，无需克隆源码或构建：
+
+```bash
+npm install -g memobranch
+memobranch --help
+```
+
+如需固定版本，使用 `npm install -g memobranch@1.0.0`。包提供 `memobranch` 和 `memobranch-mcp` 命令，以及下方示例使用的等价别名 `amem` 和 `amem-mcp`。
+
+#### 从源码安装（开发用途）
+
 ```bash
 git clone https://github.com/sens-io/memobranch.git
 cd memobranch
@@ -300,6 +311,16 @@ MemoBranch 可以作为原生 Cordis 插件直接进入 DeepSeek Harness 的工�
 > [!NOTE]
 > MemoBranch 本身支持 Node.js 20+；官方 `@deepseek-ai/dsh@0.1.2-rc.1` 的当前依赖链要求 Node.js 22.19+。以所安装 Harness 版本的 `engines` 声明为准。
 
+### 从 npm 安装
+
+在已安装 DeepSeek Harness 的环境中，将 MemoBranch 直接添加到 Harness profile，无需单独全局安装 MemoBranch：
+
+```bash
+dsh plugin --profile personal-agent add memobranch
+dsh --profile personal-agent --dump-config
+dsh --profile personal-agent
+```
+
 ### 从本地源码安装
 
 先构建 MemoBranch，再把项目目录安装到一个 Harness profile：
@@ -312,12 +333,6 @@ npm run build
 dsh plugin --profile personal-agent add /absolute/path/to/memobranch
 dsh --profile personal-agent --dump-config
 dsh --profile personal-agent
-```
-
-发布到 npm 后，也可以直接安装：
-
-```bash
-dsh plugin --profile personal-agent add memobranch
 ```
 
 从 GitHub 安装时建议锁定 commit：
@@ -368,15 +383,14 @@ Git 命令默认最多运行 30 秒，可通过 `AMEM_GIT_TIMEOUT_MS` 调整（`
 
 ## 🔌 MCP 接入
 
-构建完成后，把以下配置加入支持 MCP 的 Agent 工具。请将路径替换为实际绝对路径：
+执行 `npm install -g memobranch` 后，把以下配置加入支持 MCP 的 Agent 工具。请先初始化 vault（见快速开始），将其路径替换为实际绝对路径，并将 `agent-memory.json` 中的 `tenantId` 填入 `AMEM_TENANT_ID`：
 
 ```json
 {
   "mcpServers": {
     "agent-memory": {
-      "command": "node",
+      "command": "memobranch-mcp",
       "args": [
-        "/absolute/path/to/memobranch/dist/mcp.js",
         "/absolute/path/to/memory-vault"
       ],
       "env": {
@@ -391,6 +405,10 @@ Git 命令默认最多运行 30 秒，可通过 `AMEM_GIT_TIMEOUT_MS` 调整（`
   }
 }
 ```
+
+MCP 客户端必须能从 `PATH` 找到 Node.js、Git 和 `memobranch-mcp`。桌面客户端可能不会继承终端的 `PATH`，必要时请显式配置。可用 `command -v memobranch-mcp`（Windows：`where memobranch-mcp`）查询已安装命令的位置。
+
+如使用源码安装，构建后保留相同的 `env` 设置，改用 `"command": "node"` 和 `"args": ["/absolute/path/to/memobranch/dist/mcp.js", "/absolute/path/to/memory-vault"]`。
 
 ### MCP 工具
 
