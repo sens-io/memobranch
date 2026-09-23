@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -11,11 +11,15 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const temporary = await mkdtemp(join(tmpdir(), 'memobranch-package-'));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 try {
-  const packed = await exec(npm, ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
+  if (process.argv.length > 3) throw new Error('Usage: npm run test:package -- [tarball]');
+  const supplied = process.argv[2] ? resolve(process.argv[2]) : undefined;
+  const packed = await exec(npm, supplied ? ['pack', supplied, '--dry-run', '--json', '--ignore-scripts']
+    : ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
   const [{ filename, files }] = JSON.parse(packed.stdout);
   for (const expected of [
     'README.md', 'README_CN.md',
     'dist/index.js', 'dist/index.d.ts', 'dist/cli.js', 'dist/mcp.js',
+    'dist/web.js', 'dist/web.d.ts', 'dist/web-ui.js', 'dist/settings.js',
     'dist/deepseek-harness.js', 'dist/deepseek-harness.d.ts', 'cordis.patch.yml',
     'dist/wiki.js', 'dist/wiki.d.ts', 'dist/wiki-types.js', 'dist/wiki-types.d.ts',
     'dist/wiki-schema.js', 'dist/wiki-schema.d.ts',
@@ -33,7 +37,7 @@ try {
   const consumer = join(temporary, 'consumer');
   await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ name: 'memobranch-package-consumer', private: true, type: 'module' }));
-  await exec(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(temporary, filename), ...sdk], {
+  await exec(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', supplied ?? join(temporary, filename), ...sdk], {
     cwd: consumer, maxBuffer: 4 * 1024 * 1024,
   });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));
@@ -44,12 +48,25 @@ try {
     import { Context } from '@deepseek-ai/cordis';
     import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
     import { ToolRuntime } from '@deepseek-ai/dsh-tools';
-    import { MemoryVault } from 'memobranch';
+    import { MemoryVault, startWebServer } from 'memobranch';
     import * as plugin from 'memobranch/deepseek-harness';
     const vaultRoot = join(process.cwd(), 'vault');
     const admin = new MemoryVault(vaultRoot);
     await admin.initialize('installed package smoke');
+    const web = await startWebServer(vaultRoot);
+    try {
+      const page = await fetch(web.url);
+      assert.equal(page.status, 200);
+      assert.match(await page.text(), /app.js/);
+      const response = await fetch(web.url + '/api/session', { method: 'POST',
+        headers: { Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).result.name, 'installed package smoke');
+      assert.equal((await fetch(web.url + '/app.js')).status, 200);
+      console.log('Installed package: authenticated Web console and bundled assets passed.');
+    } finally { await web.stop(); }
     const metadata = JSON.parse(await readFile('node_modules/memobranch/package.json', 'utf8'));
+    assert.equal(plugin.VERSION, metadata.version);
     const patch = await readFile(join('node_modules/memobranch', metadata.dsh.bundle.patch), 'utf8');
     assert.match(patch, /name: memobranch\\/deepseek-harness/);
     Object.assign(process.env, { AMEM_PERMISSIONS: 'write', AMEM_ALLOWED_SCOPES: 'user',
@@ -72,6 +89,9 @@ try {
   `], { cwd: consumer, env, maxBuffer: 4 * 1024 * 1024 });
   process.stdout.write(result.stdout);
   await exec(process.execPath, [join(consumer, 'node_modules/memobranch/dist/cli.js'), '--help'], { cwd: consumer, env });
+  const version = await exec(process.execPath, [join(consumer, 'node_modules/memobranch/dist/cli.js'), '--version'], { cwd: consumer, env });
+  const metadata = JSON.parse(await readFile(join(consumer, 'node_modules/memobranch/package.json'), 'utf8'));
+  assert.equal(JSON.parse(version.stdout).version, metadata.version);
   await writeFile(join(consumer, 'wiki-public-types.ts'), `
     import { MemoryVault, type WikiCatalogEntry, type WikiCitation, type WikiLintResult,
       type WikiPageDraft, type WikiPageMeta, type WikiPageType, type WikiPlan,

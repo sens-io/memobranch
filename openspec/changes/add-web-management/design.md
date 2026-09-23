@@ -1,0 +1,11 @@
+# Design
+
+The server binds only 127.0.0.1. A random 256-bit bearer token is printed at startup separately from the URL; it is entered into a password field and retained only in page memory. Restart rotates the token. API requests require the exact Host and Origin, JSON, and authorization; no CORS or cookies are used. Static assets contain no vault data and load no external code, fonts or images. CSP forbids inline scripts, embedding and external connections. Managed Markdown is displayed as text, not executable HTML.
+
+The launching principal owns every operation. Request bodies cannot choose vault paths, actors, permissions or tenant. Each request creates its own MemoryVault instance to avoid sharing mutation state. Request timeout, disconnect and shutdown propagate through withOperation; an already-committing transaction settles under the existing cancellation contract. Concurrency and request bytes are bounded. Unknown input fields are rejected.
+
+Record browsing uses the vault's authorized read path before filtering/pagination and returns bounded summaries. Wiki pages use their existing dependency-aware catalog/get path. Settings expose an allowlist of non-secret operational values; saving requires admin and a full configuration revision checked inside the write lock. No browser API writes files directly. Encryption policy, identifiers, credentials and remote configuration are not editable. Maintenance and sync retain their separate permissions, and pushes require an explicit confirmation.
+
+UI direction: a quiet knowledge workbench, ink-colored navigation, warm paper surfaces, green status accents, clear source/status labels and readable document panels. Chinese interface, keyboard-operable native forms, responsive navigation, explicit loading/empty/error states, no automatic retries of writes. Plans are inspected before a separate apply. Ordinary queries never file automatically.
+
+Boundary tests cover authorization, cross-origin and forged Host requests, invalid/oversized input, stale config, scoped/tenant-filtered lists, XSS-safe rendering, lifecycle cleanup and actual capture/review/Wiki workflows. Retention gate: existing full test suite, typecheck/build, OpenSpec validation and installed package smoke. Live provider semantic quality and public hosting are not claims of this change.

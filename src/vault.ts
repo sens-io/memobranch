@@ -13,6 +13,7 @@ import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdo
 import { recordCommit, throwIfCancelled, withoutCancellation } from './operation.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
+import { publicSettings, settingsRevision, settingsSchema } from './settings.js';
 import { pendingTransactionCount, recoverTransactions, type RecoveryResult, VaultTransaction } from './transaction.js';
 import type {
   Actor,
@@ -187,6 +188,48 @@ export class MemoryVault {
     const config = await readVaultConfig(this.root);
     assertTenant(this.principal, config.tenantId);
     return config;
+  }
+
+  async settings() {
+    authorize(this.principal, 'read');
+    const config = await this.config();
+    return { revision: settingsRevision(config), values: publicSettings(config) };
+  }
+
+  async updateSettings(values: unknown, expectedRevision: string) {
+    authorize(this.principal, 'admin');
+    const parsed = settingsSchema.safeParse(values);
+    if (!parsed.success || !/^[a-f0-9]{64}$/.test(expectedRevision)) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid settings or revision');
+    }
+    const result = await this.withMutation('admin', this.principal, 'settings', 'config: update operational settings', async () => {
+      const current = await this.config();
+      if (settingsRevision(current) !== expectedRevision) throw new AgentMemoryError('VALIDATION_FAILED', 'Settings changed; reload before saving');
+      const next = { ...current, ...parsed.data };
+      await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
+      await this.appendLog('settings', this.principal, 'updated operational settings');
+      return { revision: settingsRevision(next), values: publicSettings(next) };
+    });
+    return { ...result.value, commit: result.commit };
+  }
+
+  async listRecords(options: { collection: 'evidence' | 'candidates' | 'memories'; offset?: number; limit?: number; query?: string; status?: string }) {
+    authorize(this.principal, 'read');
+    const { collection, offset = 0, limit = 30, query = '', status = '' } = options;
+    if (!['evidence', 'candidates', 'memories'].includes(collection) || !Number.isInteger(offset) || offset < 0 ||
+        !Number.isInteger(limit) || limit < 1 || limit > 100 || query.length > 200 || status.length > 30) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid record listing options');
+    }
+    const kind = collection === 'memories' ? 'memory' : collection === 'candidates' ? 'memory-candidate' : 'evidence';
+    const docs = (await this.readDirectory<Record<string, unknown>>(collection === 'memories' ? 'wiki' : collection))
+      .filter(doc => doc.meta.type === kind && (!status || doc.meta.status === status) &&
+        (!query || `${String(doc.meta.key ?? '')}\n${doc.body}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())))
+      .sort((a, b) => String(b.meta.createdAt).localeCompare(String(a.meta.createdAt)) || a.path.localeCompare(b.path));
+    return { total: docs.length, offset, limit, items: docs.slice(offset, offset + limit).map(doc => ({
+      id: String(doc.meta.id), title: String(doc.meta.key ?? doc.meta.id), type: kind,
+      scope: doc.meta.scope, sensitivity: doc.meta.sensitivity, status: doc.meta.status ?? 'immutable',
+      createdAt: doc.meta.createdAt, snippet: doc.body.slice(0, 500),
+    })) };
   }
 
   async migrate(): Promise<{ migrated: boolean; encrypted: number; evidenceDigests: number; commit: string | null }> {

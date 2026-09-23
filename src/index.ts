@@ -12,4 +12,6 @@ export type { ReindexResult, SearchIndexHealth, SearchOptions, SearchResult } fr
 export type * from './types.js';
 export type * from './wiki-types.js';
 export { MemoryVault } from './vault.js';
+export { startWebServer } from './web.js';
+export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions } from './vault.js';

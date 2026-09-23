@@ -10,7 +10,7 @@ import { authorize, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault } from './vault.js';
 
-const VERSION = '1.0.0';
+import { VERSION } from './version.js';
 const vaultRoot = resolve(process.argv[2] ?? process.env.AMEM_VAULT ?? process.cwd());
 
 function createServer(): McpServer {
