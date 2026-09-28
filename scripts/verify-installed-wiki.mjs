@@ -134,7 +134,7 @@ for (const adapter of ['API', 'CLI', 'MCP', 'Harness']) {
       assert.ok(repaired.meta.evidence.includes(evidence.path));
       assert.ok(repaired.meta.links.includes('entity:atlasstore'));
       assert.equal(await readFile(join(vault.root, evidence.path), 'utf8'), rawEvidence);
-      assert.deepEqual((await readdir(join(vault.root, 'evidence'), { recursive: true })).filter(path => path.endsWith('.md')).map(path => path.replaceAll('\\', '/')), [evidence.path.slice('evidence/'.length)],
+      assert.deepEqual((await evidenceFiles(join(vault.root, 'evidence'))).sort(), [evidence.path.slice('evidence/'.length)],
         `${adapter}: generated analysis must not become raw evidence`);
       const log = await readFile(join(vault.root, 'log.md'), 'utf8');
       for (const operation of ['wiki-compile', 'wiki-file', 'wiki-repair']) assert.match(log, new RegExp(operation));
@@ -152,6 +152,18 @@ for (const adapter of ['API', 'CLI', 'MCP', 'Harness']) {
       && request.input.pages.some(page => page.key === 'entity:atlasstore' && page.body.includes('daily snapshots'))));
   });
   console.log(`Installed ${adapter}: provider-backed Wiki plan/apply, persistent pages, query, explicit filing/repair and least-privilege refusal passed.`);
+}
+
+// Node 20.0 does not implement readdir({ recursive: true }). Keep the same
+// complete-tree assertion using the universally supported directory interface.
+async function evidenceFiles(root, prefix = '') {
+  const files = [];
+  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
+    const path = prefix ? prefix + '/' + entry.name : entry.name;
+    if (entry.isDirectory()) files.push(...await evidenceFiles(root, path));
+    else if (entry.name.endsWith('.md')) files.push(path);
+  }
+  return files;
 }
 
 async function withAdapter(adapter, root, env, action) {
