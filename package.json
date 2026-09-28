@@ -28,8 +28,9 @@
     "cordis.patch.yml",
     "README.md",
     "README_CN.md",
-    "docs/wiki.md",
-    "docs/releasing.md",
+    "docs",
+    "openspec",
+    "assets/logo.png",
     ".env.example",
     "LICENSE"
   ],
