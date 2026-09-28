@@ -405,6 +405,8 @@ memobranch web --root /absolute/path/to/memory-vault --port 0
 
 中文界面随包提供，不依赖 CDN。服务仅监听 `127.0.0.1`，校验访问令牌及精确 Host/Origin，并继承启动进程的 `AMEM_*` 身份与权限限制。请保管好令牌；它仅留在页面内存，刷新页面需重新输入，重启服务会轮换。不要通过公共代理暴露此管理台。Web 工作流不提供不可逆密钥擦除，请使用可信终端操作。
 
+普通 Web 请求上限为 1 MiB；明确批准 Wiki 计划及回存答案的请求上限为 16 MiB。返回预览前会检查其回写预算，超限任务需要拆分。配置采用逐层字段白名单，未知扩展字段不会发送到浏览器，也不会在保存时被删除。
+
 ## 🔌 MCP 接入
 
 执行 `npm install -g memobranch` 后，把以下配置加入支持 MCP 的 Agent 工具。请先初始化 vault（见快速开始），将其路径替换为实际绝对路径，并将 `agent-memory.json` 中的 `tenantId` 填入 `AMEM_TENANT_ID`：

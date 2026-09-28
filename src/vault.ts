@@ -205,7 +205,11 @@ export class MemoryVault {
     const result = await this.withMutation('admin', this.principal, 'settings', 'config: update operational settings', async () => {
       const current = await this.config();
       if (settingsRevision(current) !== expectedRevision) throw new AgentMemoryError('VALIDATION_FAILED', 'Settings changed; reload before saving');
-      const next = { ...current, ...parsed.data };
+      const next = { ...current, ...parsed.data,
+        index: { ...current.index, ...parsed.data.index },
+        maintenance: { ...current.maintenance, ...parsed.data.maintenance },
+        limits: { ...current.limits, ...parsed.data.limits },
+      };
       await this.writeManaged('agent-memory.json', `${JSON.stringify(next, null, 2)}\n`);
       await this.appendLog('settings', this.principal, 'updated operational settings');
       return { revision: settingsRevision(next), values: publicSettings(next) };

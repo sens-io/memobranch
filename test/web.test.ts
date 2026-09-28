@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -13,6 +13,28 @@ import type { Principal } from '../src/policy.js';
 import { operationSignal } from '../src/operation.js';
 import { defaultVaultConfig } from '../src/config.js';
 import { publicSettings } from '../src/settings.js';
+
+test('web: nested extension fields stay private and survive an allowlisted save', async t => {
+  const { root, vault, start } = await fixture(t);
+  const config = await vault.config();
+  const extended = { ...config, index: { ...config.index, apiKey: 'PRIVATE_INDEX_CANARY' },
+    maintenance: { ...config.maintenance, credential: 'PRIVATE_MAINTENANCE_CANARY' },
+    limits: { ...config.limits, token: 'PRIVATE_LIMITS_CANARY' } };
+  await writeFile(join(root, 'agent-memory.json'), JSON.stringify(extended));
+  await vault.git.commit('test: configuration extensions', vault.principal);
+  const handle = await start();
+  const response = await call(handle, 'settings');
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(JSON.stringify(response), /PRIVATE_|apiKey|credential|token/);
+  const saved = await call(handle, 'settings-save', { ...response.body.result,
+    values: { ...response.body.result.values, name: 'Safe update' }, confirm: true });
+  assert.equal(saved.status, 200);
+  assert.doesNotMatch(JSON.stringify(saved), /PRIVATE_/);
+  const after = JSON.parse(await readFile(join(root, 'agent-memory.json'), 'utf8'));
+  assert.equal(after.index.apiKey, extended.index.apiKey);
+  assert.equal(after.maintenance.credential, extended.maintenance.credential);
+  assert.equal(after.limits.token, extended.limits.token);
+});
 
 async function fixture(t: TestContext, llm = new LlmClient({ apiKey: '', embeddingModel: '' })) {
   const root = await mkdtemp(join(tmpdir(), 'memobranch-web-'));
@@ -160,6 +182,32 @@ class WikiFixture extends LlmClient {
     return { pages: data.sources.map((source: any) => ({ key: `source:${source.id}`, pageType: 'source', title: 'Source summary', summary: 'A documented source', body: '# Summary\n\nSource-grounded information.', evidenceIds: [source.id], links: [], status: 'active', conditions: [], uncertainty: [] })) } as T;
   }
 }
+
+test('web: generated multi-page Unicode plans above 1 MiB can be explicitly approved', async t => {
+  class LargeFixture extends WikiFixture {
+    override async wiki<T>(operation: 'navigate' | 'compile' | 'query' | 'lint', input: object): Promise<T> {
+      if (operation !== 'compile') return super.wiki<T>(operation, input);
+      const source = (input as { sources: Array<{ id: string }> }).sources[0]!;
+      return { pages: Array.from({ length: 4 }, (_, i) => ({
+        key: i === 0 ? `source:${source.id}` : `concept:large-${i}`,
+        pageType: i === 0 ? 'source' : 'concept', title: `Large page ${i}`, summary: 'Grounded Unicode content',
+        body: '知'.repeat(90_000), evidenceIds: [source.id], links: [], status: 'active', conditions: [], uncertainty: [],
+      })) } as T;
+    }
+  }
+  const { vault, start } = await fixture(t, new LargeFixture());
+  const handle = await start();
+  const source = await vault.capture({ content: 'Unicode evidence', scope: 'public', sensitivity: 'public' });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  const prepared = await call(handle, 'ingest', { evidenceIds: [source.evidenceId] });
+  assert.equal(prepared.status, 200);
+  const payload = { plan: prepared.body.result.plan, confirm: true };
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) > 1_048_576);
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  const applied = await call(handle, 'apply', payload);
+  assert.equal(applied.status, 200, JSON.stringify(applied.body));
+  assert.equal(applied.body.result.pageIds.length, 4);
+});
 
 test('web: Wiki plan/apply/query/file/lint/rules preserve explicit writes and evidence', async t => {
   const { vault, start, root } = await fixture(t, new WikiFixture());

@@ -29,7 +29,13 @@ export const settingsSchema = z.object({
 
 export function publicSettings(config: VaultConfig) {
   const { name, residentBudget, minimumConfidence, minimumProcedureEvidence, index, maintenance, limits } = config;
-  return { name, residentBudget, minimumConfidence, minimumProcedureEvidence, index, maintenance, limits };
+  // Project every nested field explicitly too: configuration migration deliberately
+  // tolerates extension fields, which are not part of the browser's public contract.
+  return { name, residentBudget, minimumConfidence, minimumProcedureEvidence,
+    index: { maxDocuments: index.maxDocuments, lexicalWeight: index.lexicalWeight, semanticWeight: index.semanticWeight, embeddingModel: index.embeddingModel },
+    maintenance: { intervalMs: maintenance.intervalMs, debounceMs: maintenance.debounceMs, autoSync: maintenance.autoSync },
+    limits: { maxContentCharacters: limits.maxContentCharacters, maxQueryCharacters: limits.maxQueryCharacters, maxResults: limits.maxResults, maxContextCharacters: limits.maxContextCharacters },
+  };
 }
 
 export function settingsRevision(config: VaultConfig): string {

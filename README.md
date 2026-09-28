@@ -405,6 +405,8 @@ Maintainers: [one-command npm release and recovery guide](docs/releasing.md).
 
 The Chinese-language UI is bundled locally with no CDN dependencies. It binds only to `127.0.0.1`, requires a token plus exact Host/Origin checks, and inherits the launching process's `AMEM_*` identity and access restrictions. Keep the token private; it is held only in page memory and rotates on restart. Desktop/browser refresh requires entering it again. Do not expose this console through a public proxy. Irreversible key erasure remains CLI-only in the Web workflow.
 
+Web requests are capped at 1 MiB, except explicit Wiki plan approval and answer filing (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
+
 ## 🔌 MCP Integration
 
 After `npm install -g memobranch`, add the following configuration to an MCP-compatible agent tool. Initialize the vault first (see Quick Start), replace its path with an actual absolute path, and copy its `tenantId` from `agent-memory.json` into `AMEM_TENANT_ID`:
