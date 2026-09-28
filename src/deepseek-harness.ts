@@ -4,7 +4,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
-import { throwIfCancelled, withOperation } from './operation.js';
+import { combineSignals, throwIfCancelled, withOperation } from './operation.js';
 import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
@@ -114,7 +114,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
       output: jsonOutput,
       async execute(args, exec) {
         wikiArguments(args, ['question', 'maxPages']);
-        const question = boundedString(args.question, 'question', 8_000);
+        const question = boundedString(args.question, 'question', 100_000);
         const options = wikiPageBudget(args.maxPages);
         return runJson(vault, exec.signal, () => vault.wikiQuery(question, options));
       },
@@ -127,7 +127,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
       parameters: {
         evidenceIds: { type: 'array', items: { type: 'string' }, required: true, description: 'One to 100 immutable evidence IDs.' },
         apply: { type: 'boolean', description: 'Explicitly apply the plan with additional review permission (default false).' },
-        maxPages: { type: 'integer', description: 'Maximum planned pages (1-50).' },
+        maxPages: { type: 'integer', description: 'Maximum existing pages to read, including mandatory source summaries (1-50).' },
       },
       output: jsonOutput,
       async execute(args, exec) {
@@ -568,8 +568,8 @@ function granted(principal: Principal, permission: Permission): boolean {
 
 async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
   const lifetime = lifetimes.get(vault);
-  const effectiveSignal = lifetime ? AbortSignal.any([signal, lifetime.controller.signal]) : signal;
-  const pending = withOperation(effectiveSignal, async () => {
+  const combined = combineSignals(lifetime ? [signal, lifetime.controller.signal] : [signal]);
+  const pending = withOperation(combined.signal, async () => {
     try {
       const value = await action();
       throwIfCancelled();
@@ -584,6 +584,7 @@ async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Pro
     if (error instanceof AgentMemoryError) throw safeError(error);
     throw error;
   } finally {
+    combined.dispose();
     lifetime?.pending.delete(pending);
   }
 }

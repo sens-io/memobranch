@@ -275,7 +275,7 @@ function createServer(): McpServer {
     title: 'Ask a cited Wiki question',
     description: 'Navigate authorized Wiki pages and return a cited answer with uncertainty. Never files the answer automatically.',
     inputSchema: z.strictObject({
-      question: z.string().trim().min(1).max(8_000),
+      question: z.string().trim().min(1).max(100_000),
       maxPages: z.number().int().min(1).max(50).optional(),
     }),
     annotations: { readOnlyHint: true, idempotentHint: false, destructiveHint: false },
