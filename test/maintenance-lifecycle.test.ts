@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import dns from 'node:dns';
+import type { Server } from 'node:http';
 import { test, type TestContext } from 'node:test';
 import { MemoryVault } from '../src/vault.js';
 import { MaintenanceService } from '../src/maintenance.js';
@@ -64,4 +66,35 @@ test('maintenance retains lease until protected in-flight recovery settles', asy
   const next = new MaintenanceService(new MemoryVault(root));
   const handle = await next.start();
   await handle.stop();
+});
+
+test('maintenance shutdown waits for pending localhost bind and closes late listeners', async t => {
+  const { service, root } = await fixture(t);
+  const entered = deferred(), release = deferred();
+  const original = dns.lookup;
+  dns.lookup = ((...args: unknown[]) => {
+    entered.resolve();
+    void release.promise.then(() => Reflect.apply(original, dns, args));
+  }) as typeof dns.lookup;
+  const internals = service as unknown as { server: Server | null; timer: unknown; watchers: unknown[] };
+  t.after(async () => { dns.lookup = original; release.resolve(); await service.stop(); });
+  const starting = service.start({ host: 'localhost' });
+  const rejected = assert.rejects(starting, { code: 'OPERATION_CANCELLED' });
+  await entered.promise;
+  const server = internals.server!;
+  let stopped = false;
+  const stopping = service.stop().then(() => { stopped = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.ok(JSON.parse(await readFile(join(root, '.amem/service.json'), 'utf8')).ownerToken);
+  dns.lookup = original;
+  release.resolve();
+  await Promise.all([stopping, rejected]);
+  assert.equal(server.listening, false);
+  assert.equal(internals.server, null);
+  assert.equal(internals.timer, null);
+  assert.deepEqual(internals.watchers, []);
+  await assert.rejects(readFile(join(root, '.amem/service.json')), { code: 'ENOENT' });
+  await service.stop();
+  assert.equal(server.listening, false);
 });

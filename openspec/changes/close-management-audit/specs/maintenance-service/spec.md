@@ -10,3 +10,7 @@ Maintenance shutdown MUST cancel only its own in-flight cycle, stop scheduling a
 #### Scenario: A provider is shared with another caller
 - **WHEN** maintenance stops
 - **THEN** unrelated model calls remain active and only the maintenance operation signal is aborted
+
+#### Scenario: Shutdown races with an asynchronous localhost bind
+- **WHEN** stop is requested while the startup DNS lookup or listener bind is pending
+- **THEN** startup reports cancellation, shutdown waits for any late listener to close, and no lease or scheduling resources survive

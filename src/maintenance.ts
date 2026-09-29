@@ -44,6 +44,7 @@ export class MaintenanceService {
   private cycleController: AbortController | null = null;
   private stopping = false;
   private stopped: Promise<void> | null = null;
+  private starting: Promise<ServiceHandle> | null = null;
 
   constructor(readonly vault: MemoryVault) {
     this.leasePath = join(vault.root, '.amem', 'service.json');
@@ -71,7 +72,14 @@ export class MaintenanceService {
     }
   }
 
-  async start(options: { host?: string; port?: number } = {}): Promise<ServiceHandle> {
+  start(options: { host?: string; port?: number } = {}): Promise<ServiceHandle> {
+    if (this.stopping) return Promise.reject(cancellationError());
+    if (this.starting) return Promise.reject(new AgentMemoryError('LOCK_TIMEOUT', 'Maintenance service is already starting or started'));
+    this.starting = this.startService(options);
+    return this.starting;
+  }
+
+  private async startService(options: { host?: string; port?: number }): Promise<ServiceHandle> {
     if (this.stopping) throw cancellationError();
     const config = await this.vault.config();
     const host = options.host ?? '127.0.0.1';
@@ -129,16 +137,18 @@ export class MaintenanceService {
         this.server!.once('error', reject);
         this.server!.listen(options.port ?? 0, host, () => resolve());
       });
+      if (this.stopping) throw cancellationError();
     } catch (error) {
-      await this.stop();
+      await this.closeResources();
       throw error;
     }
     const address = this.server.address();
     const port = typeof address === 'object' && address ? address.port : (options.port ?? 0);
     try {
       await this.updateLease({ host, port });
+      if (this.stopping) throw cancellationError();
     } catch (error) {
-      try { await this.stop(); } catch { /* Preserve the startup failure. */ }
+      try { await this.closeResources(); } catch { /* Preserve the startup failure. */ }
       throw error;
     }
     return { host, port, stop: () => this.stop() };
@@ -150,6 +160,15 @@ export class MaintenanceService {
   }
 
   private async finishStop(): Promise<void> {
+    this.stopping = true;
+    this.cycleController?.abort();
+    // A localhost DNS lookup can still be opening a listener. Keep ownership and
+    // the server reference until startup observes cancellation and closes it.
+    await this.starting?.catch(() => undefined);
+    await this.closeResources();
+  }
+
+  private async closeResources(): Promise<void> {
     this.stopping = true;
     this.cycleController?.abort();
     if (this.debounce) clearTimeout(this.debounce);
