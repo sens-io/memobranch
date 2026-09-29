@@ -18,6 +18,9 @@ try {
   const [{ filename, files }] = JSON.parse(packed.stdout);
   for (const expected of [
     'README.md', 'README_CN.md',
+    'assets/logo.png', 'docs/design/llm-wiki-core.md', 'docs/releasing.md',
+    'openspec/changes/align-karpathy-llm-wiki/verification.md',
+    'openspec/specs/maintenance-service/spec.md',
     'dist/index.js', 'dist/index.d.ts', 'dist/cli.js', 'dist/mcp.js',
     'dist/web.js', 'dist/web.d.ts', 'dist/web-ui.js', 'dist/settings.js',
     'dist/deepseek-harness.js', 'dist/deepseek-harness.d.ts', 'cordis.patch.yml',

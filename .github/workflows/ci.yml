@@ -50,3 +50,23 @@ jobs:
       - run: OPENSPEC_TELEMETRY=0 npx --yes @fission-ai/openspec@1.0.2 validate --all --strict
       - run: npm pack --dry-run
       - run: npm run test:package
+
+  runtime-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: master
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.0.0'
+      # Test installed JavaScript, not tsx's development-only --import loader.
+      - run: npm run test:package

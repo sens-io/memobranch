@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { authorize } from './policy.js';
+import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 import type { MemoryVault } from './vault.js';
 import { nowIso, withFileLock, writeText } from './utils.js';
 
@@ -40,6 +41,10 @@ export class MaintenanceService {
   private readonly leasePath: string;
   private readonly leaseLockPath: string;
   private leaseOwnerToken: string | null = null;
+  private cycleController: AbortController | null = null;
+  private stopping = false;
+  private stopped: Promise<void> | null = null;
+  private starting: Promise<ServiceHandle> | null = null;
 
   constructor(readonly vault: MemoryVault) {
     this.leasePath = join(vault.root, '.amem', 'service.json');
@@ -47,8 +52,12 @@ export class MaintenanceService {
   }
 
   async runOnce(): Promise<MaintenanceResult> {
+    if (this.stopping) throw cancellationError();
     if (this.running) return this.running;
-    this.running = this.performCycle();
+    this.cycleController = new AbortController();
+    const parent = operationSignal();
+    const combined = combineSignals(parent ? [parent, this.cycleController.signal] : [this.cycleController.signal]);
+    this.running = withOperation(combined.signal, () => this.performCycle());
     try {
       this.lastResult = await this.running;
       this.lastError = null;
@@ -57,21 +66,38 @@ export class MaintenanceService {
       this.lastError = toAgentMemoryError(error);
       throw error;
     } finally {
+      combined.dispose();
       this.running = null;
+      this.cycleController = null;
     }
   }
 
-  async start(options: { host?: string; port?: number } = {}): Promise<ServiceHandle> {
+  start(options: { host?: string; port?: number } = {}): Promise<ServiceHandle> {
+    if (this.stopping) return Promise.reject(cancellationError());
+    if (this.starting) return Promise.reject(new AgentMemoryError('LOCK_TIMEOUT', 'Maintenance service is already starting or started'));
+    this.starting = this.startService(options);
+    return this.starting;
+  }
+
+  private async startService(options: { host?: string; port?: number }): Promise<ServiceHandle> {
+    if (this.stopping) throw cancellationError();
     const config = await this.vault.config();
     const host = options.host ?? '127.0.0.1';
     if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw new AgentMemoryError('CONFIG_INVALID', 'The maintenance HTTP server only supports loopback addresses');
     await this.acquireLease();
     const schedule = () => {
+      if (this.stopping) return;
       if (this.debounce) clearTimeout(this.debounce);
       this.debounce = setTimeout(() => { void this.runOnce().catch(() => undefined); }, config.maintenance.debounceMs);
     };
     try {
+      if (this.stopping) throw cancellationError();
       this.watchers = await createManagedWatchers(this.vault.root, schedule);
+      if (this.stopping) {
+        for (const watcher of this.watchers) watcher.close();
+        this.watchers = [];
+        throw cancellationError();
+      }
     } catch (error) {
       await this.releaseLease();
       throw error;
@@ -79,6 +105,7 @@ export class MaintenanceService {
     this.timer = setInterval(() => { void this.runOnce().catch(() => undefined); }, config.maintenance.intervalMs);
     this.timer.unref();
     await this.runOnce().catch(() => undefined);
+    if (this.stopping) throw cancellationError();
     this.server = createServer(async (request, response) => {
       if (request.url === '/metrics') {
         response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
@@ -110,40 +137,55 @@ export class MaintenanceService {
         this.server!.once('error', reject);
         this.server!.listen(options.port ?? 0, host, () => resolve());
       });
+      if (this.stopping) throw cancellationError();
     } catch (error) {
-      await this.stop();
+      await this.closeResources();
       throw error;
     }
     const address = this.server.address();
     const port = typeof address === 'object' && address ? address.port : (options.port ?? 0);
     try {
       await this.updateLease({ host, port });
+      if (this.stopping) throw cancellationError();
     } catch (error) {
-      try { await this.stop(); } catch { /* Preserve the startup failure. */ }
+      try { await this.closeResources(); } catch { /* Preserve the startup failure. */ }
       throw error;
     }
     return { host, port, stop: () => this.stop() };
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.stopped ??= this.finishStop();
+    return this.stopped;
+  }
+
+  private async finishStop(): Promise<void> {
+    this.stopping = true;
+    this.cycleController?.abort();
+    // A localhost DNS lookup can still be opening a listener. Keep ownership and
+    // the server reference until startup observes cancellation and closes it.
+    await this.starting?.catch(() => undefined);
+    await this.closeResources();
+  }
+
+  private async closeResources(): Promise<void> {
+    this.stopping = true;
+    this.cycleController?.abort();
     if (this.debounce) clearTimeout(this.debounce);
     if (this.timer) clearInterval(this.timer);
     for (const watcher of this.watchers) watcher.close();
-    if (this.server?.listening) await new Promise<void>((resolve, reject) => this.server!.close((error) => error ? reject(error) : resolve()));
+    if (this.server?.listening) {
+      const closed = new Promise<void>((resolve, reject) => this.server!.close((error) => error ? reject(error) : resolve()));
+      this.server.closeAllConnections();
+      await closed;
+    }
     this.debounce = null;
     this.timer = null;
     this.watchers = [];
     this.server = null;
-    this.vault.llm.cancelPending();
-    if (this.running) {
-      await Promise.race([
-        this.running.catch(() => undefined),
-        new Promise<void>((resolve) => {
-          const timeout = setTimeout(resolve, 5_000);
-          timeout.unref();
-        }),
-      ]);
-    }
+    // Keep the lease until protected commits/recovery settle. Never cancel callers
+    // sharing the LLM client, or release ownership while a cycle can still write.
+    await this.running?.catch(() => undefined);
     await this.releaseLease();
   }
 
@@ -153,9 +195,13 @@ export class MaintenanceService {
     if (config.remote && config.maintenance.autoSync) authorize(this.vault.principal, 'sync', { tenantId: config.tenantId });
     const startedAt = nowIso();
     const recovery = await this.vault.recover();
+    throwIfCancelled();
     const expiry = await this.vault.expireDue();
+    throwIfCancelled();
     const index = await this.vault.reindex(Boolean((await this.vault.config()).index.embeddingModel));
+    throwIfCancelled();
     const doctor = await this.vault.doctor();
+    throwIfCancelled();
     const sync = config.remote && config.maintenance.autoSync ? await this.vault.sync() : undefined;
     const finishedAt = nowIso();
     await this.vault.telemetry.gauge('maintenance_healthy', doctor.healthy ? 1 : 0);

@@ -8,6 +8,25 @@ interface OperationContext {
 
 const operations = new AsyncLocalStorage<OperationContext>();
 
+/** AbortSignal.any-compatible composition on every supported Node 20 release.
+ * Call dispose once the operation settles so long-lived parents retain no listener.
+ */
+export function combineSignals(signals: readonly AbortSignal[]): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const listeners = new Map<AbortSignal, () => void>();
+  const dispose = () => {
+    for (const [signal, listener] of listeners) signal.removeEventListener('abort', listener);
+    listeners.clear();
+  };
+  for (const signal of new Set(signals)) {
+    if (signal.aborted) { controller.abort(signal.reason); dispose(); break; }
+    const listener = () => { controller.abort(signal.reason); dispose(); };
+    listeners.set(signal, listener);
+    signal.addEventListener('abort', listener, { once: true });
+  }
+  return { signal: controller.signal, dispose };
+}
+
 /** Own cancellation per invocation, including nested provider and Git work. */
 export function withOperation<T>(signal: AbortSignal, action: () => Promise<T>): Promise<T> {
   return operations.run({ signal, committed: [] }, async () => {

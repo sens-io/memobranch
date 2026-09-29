@@ -53,6 +53,53 @@ async function canonical(vault: MemoryVault): Promise<string> {
   return `${await vault.git.run(['rev-parse', 'HEAD'])}\n${await vault.git.run(['status', '--porcelain=v1'])}\n${await readFile(join(vault.root, 'log.md'), 'utf8')}`;
 }
 
+test('ingest counts mandatory source summaries against the requested page budget', async () => {
+  const { vault, llm, source } = await fixture();
+  const other = await vault.capture({ content: 'Second source', scope: 'public', sensitivity: 'public' });
+  const ids = [source.evidenceId, other.evidenceId];
+  await vault.wikiIngest({ evidenceIds: ids, apply: true });
+  await vault.wikiSetRules({ purpose: 'Updated purpose', instructions: 'Keep complete sources.', scope: 'public', sensitivity: 'public' });
+  llm.hook = (op, _input, output) => op === 'navigate' ? { keys: [] } : output;
+  const before = await canonical(vault), calls = llm.calls.length;
+  await assert.rejects(vault.wikiIngest({ evidenceIds: ids, maxPages: 1 }), /page budget/);
+  assert.deepEqual(llm.calls.slice(calls), ['navigate']);
+  assert.equal(await canonical(vault), before);
+  assert.ok((await vault.wikiIngest({ evidenceIds: ids, maxPages: 2 })).plan);
+});
+
+test('only approved repair plans resolve conflicts while retaining provenance and other unresolved support', async () => {
+  const { vault, llm, source } = await fixture();
+  let drafts: WikiPageDraft[] = [];
+  llm.hook = (op, _input, output) => {
+    if (op === 'compile') {
+      drafts = (output as { pages: WikiPageDraft[] }).pages.map(page => ({ ...page, status: 'conflicted', uncertainty: ['Previously disputed'], conditions: ['Source-specific'] }));
+      return { pages: drafts };
+    }
+    return output;
+  };
+  await vault.wikiIngest({ evidenceIds: [source.evidenceId], apply: true });
+  const before = await canonical(vault);
+  const repair = (pages: WikiPageDraft[]) => ({ suggestions: [{ kind: 'contradiction', message: 'Resolved by attributing each claim to its conditions', pageKeys: drafts.map(page => page.key), evidenceIds: [source.evidenceId], repairs: pages }] });
+  llm.hook = (op, _input, output) => op === 'lint' ? repair(drafts.map(page => ({ ...page, status: 'active', body: 'Resolved Marker claim with attribution.' }))) : output;
+  const lint = await vault.wikiLint({ semantic: true });
+  assert.equal(lint.semantic, 'available');
+  assert.equal(await canonical(vault), before);
+  assert.equal((await vault.get(wikiPageId(drafts[0]!.key))).meta.status, 'conflicted');
+  await vault.wikiApply(lint.plans[0]);
+  const page = await vault.get(wikiPageId(drafts[0]!.key));
+  assert.equal(page.meta.status, 'active');
+  assert.equal(page.meta.revision, 2);
+  assert.deepEqual(page.meta.evidence, [source.evidencePath]);
+  assert.deepEqual(page.meta.conditions, ['Source-specific']);
+  assert.deepEqual(page.meta.uncertainty, ['Previously disputed']);
+  assert.ok((await vault.search('Resolved Marker')).length);
+  // Reintroducing one unresolved supporting page must taint its dependent repair.
+  llm.hook = (op, _input, output) => op === 'lint' ? repair(drafts.map((draft, i) => ({ ...draft, status: i === 0 ? 'active' : 'conflicted' }))) : output;
+  const unresolved = await vault.wikiLint({ semantic: true });
+  await vault.wikiApply(unresolved.plans[0]);
+  assert.equal((await vault.get(wikiPageId(drafts[0]!.key))).meta.status, 'conflicted');
+});
+
 async function alterConfig(vault: MemoryVault): Promise<void> {
   const path = join(vault.root, 'agent-memory.json');
   const config = JSON.parse(await readFile(path, 'utf8'));

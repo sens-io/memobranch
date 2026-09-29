@@ -26,6 +26,24 @@ const wikiCategories = {
   maintain: ['memory_wiki_lint', 'memory_wiki_migrate', 'memory_wiki_set_rules'],
 };
 
+for (const adapter of ['CLI', 'MCP', 'Harness'] as const) {
+  test(`${adapter} honors the configured Wiki question limit above 8000 characters`, async () => {
+    await withVault(async (vault, env) => {
+      const settings = await vault.settings();
+      await vault.updateSettings({ ...settings.values, limits: { ...settings.values.limits, maxQueryCharacters: 9000 } }, settings.revision);
+      await withAdapter(adapter, vault, env, async invoke => {
+        const before = await canonicalSnapshot(vault);
+        for (const length of [8001, 9000]) {
+          const answer = await invoke('query', { question: 'q'.repeat(length) }) as WikiQueryResult;
+          assert.equal(answer.question.length, length);
+        }
+        await assert.rejects(invoke('query', { question: 'q'.repeat(9001) }));
+        assert.deepEqual(await canonicalSnapshot(vault), before);
+      });
+    });
+  });
+}
+
 test('G03/G04/W02 built CLI exposes explicit Wiki maintenance and rejects unauthorized apply', async () => {
   await withVault(async (vault, env) => {
     const run = async (args: string[], input?: string, policy = env) => {

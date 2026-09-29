@@ -15,6 +15,8 @@ const empty = z.object({}).strict();
 const classified = { scope: z.enum(scopes), sensitivity: z.enum(sensitivities) };
 const confirmed = { confirm: z.literal(true) };
 const reason = { id, reason: text, ...confirmed };
+const smallRequestBytes = 1_048_576;
+const reviewRequestBytes = 16 * smallRequestBytes;
 
 interface Route { permission: Permission; run(vault: MemoryVault, input: unknown): Promise<unknown> }
 function route<T>(permission: Permission, schema: z.ZodType<T>, action: (vault: MemoryVault, data: T) => Promise<unknown>): Route {
@@ -112,7 +114,8 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       return send(res, 403, { error: { code: 'AUTHORIZATION_DENIED', message: 'Invalid token or origin' } });
     }
     if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') return send(res, 415, { error: { code: 'VALIDATION_FAILED', message: 'JSON required' } });
-    const operation = Object.hasOwn(routes, path.slice(5)) ? routes[path.slice(5)] : undefined;
+    const name = path.slice(5);
+    const operation = Object.hasOwn(routes, name) ? routes[name] : undefined;
     if (!operation) return send(res, 404, { error: { code: 'NOT_FOUND', message: 'Route not found' } });
     if (active.size >= 8) return send(res, 429, { error: { code: 'BUSY', message: 'Too many active operations' } });
     const controller = new AbortController();
@@ -124,10 +127,11 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     try {
       const chunks: Buffer[] = [];
       let size = 0;
+      const maximum = name === 'apply' || name === 'file' ? reviewRequestBytes : smallRequestBytes;
       for await (const chunk of req) {
         size += Buffer.byteLength(chunk);
-        if (size > 1_048_576) {
-          send(res, 413, { error: { code: 'CONTENT_TOO_LARGE', message: 'Request exceeds 1 MiB' } });
+        if (size > maximum) {
+          send(res, 413, { error: { code: 'CONTENT_TOO_LARGE', message: 'Request exceeds the operation byte limit' } });
           return;
         }
         chunks.push(Buffer.from(chunk));
@@ -136,6 +140,15 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid JSON'); }
       const result = await withOperation(controller.signal, () => operation.run(new MemoryVault(root, vaultOptions), input));
+      // A successful preview must be resubmittable through the same adapter.
+      // Fail closed before showing a plan that can never pass its approval route.
+      if (name === 'ingest' || name === 'file' || name === 'lint') {
+        const preview = result as { plan?: unknown; plans?: unknown[] };
+        for (const plan of preview.plan ? [preview.plan] : preview.plans ?? []) {
+          assertReviewBytes({ plan, confirm: true });
+        }
+      }
+      if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       send(res, 200, { result });
     } catch (error) {
       const normalized = toAgentMemoryError(error);
@@ -175,6 +188,12 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     })();
     return stopped;
   } };
+}
+
+function assertReviewBytes(value: unknown): void {
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > reviewRequestBytes) {
+    throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Wiki preview exceeds the Web review transport budget');
+  }
 }
 
 function send(res: ServerResponse, status: number, value: unknown): void {

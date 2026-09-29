@@ -2,7 +2,7 @@ import type { MemoryKind, ProposedMemory, Scope, Sensitivity } from './types.js'
 import { memoryKinds, sensitivities } from './types.js';
 import { AgentMemoryError } from './errors.js';
 import { sensitivityRank } from './policy.js';
-import { cancellationError, operationSignal, throwIfCancelled } from './operation.js';
+import { cancellationError, combineSignals, operationSignal, throwIfCancelled } from './operation.js';
 
 interface LlmOptions {
   baseUrl?: string;
@@ -177,7 +177,8 @@ export class LlmClient {
     throwIfCancelled();
     const callerSignal = operationSignal();
     const controller = new AbortController();
-    const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
+    const combined = combineSignals(callerSignal ? [callerSignal, controller.signal] : [controller.signal]);
+    const { signal } = combined;
     // One deadline owns every retry and response body for this request.
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     timer.unref();
@@ -211,6 +212,7 @@ export class LlmClient {
       }
       throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM request failed');
     } finally {
+      combined.dispose();
       clearTimeout(timer);
       this.pending.delete(controller);
     }

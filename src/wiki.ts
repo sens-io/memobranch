@@ -134,7 +134,7 @@ export class WikiEngine {
       const key = `source:${id}`;
       if (state.eligible.has(key) && !selected.includes(key)) selected.push(key);
     }
-    if (selected.length > 50) fail('Wiki selection exceeds the page budget');
+    if (selected.length > (input.maxPages ?? 20)) fail('Wiki selection exceeds the page budget');
     const context = this.context(state, selected, sources);
     const response = checked(draftsSchema, await this.request(state, 'compile', context));
     for (const id of input.evidenceIds) {
@@ -565,6 +565,9 @@ export class WikiEngine {
     const expectedManifest = this.planManifest(state, plan.pages, plan.contextKeys, plan.sourceIds);
     for (const field of ['expectedRevisions', 'relevantPageVersions', 'ruleVersions', 'sourceHashes'] as const) if (stable(plan[field]) !== stable(expectedManifest[field])) fail('Wiki review manifest changed; regenerate the plan');
     const consulted = plan.contextKeys.map((key) => required(state.eligible.get(key), 'Wiki supporting page is unavailable'));
+    // Only an explicit, signed repair proposal approved through apply may resolve
+    // a previous conflict. Compilation and automatically carried dependents keep it.
+    const resolved = new Set(plan.kind === 'repair' ? plan.pages.filter(page => page.status === 'active').map(page => page.key) : []);
     const sources = plan.sourceIds.map((id) => required(state.evidence.get(id), 'Wiki source is unavailable'));
     const availableEvidence = new Set([...sources.map((source) => source.meta.id), ...consulted.flatMap((page) => page.meta.evidence.map((path) => state.documents.get(path)?.meta.id))]);
     const timestamp = nowIso();
@@ -593,7 +596,7 @@ export class WikiEngine {
       const page: Page = { path, body, meta: {
         id: wikiPageId(draft.key), type: 'wiki-page', key: draft.key, pageType: draft.pageType, title: draft.title, summary: draft.summary,
         ...labels, revision: (old?.meta.revision ?? 0) + 1, createdAt: old?.meta.createdAt ?? timestamp, updatedAt: timestamp,
-        status: draft.status === 'conflicted' || context.some((item) => item.meta.status === 'conflicted') ? 'conflicted' : 'active',
+        status: draft.status === 'conflicted' || context.some((item) => item.meta.status === 'conflicted' && !resolved.has(item.meta.key)) ? 'conflicted' : 'active',
         evidence: evidencePaths, links: unique([...draft.links, ...(old?.meta.links ?? [])]).filter((key) => key !== draft.key), dependencies, rules, conditions, uncertainty, ...(expires ? { expiresAt: expires } : {}),
         ...(plan.query?.key === draft.key ? { originHash: plan.query.hash } : {}),
       } };
