@@ -407,6 +407,8 @@ The Chinese-language UI is bundled locally with no CDN dependencies. It binds on
 
 Web requests are capped at 1 MiB, except explicit Wiki plan approval and answer filing (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
 
+Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and planning hold the cross-process vault lock so active writes settle before their results become visible. Lock waits are bounded and cancellable; long planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
+
 ## 🔌 MCP Integration
 
 After `npm install -g memobranch`, add the following configuration to an MCP-compatible agent tool. Initialize the vault first (see Quick Start), replace its path with an actual absolute path, and copy its `tenantId` from `agent-memory.json` into `AMEM_TENANT_ID`:
@@ -465,6 +467,8 @@ amem remote sync --root ~/my-agent-memory --push --json
 ```
 
 Synchronization proceeds in this order: recover unfinished transactions → check the working tree → fetch → calculate ahead/behind → fast-forward or regular merge → validate append-only evidence → rebuild derived state → validate schemas, references, symlinks, confidential-data encoding, and health → optionally push.
+
+Before merge, local and incoming trees must contain only supported root files and regular Markdown records under `evidence/`, `candidates/` or `wiki/`. Runtime paths such as `.amem/`, extra files, symbolic links and submodules are rejected before checkout. `.gitignore` alone cannot protect against remote-tracked runtime files.
 
 If a content conflict, post-merge validation failure, or transport failure occurs before a successful push, the system restores the previous local HEAD, managed working tree, and synchronization state. It never force-pushes automatically. If the remote has accepted a push but the final status refresh fails, the local repository retains the pushed commit matching the remote, keeping retries idempotent.
 

@@ -189,6 +189,7 @@ export class GitStore {
     }
     const originalHead = await this.run(['rev-parse', '--verify', 'HEAD'], { allowFailure: true });
     if (!originalHead) throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronization requires an existing local commit');
+    await this.assertManagedTree(originalHead);
     const syncStatePath = join(this.root, '.amem', 'sync-state.json');
     const originalSyncState = existsSync(syncStatePath) ? await readFile(syncStatePath, 'utf8') : null;
     const intent: SyncIntent = {
@@ -205,6 +206,7 @@ export class GitStore {
     try {
       const before = await this.remoteStatus(name, branch, true);
       if (!before.configured) throw new AgentMemoryError('REMOTE_INVALID', `Remote ${name} is not configured`);
+      if (before.upstream) await this.assertManagedTree(before.upstream);
       let merged = false;
       if (before.behind > 0) {
         if (before.ahead === 0) {
@@ -411,6 +413,23 @@ export class GitStore {
       throw new AgentMemoryError('REMOTE_CONFLICT', 'Remote synchronization attempted to modify or remove immutable evidence', {
         violations: violations.slice(0, 20),
       });
+    }
+  }
+
+  private async assertManagedTree(commit: string): Promise<void> {
+    // .gitignore only affects untracked files; it cannot prevent checkout of
+    // remote-tracked runtime state. Inspect names and modes before any merge.
+    const tree = await this.run(['ls-tree', '-r', '-z', '--full-tree', commit]);
+    for (const entry of tree.split('\0').filter(Boolean)) {
+      const match = /^(100644|100755) blob [a-f0-9]{40,64}\t([\s\S]+)$/.exec(entry);
+      const path = match?.[2];
+      const rootFile = path && trackedPaths.includes(path) && !['evidence', 'candidates', 'wiki'].includes(path);
+      const document = path && /^(evidence|candidates|wiki)\/.+\.md$/.test(path)
+        && !path.split('/').some(part => !part || part === '.' || part === '..' || /^\.(git|amem)$/i.test(part))
+        && !/[\\\x00-\x1f\x7f]/.test(path);
+      if (!match || (!rootFile && !document)) {
+        throw new AgentMemoryError('REMOTE_CONFLICT', 'Synchronization tree contains unsupported paths or file types');
+      }
     }
   }
 
