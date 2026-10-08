@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -84,3 +84,27 @@ test('each derivation field participates in identity and exact legacy retries re
     assert.equal((await vault.propose({ ...proposal, ...delta })).id, changed.id);
   }
 });
+
+for (const sensitivity of ['internal', 'secret'] as const) {
+  test(`public approval cannot replace a hidden ${sensitivity} derivation`, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'memobranch-canonical-clearance-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const admin = new MemoryVault(root, { masterKey: '48'.repeat(32) });
+    await admin.initialize('canonical clearance');
+    const secretCandidate = await admin.propose({ ...proposal, sensitivity, conditions: ['PRIVATE_CONDITION'] });
+    const hidden = await admin.approve(secretCandidate.id);
+    const before = await readFile(join(root, hidden.memoryPath), 'utf8');
+    const reviewer = new MemoryVault(root, { principal: { id: 'reviewer', name: 'reviewer', permissions: ['write', 'review', 'read'],
+      scopes: ['user'], maxSensitivity: 'public', tenantId: (await admin.config()).tenantId } });
+    const candidate = await reviewer.propose(proposal);
+    const published = await reviewer.approve(candidate.id);
+    assert.notEqual(published.memoryId, hidden.memoryId);
+    assert.notEqual(published.memoryPath, hidden.memoryPath);
+    assert.equal(await readFile(join(root, hidden.memoryPath), 'utf8'), before);
+    assert.doesNotMatch(JSON.stringify(await reviewer.search('Shared fact')), /PRIVATE_CONDITION/);
+    assert.equal((await admin.doctor()).healthy, true);
+    // An administrator without a key can still propose unrelated public data.
+    const noKey = new MemoryVault(root);
+    assert.equal((await noKey.propose({ ...proposal, key: 'independent public fact' })).duplicate, false);
+  });
+}

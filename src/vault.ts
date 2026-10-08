@@ -381,22 +381,33 @@ export class MemoryVault {
       // Legacy candidate IDs omitted derivation metadata. Compare full authorized
       // records as well, preserving exact retries without silently reusing a
       // differently classified/conditioned proposal or revealing hidden records.
-      const existingCandidates = await this.readDirectory<CandidateMeta>('candidates', 'write');
       for (const proposal of proposals) {
         const constrained = constrainToEvidence(proposal, evidenceRestrictions);
         validateProposal(constrained, config.limits.maxContentCharacters);
         authorize(this.principal, 'write', { scope: constrained.scope, sensitivity: constrained.sensitivity, tenantId: config.tenantId });
         const signature = candidateIdentity(constrained, normalizedEvidence);
-        const existing = existingCandidates.find(document =>
-          candidateIdentity({ ...document.meta, statement: constrained.statement }, document.meta.evidence) === signature
-          && document.body === candidateBody(document.meta, constrained.statement));
+        const id = `cand-${shortId(signature)}`;
+        const path = `candidates/${id}.md`;
+        const legacyId = `cand-${shortId(`${constrained.scope}\0${constrained.kind}\0${constrained.key}\0${constrained.statement}\0${[...normalizedEvidence].sort().join('\0')}`)}`;
+        let existing: MarkdownDocument<CandidateMeta> | undefined;
+        for (const target of unique([path, `candidates/${legacyId}.md`])) {
+          if (!existsSync(resolveInside(this.root, target))) continue;
+          if (!(await lstat(resolveInside(this.root, target))).isFile()) {
+            throw new AgentMemoryError('VALIDATION_FAILED', 'Candidate target must be a regular file');
+          }
+          const outer = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, target), 'utf8'));
+          // Unrelated encrypted legacy records must neither require their key
+          // nor disclose a duplicate hit for this differently classified input.
+          if (scopeOf(outer.meta) !== constrained.scope || sensitivityOf(outer.meta) !== constrained.sensitivity) continue;
+          const document = await this.readDocument<CandidateMeta>(target, 'write');
+          if (candidateIdentity({ ...document.meta, statement: constrained.statement }, document.meta.evidence) === signature
+              && document.body === candidateBody(document.meta, constrained.statement)) existing = document;
+        }
         if (existing) {
           duplicates.push(existing.meta.id);
           created.push({ id: existing.meta.id, path: existing.path });
           continue;
         }
-        const id = `cand-${shortId(signature)}`;
-        const path = `candidates/${id}.md`;
         if (existsSync(resolveInside(this.root, path))) {
           // A matching identifier alone is not sufficient proof of identity.
           throw new AgentMemoryError('VALIDATION_FAILED', 'Candidate identity is already occupied by a different record');
@@ -422,7 +433,6 @@ export class MemoryVault {
         };
         const document = { path, meta, body: candidateBody(meta, constrained.statement) };
         await this.writeDocument(document);
-        existingCandidates.push(document);
         created.push({ id, path });
       }
       if (created.length > duplicates.length) await this.appendLog('propose', actor, `source=${safeLogToken(logDetail)}; count=${created.length - duplicates.length}`);
@@ -1210,10 +1220,19 @@ export class MemoryVault {
 
   private async promoteCandidate(candidate: MarkdownDocument<CandidateMeta>, superseded: Array<MarkdownDocument<MemoryMeta>>, reviewed: boolean): Promise<MarkdownDocument<MemoryMeta>> {
     const statement = candidateStatement(candidate.body);
-    const id = `mem-${shortId(JSON.stringify(['memory:v2', candidate.meta.scope, candidate.meta.kind, candidate.meta.key, statement]))}`;
+    // Independently classified derivations must not share a canonical identity
+    // merely because their visible key/text matches. Authorized matches are
+    // merged by approve/consolidate before this creation path.
+    const id = `mem-${shortId(JSON.stringify(['memory:v2', candidate.meta.id, candidate.meta.sensitivity]))}`;
     const config = await this.config();
     const filename = config.policy.requireEncryptionFor.includes(candidate.meta.sensitivity) ? id : `${slugify(candidate.meta.key)}-${id.slice(-6)}`;
     const path = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${filename}.md`;
+    const occupied = (await this.readProjectionDirectory<Record<string, unknown>>('wiki'))
+      .find(document => document.path === path || document.meta.id === id);
+    if (occupied) {
+      authorize(this.principal, 'review', { scope: scopeOf(occupied.meta), sensitivity: sensitivityOf(occupied.meta), tenantId: config.tenantId });
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Canonical identity is already occupied');
+    }
     const timestamp = nowIso();
     for (const old of superseded) {
       old.meta.status = 'superseded';
