@@ -21,6 +21,14 @@ Web capture and proposal content MUST honor core-configured character limits sub
 - **WHEN** a source URI contains a NUL delimiter
 - **THEN** capture and imported evidence validation reject the ambiguous input without treating a distinct source as a duplicate
 
+#### Scenario: Re-proposal strengthens derivation restrictions
+- **WHEN** the same fact is proposed with different sensitivity, conditions, expiry, confidence, explicitness or tags
+- **THEN** it remains a distinct reviewable candidate; exact authorized retries retain their existing identity and inaccessible candidates are not exposed by deduplication
+
+#### Scenario: Candidate fields contain delimiter characters
+- **WHEN** distinct keys and statements contain NUL characters at different boundaries
+- **THEN** both candidate and canonical identities remain distinct and the complete raw statement is preserved
+
 ### Requirement: Remote data cannot replace local runtime state
 Incoming Git trees MUST be validated before checkout or merge. Only supported managed files and regular Markdown records may be imported; runtime state and unsupported paths MUST remain local.
 
