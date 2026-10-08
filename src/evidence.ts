@@ -6,11 +6,21 @@ import { sha256 } from './utils.js';
 const EVIDENCE_HASH_DOMAIN = 'memobranch:evidence:v2';
 
 export function evidenceDigest(scope: Scope, sensitivity: Sensitivity, sourceUri: string, content: string): string {
+  assertSourceUri(sourceUri);
   return sha256(`${EVIDENCE_HASH_DOMAIN}\0${scope}\0${sensitivity}\0${sourceUri}\0${content}`);
 }
 
 export function legacyEvidenceDigest(scope: Scope, sourceUri: string, content: string): string {
+  assertSourceUri(sourceUri);
   return sha256(`${scope}\0${sourceUri}\0${content}`);
+}
+
+function assertSourceUri(sourceUri: string): void {
+  // Scope and sensitivity are enums. The remaining identity prefix must not
+  // contain its delimiter; content itself may still contain arbitrary NULs.
+  if (typeof sourceUri !== 'string' || sourceUri.includes('\0')) {
+    throw new AgentMemoryError('VALIDATION_FAILED', 'Evidence source URI must be a string without NUL characters');
+  }
 }
 
 export function evidenceDigestVersion(
