@@ -13,6 +13,7 @@ import type { Principal } from '../src/policy.js';
 import { operationSignal } from '../src/operation.js';
 import { defaultVaultConfig } from '../src/config.js';
 import { publicSettings } from '../src/settings.js';
+import { VaultTransaction } from '../src/transaction.js';
 
 test('web: nested extension fields stay private and survive an allowlisted save', async t => {
   const { root, vault, start } = await fixture(t);
@@ -57,6 +58,74 @@ async function call(handle: WebHandle, operation: string, input: unknown = {}, h
   }, body: JSON.stringify(input) });
   return { status: response.status, body: await response.json() as { result: any; error?: { code: string; message: string } } };
 }
+
+test('web: content uses core character limits within the HTTP byte budget', async t => {
+  const { vault, start } = await fixture(t);
+  const handle = await start();
+  const content = 'a'.repeat(100_001);
+  assert.equal((await call(handle, 'capture', { content, scope: 'user', sensitivity: 'internal' })).status, 200);
+  assert.equal((await call(handle, 'propose', { key: 'long source', statement: content, kind: 'fact', scope: 'user',
+    sensitivity: 'internal', confidence: 0.9, explicit: false, evidence: [] })).status, 200);
+  const settings = await vault.settings();
+  settings.values.limits.maxContentCharacters = 1000;
+  await vault.updateSettings(settings.values, settings.revision);
+  for (const operation of ['capture', 'propose']) {
+    const data = operation === 'capture' ? { content, scope: 'user', sensitivity: 'internal' }
+      : { key: 'too long', statement: content, kind: 'fact', scope: 'user', sensitivity: 'internal', confidence: 0.9, explicit: false, evidence: [] };
+    assert.equal((await call(handle, operation, data)).body.error?.code, 'CONTENT_TOO_LARGE');
+  }
+});
+
+for (const rollback of [true, false]) {
+  test(`web: readers wait for a ${rollback ? 'rolled-back' : 'committed'} external approval`, async t => {
+    const { vault, start } = await fixture(t);
+    const handle = await start();
+    const candidate = await vault.propose({ key: 'concurrent', statement: 'settled canonical memory', kind: 'fact',
+      scope: 'user', sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [] });
+    const head = await vault.git.run(['rev-parse', 'HEAD']);
+    let reached!: () => void;
+    let release!: () => void;
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    t.after(() => release());
+    const write = VaultTransaction.prototype.write;
+    t.mock.method(VaultTransaction.prototype, 'write', async function(this: VaultTransaction, ...args: Parameters<VaultTransaction['write']>) {
+      await write.apply(this, args);
+      if (args[0].startsWith('wiki/')) {
+        reached();
+        await resume;
+        if (rollback) throw new Error('injected pre-commit failure');
+      }
+    });
+    // This writer does not use the Web server: HTTP-only serialization is insufficient.
+    const approval = vault.approve(candidate.id).then(value => ({ value }), error => ({ error }));
+    await paused;
+    let completed = false;
+    const listing = call(handle, 'records', { collection: 'memories' }).then(result => { completed = true; return result; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 75));
+      assert.equal(completed, false, 'must not return a pre-commit page');
+    } finally { release(); }
+    const outcome = await approval;
+    assert.equal('error' in outcome, rollback);
+    const result = await listing;
+    assert.equal(result.status, 200);
+    assert.equal(result.body.result.total, rollback ? 0 : 1);
+    assert.equal((await vault.git.run(['rev-parse', 'HEAD'])) === head, rollback);
+  });
+}
+
+test('web: unresolved recovery blocks content reads but diagnostics and recovery stay available', async t => {
+  const { root, vault, start } = await fixture(t);
+  const handle = await start();
+  const transaction = await VaultTransaction.begin(root, vault.git, vault.principal, 'test: interrupted write');
+  await transaction.write('MEMORY.md', 'incomplete projection');
+  assert.equal((await call(handle, 'records', { collection: 'memories' })).body.error?.code, 'TRANSACTION_RECOVERY_FAILED');
+  assert.equal((await call(handle, 'session')).status, 200);
+  assert.equal((await call(handle, 'doctor')).status, 200);
+  assert.equal((await call(handle, 'recover', { confirm: true })).status, 200);
+  assert.equal((await call(handle, 'records', { collection: 'memories' })).status, 200);
+});
 
 test('web: static assets are offline, bounded by CSP, and contain no token or vault data', async t => {
   const { start } = await fixture(t);

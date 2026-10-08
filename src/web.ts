@@ -1,15 +1,21 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { withOperation } from './operation.js';
 import { authorize, type Permission } from './policy.js';
 import { settingsSchema } from './settings.js';
+import { pendingTransactionCount } from './transaction.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
+import { withFileLock } from './utils.js';
 import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
 
 const text = z.string().trim().min(1).max(100_000);
+// HTTP bytes bound allocation; the core owns configurable content characters.
+const content = z.string().trim().min(1);
 const id = z.string().trim().min(1).max(300);
 const empty = z.object({}).strict();
 const classified = { scope: z.enum(scopes), sensitivity: z.enum(sensitivities) };
@@ -35,8 +41,8 @@ const routes: Record<string, Route> = {
     query: z.string().max(200).default(''), status: z.string().max(30).default(''),
   }).strict(), (vault, data) => vault.listRecords(data)),
   get: route('read', z.object({ id }).strict(), (vault, data) => vault.get(data.id)),
-  capture: route('write', z.object({ content: text, ...classified }).strict(), (vault, data) => vault.capture({ ...data, extract: false })),
-  propose: route('write', z.object({ key: id, statement: text, kind: z.enum(memoryKinds), ...classified,
+  capture: route('write', z.object({ content, ...classified }).strict(), (vault, data) => vault.capture({ ...data, extract: false })),
+  propose: route('write', z.object({ key: id, statement: content, kind: z.enum(memoryKinds), ...classified,
     confidence: z.number().min(0).max(1), explicit: z.boolean(), evidence: z.array(id).max(100),
   }).strict(), (vault, { evidence, ...data }) => vault.propose({ ...data, conditions: [], tags: [] }, evidence)),
   approve: route('review', z.object({ id, ...confirmed }).strict(), (vault, data) => vault.approve(data.id)),
@@ -65,6 +71,22 @@ const routes: Record<string, Route> = {
   sync: route('sync', z.object({ push: z.boolean(), ...confirmed }).strict(), (vault, data) => vault.sync({ push: data.push })),
 };
 
+// These routes never perform canonical mutations. Use the cross-process writer
+// lock, not just an HTTP queue, so CLI/Harness writers also remain invisible
+// until their transaction settles. Existing mutations already own this lock.
+const snapshotRoutes = new Set(['session', 'records', 'get', 'settings', 'catalog', 'rules',
+  'ingest', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
+
+async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false): Promise<T> {
+  return withFileLock(join(vault.root, '.amem', 'write.lock'), async () => {
+    if (!diagnostics && (await pendingTransactionCount(vault.root) > 0
+        || existsSync(join(vault.root, '.amem', 'sync-intent.json')))) {
+      throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
+    }
+    return action();
+  });
+}
+
 export interface WebHandle {
   url: string;
   token: string;
@@ -77,7 +99,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new AgentMemoryError('CONFIG_INVALID', 'Web port must be between 0 and 65535');
   const { port: _port, ...vaultOptions } = options;
   const initial = new MemoryVault(root, vaultOptions);
-  await initial.settings(); // Validate the vault, tenant and baseline read authority before listening.
+  await settledRead(initial, () => initial.settings(), true); // Recovery diagnostics remain reachable.
   const token = randomBytes(32).toString('hex');
   const tokenBytes = Buffer.from(`Bearer ${token}`);
   const active = new Set<AbortController>();
@@ -139,7 +161,11 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       let input: unknown;
       try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid JSON'); }
-      const result = await withOperation(controller.signal, () => operation.run(new MemoryVault(root, vaultOptions), input));
+      const result = await withOperation(controller.signal, () => {
+        const vault = new MemoryVault(root, vaultOptions);
+        const action = () => operation.run(vault, input);
+        return snapshotRoutes.has(name) ? settledRead(vault, action, name === 'doctor' || name === 'session') : action();
+      });
       // A successful preview must be resubmittable through the same adapter.
       // Fail closed before showing a plan that can never pass its approval route.
       if (name === 'ingest' || name === 'file' || name === 'lint') {
