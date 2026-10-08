@@ -34,14 +34,14 @@ test('embedding batches require a complete unique index mapping and valid consis
 test('invalid semantic output degrades to lexical results and corrupt cached vectors are rebuilt', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'memobranch-embedding-integrity-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  let mode: 'valid' | 'duplicate' | 'dimension' | 'large' = 'valid';
+  let mode: 'valid' | 'duplicate' | 'dimension' | 'large' | 'grown' = 'valid';
   let batchCalls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, options: RequestInit) => {
     const { input } = JSON.parse(String(options.body)) as { input: string[] };
     if (input.length > 1) batchCalls += 1;
     return new Response(JSON.stringify({ data: input.map((_, index) => ({
       index: mode === 'duplicate' ? 0 : index,
-      embedding: mode === 'dimension' && input.length === 1 ? [1, 0, 0]
+      embedding: mode === 'grown' || (mode === 'dimension' && input.length === 1) ? [1, 0, 0]
         : mode === 'large' ? [1e308, 1e308] : [1, 0],
     })) }));
   });
@@ -82,4 +82,12 @@ test('invalid semantic output degrades to lexical results and corrupt cached vec
   assert.equal(large.semanticStatus, 'ready');
   assert.equal(large.hits.length, 2);
   assert.ok(large.hits.every(hit => Number.isFinite(hit.score) && (hit.semanticScore ?? 0) > 0.99));
+  const partial = JSON.parse(await readFile(cachePath, 'utf8'));
+  delete partial.vectors[Object.keys(partial.vectors)[0]!];
+  await writeFile(cachePath, JSON.stringify(partial));
+  mode = 'grown';
+  assert.equal((await vault.searchDetailed('searchable memory', { semantic: true })).semanticStatus, 'degraded');
+  const rebuilt = await vault.searchDetailed('searchable memory', { semantic: true });
+  assert.equal(rebuilt.semanticStatus, 'ready', 'a partial old cache must recover after a provider dimension change');
+  assert.equal(rebuilt.hits.length, 2);
 });

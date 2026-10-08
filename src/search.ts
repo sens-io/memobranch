@@ -394,7 +394,13 @@ export class PersistentSearchIndex {
       const batch = missing.slice(offset, offset + 32);
       const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel);
       if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
-          || vector.length !== (dimensions ?? results[0]?.length))) {
+          || vector.length !== results[0]?.length)) {
+        throw new Error('Invalid embedding batch');
+      }
+      if (dimensions !== undefined && results[0]?.length !== dimensions) {
+        // A partial old cache must not prevent every future refresh from
+        // reaching query-side validation after a model changes dimensions.
+        await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} })}\n`);
         throw new Error('Embedding dimensions changed within the index');
       }
       dimensions ??= results[0]?.length;
