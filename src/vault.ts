@@ -378,17 +378,28 @@ export class MemoryVault {
     const mutation = await this.withMutation('write', actor, 'propose', `memory: ${logDetail}`, async () => {
       const created: Array<{ id: string; path: string }> = [];
       const duplicates: string[] = [];
+      // Legacy candidate IDs omitted derivation metadata. Compare full authorized
+      // records as well, preserving exact retries without silently reusing a
+      // differently classified/conditioned proposal or revealing hidden records.
+      const existingCandidates = await this.readDirectory<CandidateMeta>('candidates', 'write');
       for (const proposal of proposals) {
         const constrained = constrainToEvidence(proposal, evidenceRestrictions);
         validateProposal(constrained, config.limits.maxContentCharacters);
         authorize(this.principal, 'write', { scope: constrained.scope, sensitivity: constrained.sensitivity, tenantId: config.tenantId });
-        const signature = `${constrained.scope}\0${constrained.kind}\0${constrained.key}\0${constrained.statement}\0${[...normalizedEvidence].sort().join('\0')}`;
+        const signature = candidateIdentity(constrained, normalizedEvidence);
+        const existing = existingCandidates.find(document =>
+          candidateIdentity({ ...document.meta, statement: constrained.statement }, document.meta.evidence) === signature
+          && document.body === candidateBody(document.meta, constrained.statement));
+        if (existing) {
+          duplicates.push(existing.meta.id);
+          created.push({ id: existing.meta.id, path: existing.path });
+          continue;
+        }
         const id = `cand-${shortId(signature)}`;
         const path = `candidates/${id}.md`;
         if (existsSync(resolveInside(this.root, path))) {
-          duplicates.push(id);
-          created.push({ id, path });
-          continue;
+          // A matching identifier alone is not sufficient proof of identity.
+          throw new AgentMemoryError('VALIDATION_FAILED', 'Candidate identity is already occupied by a different record');
         }
         const timestamp = nowIso();
         const meta: CandidateMeta = {
@@ -409,7 +420,9 @@ export class MemoryVault {
           ...(constrained.expiresAt ? { expiresAt: constrained.expiresAt } : {}),
           conflictsWith: [],
         };
-        await this.writeDocument({ path, meta, body: candidateBody(meta, constrained.statement) });
+        const document = { path, meta, body: candidateBody(meta, constrained.statement) };
+        await this.writeDocument(document);
+        existingCandidates.push(document);
         created.push({ id, path });
       }
       if (created.length > duplicates.length) await this.appendLog('propose', actor, `source=${safeLogToken(logDetail)}; count=${created.length - duplicates.length}`);
@@ -1197,7 +1210,7 @@ export class MemoryVault {
 
   private async promoteCandidate(candidate: MarkdownDocument<CandidateMeta>, superseded: Array<MarkdownDocument<MemoryMeta>>, reviewed: boolean): Promise<MarkdownDocument<MemoryMeta>> {
     const statement = candidateStatement(candidate.body);
-    const id = `mem-${shortId(`${candidate.meta.scope}\0${candidate.meta.kind}\0${candidate.meta.key}\0${statement}`)}`;
+    const id = `mem-${shortId(JSON.stringify(['memory:v2', candidate.meta.scope, candidate.meta.kind, candidate.meta.key, statement]))}`;
     const config = await this.config();
     const filename = config.policy.requireEncryptionFor.includes(candidate.meta.sensitivity) ? id : `${slugify(candidate.meta.key)}-${id.slice(-6)}`;
     const path = `wiki/${candidate.meta.scope}/${candidate.meta.kind}/${filename}.md`;
@@ -1475,6 +1488,12 @@ function validateProposal(proposal: ProposedMemory, maximum: number): void {
   if (proposal.statement.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Memory statement exceeds the configured limit');
   if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Confidence must be between 0 and 1');
   if (proposal.expiresAt && Number.isNaN(Date.parse(proposal.expiresAt))) throw new AgentMemoryError('VALIDATION_FAILED', 'expiresAt must be an ISO date');
+}
+
+function candidateIdentity(proposal: ProposedMemory, evidence: string[]): string {
+  return JSON.stringify(['candidate:v2', proposal.scope, proposal.kind, proposal.key.trim(), proposal.statement.trim(),
+    proposal.sensitivity, proposal.confidence, proposal.explicit, unique(evidence).sort(),
+    unique(proposal.conditions).sort(), unique(proposal.tags).sort(), proposal.expiresAt ?? null]);
 }
 
 function metadataReferenceErrors(documents: Array<MarkdownDocument<object>>): string[] {
