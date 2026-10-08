@@ -3,7 +3,7 @@ import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { assertManagedDocument } from './document-schema.js';
 import { isEncryptedEnvelope } from './encryption.js';
-import type { LlmClient } from './llm.js';
+import { isEmbeddingVector, type LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
 import { throwIfCancelled } from './operation.js';
 import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permission, type Principal } from './policy.js';
@@ -377,6 +377,7 @@ export class PersistentSearchIndex {
     const cache = await this.readEmbeddingCache();
     const vectors: Record<string, number[]> = {};
     const missing: IndexedDocument[] = [];
+    let dimensions: number | undefined;
     for (const document of documents) {
       if (!isActive(document) || this.config.policy.requireEncryptionFor.includes(document.sensitivity)) continue;
       try {
@@ -385,13 +386,18 @@ export class PersistentSearchIndex {
         continue;
       }
       const cached = cache.model === this.config.index.embeddingModel ? cache.vectors[document.contentHash] : undefined;
-      if (cached) vectors[document.contentHash] = cached;
+      if (cached) { vectors[document.contentHash] = cached; dimensions = cached.length; }
       else missing.push(document);
     }
     for (let offset = 0; offset < missing.length; offset += 32) {
       throwIfCancelled();
       const batch = missing.slice(offset, offset + 32);
       const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel);
+      if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
+          || vector.length !== (dimensions ?? results[0]?.length))) {
+        throw new Error('Embedding dimensions changed within the index');
+      }
+      dimensions ??= results[0]?.length;
       for (let index = 0; index < batch.length; index += 1) {
         const document = batch[index];
         const vector = results[index];
@@ -408,7 +414,13 @@ export class PersistentSearchIndex {
     await this.refreshEmbeddings(safeDocuments, principal, 'read');
     const cache = await this.readEmbeddingCache();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
-    if (!queryVector) return new Map();
+    if (!isEmbeddingVector(queryVector)) throw new Error('Invalid query embedding');
+    if (safeDocuments.some(document => cache.vectors[document.contentHash]?.length !== queryVector.length)) {
+      // A provider can change dimensions behind the same model name. Refuse
+      // mixed-space scoring now; rebuild the derived cache on the next call.
+      await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} })}\n`);
+      throw new Error('Query and document embedding dimensions differ');
+    }
     return new Map(
       safeDocuments
         .map((document) => {
@@ -442,7 +454,11 @@ export class PersistentSearchIndex {
     if (!existsSync(this.embeddingPath)) return { version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} };
     try {
       const value = JSON.parse(await readFile(this.embeddingPath, 'utf8')) as EmbeddingCache;
-      return value.version === EMBEDDING_CACHE_VERSION ? value : { version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} };
+      const vectors = value?.vectors;
+      const entries = vectors && typeof vectors === 'object' && !Array.isArray(vectors) ? Object.values(vectors) : null;
+      return value?.version === EMBEDDING_CACHE_VERSION && typeof value.model === 'string' && entries
+        && entries.every(vector => isEmbeddingVector(vector) && vector.length === entries[0]?.length)
+        ? value : { version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} };
     } catch {
       return { version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} };
     }
@@ -642,17 +658,22 @@ function embeddingText(document: IndexedDocument): string {
 
 function cosine(left: number[], right: number[]): number {
   if (left.length !== right.length || left.length === 0) return 0;
+  // Scaling leaves cosine unchanged while preventing finite provider values
+  // from overflowing or underflowing the products below.
+  const leftScale = Math.max(...left.map(Math.abs));
+  const rightScale = Math.max(...right.map(Math.abs));
+  if (!leftScale || !rightScale) return 0;
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
   for (let index = 0; index < left.length; index += 1) {
-    const a = left[index] ?? 0;
-    const b = right[index] ?? 0;
+    const a = (left[index] ?? 0) / leftScale;
+    const b = (right[index] ?? 0) / rightScale;
     dot += a * b;
     leftMagnitude += a * a;
     rightMagnitude += b * b;
   }
-  return leftMagnitude && rightMagnitude ? dot / Math.sqrt(leftMagnitude * rightMagnitude) : 0;
+  return leftMagnitude && rightMagnitude ? Math.max(-1, Math.min(1, dot / Math.sqrt(leftMagnitude * rightMagnitude))) : 0;
 }
 
 function toPosix(path: string): string {

@@ -59,14 +59,22 @@ export class LlmClient {
     if (!this.apiKey || !model) throw new Error('Embeddings are not configured. Set an embedding model and API key.');
     if (inputs.length === 0) return [];
     if (inputs.length > 32 || inputs.some((input) => input.length > 16_000)) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Embedding request exceeds the configured batch bounds');
-    const payload = await this.requestJson('/embeddings', { model, input: inputs }) as { data?: Array<{ index?: number; embedding?: number[] }> };
-    const ordered = [...(payload.data ?? [])].sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
-    if (ordered.length !== inputs.length || ordered.some((entry) =>
-      !Array.isArray(entry.embedding) || entry.embedding.length === 0 || entry.embedding.length > 32_768 || entry.embedding.some((value) => !Number.isFinite(value)),
-    )) {
-      throw new Error('Embedding response has an invalid vector count');
+    const payload = await this.requestJson('/embeddings', { model, input: inputs }) as { data?: unknown } | null;
+    if (!Array.isArray(payload?.data) || payload.data.length !== inputs.length) {
+      throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Embedding response has an invalid vector count');
     }
-    return ordered.map((entry) => entry.embedding!);
+    const ordered: number[][] = [];
+    let dimensions: number | undefined;
+    for (const entry of payload.data) {
+      if (!entry || !Number.isInteger(entry.index) || entry.index < 0 || entry.index >= inputs.length
+          || ordered[entry.index] || !isEmbeddingVector(entry.embedding)
+          || (dimensions !== undefined && entry.embedding.length !== dimensions)) {
+        throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Embedding response has invalid indices or vectors');
+      }
+      dimensions = entry.embedding.length;
+      ordered[entry.index] = entry.embedding;
+    }
+    return ordered;
   }
 
   async extractMemories(content: string, defaults: ExtractionDefaults): Promise<ProposedMemory[]> {
@@ -324,6 +332,12 @@ async function boundedJson(response: Response, maximumBytes: number): Promise<un
     chunks.push(value);
   }
   return JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8')) as unknown;
+}
+
+export function isEmbeddingVector(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= 32_768
+    && value.every(item => typeof item === 'number' && Number.isFinite(item))
+    && value.some(item => item !== 0);
 }
 
 function bounded(value: number, minimum: number, maximum: number, fallback: number): number {
