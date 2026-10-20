@@ -1,4 +1,30 @@
 import type { Scope, Sensitivity } from './types.js';
+import type { ReviewDiff } from './review-diff.js';
+
+export interface WikiReviewVersion {
+  revision: number;
+  body: string;
+  status: WikiPageMeta['status'];
+  scope: Scope;
+  sensitivity: Sensitivity;
+  evidence: string[];
+  conditions: string[];
+  uncertainty: string[];
+}
+
+export interface WikiPreview {
+  kind: WikiPlan['kind'];
+  pages: Array<{
+    key: string;
+    title: string;
+    pageType: WikiPageType;
+    operation: 'create' | 'update' | 'unchanged';
+    before: WikiReviewVersion | null;
+    after: WikiReviewVersion;
+    diff: ReviewDiff;
+  }>;
+  affectedPageKeys: string[];
+}
 
 export const pageTypes = ['source', 'entity', 'concept', 'synthesis', 'comparison', 'query'] as const;
 export type WikiPageType = (typeof pageTypes)[number];

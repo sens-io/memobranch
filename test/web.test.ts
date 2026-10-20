@@ -15,6 +15,21 @@ import { defaultVaultConfig } from '../src/config.js';
 import { publicSettings } from '../src/settings.js';
 import { VaultTransaction } from '../src/transaction.js';
 
+test('web: branding serves exactly the README logo without credentials or a broader file route', async t => {
+  const { start } = await fixture(t);
+  const handle = await start();
+  const response = await fetch(`${handle.url}/assets/logo.png`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), await readFile(new URL('../assets/logo.png', import.meta.url)));
+  const html = await (await fetch(handle.url)).text();
+  assert.match(html, /rel="icon" type="image\/png" href="\/assets\/logo\.png"/);
+  for (const path of ['/assets/missing.png', '/assets/agent-memory.json']) {
+    assert.equal((await fetch(`${handle.url}${path}`)).status, 404);
+  }
+  assert.equal((await fetch(`${handle.url}/assets/logo.png`, { method: 'POST' })).status, 404);
+});
+
 test('web: nested extension fields stay private and survive an allowlisted save', async t => {
   const { root, vault, start } = await fixture(t);
   const config = await vault.config();

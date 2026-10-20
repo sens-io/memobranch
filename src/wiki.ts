@@ -4,11 +4,12 @@ import { AgentMemoryError } from './errors.js';
 import type { LlmClient } from './llm.js';
 import { wikiLocalLinks } from './wiki-links.js';
 import { throwIfCancelled } from './operation.js';
+import { reviewDiff } from './review-diff.js';
 import { authorize, type Permission, type Principal } from './policy.js';
 import { scopes, sensitivities, type EvidenceMeta, type MarkdownDocument, type MemoryMeta, type Scope, type SearchHit, type Sensitivity, type VaultConfig } from './types.js';
 import { nowIso, sha256, unique } from './utils.js';
 import { assertWikiDocument, builtinWikiRuleId, wikiPageDraftSchema, wikiPlanSchema, wikiQueryResultSchema, wikiPageId, wikiPagePath, wikiReceiptId, wikiRulesId } from './wiki-schema.js';
-import type { WikiCatalogEntry, WikiCitation, WikiLintIssue, WikiLintResult, WikiPageDraft, WikiPageMeta, WikiPlan, WikiQueryResult, WikiReceiptMeta, WikiRulesMeta } from './wiki-types.js';
+import type { WikiCatalogEntry, WikiCitation, WikiLintIssue, WikiLintResult, WikiPageDraft, WikiPageMeta, WikiPlan, WikiPreview, WikiQueryResult, WikiReceiptMeta, WikiReviewVersion, WikiRulesMeta } from './wiki-types.js';
 
 type Document = MarkdownDocument<Record<string, unknown>>;
 type Page = MarkdownDocument<WikiPageMeta>;
@@ -20,7 +21,7 @@ export interface WikiPort {
   principal: Principal;
   llm: LlmClient;
   config(): Promise<VaultConfig>;
-  read(directory: 'wiki' | 'evidence', permission: Permission): Promise<Document[]>;
+  read(directory: 'wiki' | 'evidence', permission: Permission, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<Document[]>;
   scan(directory: 'wiki' | 'evidence', permission: Permission): Promise<{ documents: Document[]; errors: string[] }>;
   catalogMatches(): Promise<boolean>;
   sign(value: object): Promise<string>;
@@ -190,6 +191,63 @@ export class WikiEngine {
     return { pageIds: result.value, commit: result.commit };
   }
 
+  async preview(value: unknown): Promise<WikiPreview> {
+    const plan = checked(wikiPlanSchema, value);
+    const state = await this.load('read');
+    state.sourceIds = plan.sourceIds;
+    await this.verify(plan, 'plan');
+    this.assertConfig(state, plan.configHash);
+    this.assertSnapshot(state, plan.snapshot);
+    const prepared = this.prepare(state, plan, 'read');
+    const version = (page: Page): WikiReviewVersion => ({
+      revision: page.meta.revision, body: page.body, status: page.meta.status,
+      scope: page.meta.scope, sensitivity: page.meta.sensitivity,
+      evidence: [...page.meta.evidence], conditions: [...page.meta.conditions], uncertainty: [...page.meta.uncertainty],
+    });
+    const pages = prepared.map(page => {
+      const old = state.eligible.get(page.meta.key);
+      const operation = !old ? 'create' as const : contentIdentity(old) === contentIdentity(page) ? 'unchanged' as const : 'update' as const;
+      const after = operation === 'unchanged' ? old! : page;
+      return { key: page.meta.key, title: page.meta.title, pageType: page.meta.pageType, operation,
+        before: old ? version(old) : null, after: version(after), diff: reviewDiff(old?.body ?? '', after.body) };
+    });
+    await this.revalidate(state);
+    return { kind: plan.kind, pages, affectedPageKeys: pages.filter(page => page.operation !== 'unchanged').map(page => page.key) };
+  }
+
+  async pageByKey(key: string): Promise<Page> {
+    const state = await this.load('read');
+    return required(state.eligible.get(key), 'Wiki page is unavailable');
+  }
+
+  async recallPages(ids: string[], options: { includeSensitive?: boolean; includeSecret?: boolean } = {}): Promise<Page[]> {
+    if (!ids.length) return [];
+    const state = await this.load('read', false, options);
+    return [...state.eligible.values()].filter(page => ids.includes(page.meta.id) && page.meta.status === 'active');
+  }
+
+  /** A correction remains a proposal, grounded in a separately captured human instruction. */
+  async correct(options: { key: string; evidenceId: string; expectedRevision: number }): Promise<WikiPlan> {
+    authorize(this.port.principal, 'read');
+    const state = await this.load('write');
+    const target = required(state.eligible.get(options.key), 'Wiki correction target is unavailable');
+    if (options.key.startsWith('legacy:')) fail('Correct legacy memories through the existing candidate review workflow');
+    if (target.meta.revision !== options.expectedRevision) fail('Wiki correction target changed; start a new correction');
+    state.sourceIds = [options.evidenceId];
+    const source = required(state.evidence.get(options.evidenceId), 'Wiki correction evidence is unavailable');
+    const selected = unique([options.key, ...target.meta.links, ...Object.keys(target.meta.dependencies)]);
+    const response = checked(draftsSchema, await this.request(state, 'compile', {
+      ...this.context(state, selected, [source]),
+      correction: { key: options.key, expectedRevision: options.expectedRevision, instruction: source.body,
+        requirement: 'Propose a repair of this target using the human correction as evidence. Preserve supported facts, provenance, conditions and uncertainty. Include a source page for the correction. Do not approve or apply.' },
+    }));
+    if (!response.pages.some(page => page.key === target.meta.key && page.pageType === target.meta.pageType && page.evidenceIds.includes(source.meta.id))) fail('Correction must update its intended target and cite the correction');
+    if (!response.pages.some(page => page.key === `source:${source.meta.id}` && page.pageType === 'source' && page.evidenceIds.includes(source.meta.id))) fail('Correction must include its immutable source summary');
+    const plan = await this.makePlan(state, 'repair', response.pages, selected, [source.meta.id]);
+    this.prepare(state, plan, 'write');
+    return plan;
+  }
+
   async query(question: string, options: { maxPages?: number } = {}): Promise<WikiQueryResult> {
     const state = await this.load('read');
     const normalized = checked(z.string().trim().min(1).max(state.config.limits.maxQueryCharacters), question);
@@ -333,7 +391,7 @@ export class WikiEngine {
   }
 
   async search(query: string, options: { includeSensitive?: boolean; includeSecret?: boolean; limit?: number }): Promise<SearchHit[]> {
-    const state = await this.load('read');
+    const state = await this.load('read', false, options);
     const terms = unique(query.toLowerCase().split(/\s+/u).filter(Boolean));
     return [...state.eligible.values()].filter((page) => !page.meta.key.startsWith('legacy:') && page.meta.status === 'active')
       .filter((page) => page.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
@@ -345,12 +403,12 @@ export class WikiEngine {
       }).filter((hit) => hit.score > 0).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, options.limit ?? state.config.limits.maxResults);
   }
 
-  private async load(permission: Permission, tolerant = false): Promise<State> {
+  private async load(permission: Permission, tolerant = false, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<State> {
     throwIfCancelled();
     const config = await this.port.config();
     authorize(this.port.principal, permission, { tenantId: config.tenantId });
     const scans = tolerant ? await Promise.all([this.port.scan('wiki', permission), this.port.scan('evidence', permission)]) : [];
-    const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission), ...await this.port.read('evidence', permission)];
+    const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission, selection), ...await this.port.read('evidence', permission, selection)];
     const state: State = { sourceIds: [], permission, config, documents: new Map(), pages: new Map(), rules: [], evidence: new Map(), receipts: [], eligible: new Map(), issues: scans.flatMap((scan) => scan.errors.map(() => ({ kind: 'invalid-document', message: 'An authorized managed document failed schema or integrity validation; inspect doctor diagnostics.', pageKeys: [], evidenceIds: [], pageVersions: {} }))) };
     for (const document of documents) {
       state.documents.set(document.path, document);

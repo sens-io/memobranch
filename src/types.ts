@@ -142,6 +142,8 @@ export interface SearchHit {
   backlinks: string[];
   lexicalScore?: number;
   semanticScore?: number;
+  /** True only when this record actually participated in semantic scoring. */
+  semanticApplied?: boolean;
 }
 
 export interface DoctorReport {

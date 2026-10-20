@@ -29,6 +29,7 @@
     "README.md",
     "README_CN.md",
     "docs",
+    "evaluation",
     "openspec",
     "assets/logo.png",
     ".env.example",
@@ -42,7 +43,9 @@
     "test": "node --import tsx --test test/*.test.ts",
     "test:package": "node scripts/verify-package.mjs",
     "test:types": "tsc -p tsconfig.tests.json",
-    "check": "npm run build && npm run test:types && npm test && node --test scripts/release.test.mjs",
+    "evaluate:memory": "node --import tsx scripts/evaluate-memory.mjs",
+    "test:evaluation": "node --import tsx --test scripts/evaluate-memory.test.mjs",
+    "check": "npm run build && npm run test:types && npm test && node --test scripts/release.test.mjs && npm run test:evaluation",
     "release": "node scripts/release.mjs",
     "audit:prod": "npm audit --omit=dev"
   },
@@ -82,9 +85,15 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/dsh-agent": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-session": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-tools": "^0.1.2-rc.1"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
     "@deepseek-ai/cordis": {
       "optional": true
     },
@@ -94,8 +103,11 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-session": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-tools": "^0.1.2-rc.1",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.2.0",
     "@types/commonmark": "^0.27.10",
     "@types/node": "^24.3.0",
     "@types/semver": "^7.8.0",

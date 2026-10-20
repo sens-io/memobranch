@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const temporary = await mkdtemp(join(tmpdir(), 'memobranch-package-'));
+// Keep generated packages, consumers and test vaults in the project's ignored scratch area.
+await mkdir(join(root, '.scratch'), { recursive: true });
+const temporary = await mkdtemp(join(root, '.scratch', 'memobranch-package-'));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 try {
   if (process.argv.length > 3) throw new Error('Usage: npm run test:package -- [tarball]');
@@ -28,12 +29,14 @@ try {
     'dist/wiki-schema.js', 'dist/wiki-schema.d.ts',
     'dist/wiki-proof.js', 'dist/wiki-proof.d.ts',
     'dist/wiki-links.js', 'dist/wiki-links.d.ts', 'docs/wiki.md',
+    'dist/review-diff.js', 'dist/onboarding.js', 'dist/integration-cli.js', 'dist/harness-memory.js',
+    'docs/memory-adoption.md', 'docs/integrations.md', 'evaluation/README.md', 'evaluation/cases.mjs',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
   const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
   const sdk = [
-    '@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-system-prompt',
+    '@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-session',
     '@modelcontextprotocol/client', 'typescript', '@types/node', '@types/semver',
   ]
     .map(name => `${name}@${lock.packages[`node_modules/${name}`].version}`);
@@ -66,6 +69,9 @@ try {
       assert.equal(response.status, 200);
       assert.equal((await response.json()).result.name, 'installed package smoke');
       assert.equal((await fetch(web.url + '/app.js')).status, 200);
+      const logo = await fetch(web.url + '/assets/logo.png');
+      assert.equal(logo.headers.get('content-type'), 'image/png');
+      assert.deepEqual(Buffer.from(await logo.arrayBuffer()), await readFile('node_modules/memobranch/assets/logo.png'));
       console.log('Installed package: authenticated Web console and bundled assets passed.');
     } finally { await web.stop(); }
     const metadata = JSON.parse(await readFile('node_modules/memobranch/package.json', 'utf8'));
@@ -98,11 +104,13 @@ try {
   await writeFile(join(consumer, 'wiki-public-types.ts'), `
     import { MemoryVault, type WikiCatalogEntry, type WikiCitation, type WikiLintResult,
       type WikiPageDraft, type WikiPageMeta, type WikiPageType, type WikiPlan,
-      type WikiQueryResult, type WikiRulesMeta } from 'memobranch';
+      type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult } from 'memobranch';
     export async function publicWikiWorkflow(vault: MemoryVault, evidenceId: string) {
       const prepared = await vault.wikiIngest({ evidenceIds: [evidenceId] });
       const plan: WikiPlan | null = prepared.plan;
+      const preview: WikiPreview | null = plan ? await vault.wikiPreview(plan) : null;
       if (plan) await vault.wikiApply(plan);
+      const recalled: RecallResult = await vault.recall('What does the source support?');
       const catalog: WikiCatalogEntry[] = await vault.wikiCatalog();
       const result: WikiQueryResult = await vault.wikiQuery('What does the source support?');
       const citations: WikiCitation[] = result.citations;
@@ -114,11 +122,11 @@ try {
       const rules: WikiRulesMeta[] = (await vault.wikiRules()).map(rule => rule.meta);
       const page: Pick<WikiPageMeta, 'id' | 'pageType'> | undefined = catalog[0]
         ? { id: catalog[0].id, pageType: catalog[0].pageType } : undefined;
-      return { plan, catalog, citations, pageType, lint, rules, page };
+      return { plan, preview, recalled, catalog, citations, pageType, lint, rules, page };
     }
   `);
   await exec(process.execPath, [join(consumer, 'node_modules/typescript/bin/tsc'),
-    '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+    '--ignoreConfig', '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     'wiki-public-types.ts'], { cwd: consumer, env, maxBuffer: 4 * 1024 * 1024 });
   // Copy only the consumer program: every runtime import resolves from its installed dependencies.
   await writeFile(join(consumer, 'verify-installed-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki.mjs')));
@@ -126,6 +134,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(wiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-adoption.mjs'), await readFile(join(root, 'scripts/verify-installed-adoption.mjs')));
+  const adoption = await exec(process.execPath, ['verify-installed-adoption.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(adoption.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

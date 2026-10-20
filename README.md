@@ -100,6 +100,8 @@ flowchart LR
 
 ## 🚀 Quick Start
 
+> **Development branch preview:** [Easier setup, approved-context recall, Wiki before/after review and correction](docs/memory-adoption.md), plus [37 reproducible evaluation cases](evaluation/README.md), are available from the current source branch. These additions have not been published to npm yet. Existing npm installation instructions below still refer to the released package.
+
 ### Requirements
 
 - Node.js 20 or later
