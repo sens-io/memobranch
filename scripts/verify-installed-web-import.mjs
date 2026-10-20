@@ -75,7 +75,8 @@ const workflow = createWebImportWorkflow(async address => {
 });
 const sourceUri = 'https://docs.example/guide';
 const plan = await workflow.preview([sourceUri]);
-assert.ok(!JSON.stringify(plan).includes(original));
+assert.ok(!JSON.stringify(plan).includes('原始 evidence'));
+assert.deepEqual(Object.keys(plan.documents[0]).sort(), ['bytes', 'finalUrl', 'mediaType', 'sha256', 'url']);
 const planPath = join(process.cwd(), 'web-import-plan.json');
 await writeFile(planPath, api.serializeWebImportPlan(plan));
 assert.deepEqual(await api.readWebImportPlan(planPath), plan);
