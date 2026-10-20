@@ -33,6 +33,7 @@ try {
     'docs/memory-adoption.md', 'docs/integrations.md', 'evaluation/README.md', 'evaluation/cases.mjs',
     'dist/context-budget.js', 'dist/directory-import.js', 'dist/source-timeline.js', 'docs/knowledge-workflows.md',
     'dist/web-source.js', 'dist/web-import.js', 'dist/web-import.d.ts', 'docs/public-web-import.md',
+    'dist/wiki-jobs.js', 'dist/wiki-jobs.d.ts', 'dist/wiki-job-store.js', 'docs/wiki-jobs.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -109,7 +110,8 @@ try {
       type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult,
       type TokenCounter, type ContextBudgetReport, type DirectoryImportPlan, type DirectoryImportOptions,
       previewDirectoryImport, applyDirectoryImport, type WebImportPlan, type WebImportOptions, type WebPreviewOptions,
-      previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan } from 'memobranch';
+      previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
+      type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions } from 'memobranch';
     export async function publicWikiWorkflow(vault: MemoryVault, evidenceId: string) {
       const prepared = await vault.wikiIngest({ evidenceIds: [evidenceId] });
       const plan: WikiPlan | null = prepared.plan;
@@ -144,6 +146,14 @@ try {
       const options: WebImportOptions = { ...previewOptions, scope: 'project', onProgress: async progress => { void progress.result.evidenceId; } };
       return { result: await applyWebImport(vault, plan, options), saved: await readWebImportPlan(path), json: serializeWebImportPlan(plan) };
     }
+    export async function publicJobWorkflow(vault: MemoryVault, evidenceId: string) {
+      const input: WikiJobInput = { evidenceIds: [evidenceId], maxPages: 20 };
+      const job: WikiJobStatus = await vault.wikiEnqueue(input);
+      const options: WikiJobRunOptions = { id: job.id, signal: new AbortController().signal, timeoutMs: 1000 };
+      return { run: await vault.wikiRunJob(options), state: await vault.wikiJob(job.id), jobs: await vault.wikiJobs(),
+        plan: await vault.wikiJobPlan(job.id), cancelled: await vault.wikiCancelJob(job.id),
+        retried: await vault.wikiRetryJob(job.id), removed: await vault.wikiRemoveJob(job.id) };
+    }
   `);
   await exec(process.execPath, [join(consumer, 'node_modules/typescript/bin/tsc'),
     '--ignoreConfig', '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
@@ -169,6 +179,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(webImport.stdout);
+  await writeFile(join(consumer, 'verify-installed-wiki-jobs.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki-jobs.mjs')));
+  const wikiJobs = await exec(process.execPath, ['verify-installed-wiki-jobs.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(wikiJobs.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

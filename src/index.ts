@@ -22,3 +22,4 @@ export type { WebImportPlan, WebImportOptions, WebImportProgress, WebPreviewOpti
 export { startWebServer } from './web.js';
 export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';
+export type { WikiJobInput, WikiJobRunOptions, WikiJobStatus } from './wiki-jobs.js';

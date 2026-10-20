@@ -1,0 +1,23 @@
+# Design
+
+## Scope and alternatives
+Use the existing single-host vault lock and per-document encryption, rather than introducing a broker/database or reusing the maintenance service that never calls a model. A foreground worker can be started separately from submission and restarted explicitly. No daemon is installed or started automatically.
+
+The queue owns only operational state under ignored `.amem/wiki-jobs/`. It never changes evidence or canonical knowledge. Input is 1–40 unique evidence IDs (each requires a source page within the existing 40-draft limit) and a page budget. Every job requires the existing AMEM_MASTER_KEY, including public-input jobs, because navigation and results may contain private content. All persisted payloads are encrypted; no source bodies, titles, plans, credentials or raw provider errors appear in plaintext status/logs.
+
+## Authority and consistency
+Store vault/tenant/owner identity plus scope/sensitivity ceilings at enqueue. Every operation checks current identity/tenant and permissions. Inspection/run requires the current principal to cover the original ceiling; compilation uses a tenant-bound read/write principal restricted to that ceiling, never a stored authorization grant. Permission loss fails before provider calls; broader later permissions do not broaden a job's context. Result reads re-run existing signed-plan preview and current snapshot/lifecycle checks. Apply remains a separate review-authorized operation.
+
+Use the canonical vault writer lock for brief queue state/key updates and final preview validation, not during model requests. Reject pending canonical recovery before ordinary job access. This also serializes key-store changes with capture/erasure. Atomically publish encrypted files with private permissions; bounded no-follow reads, directory identity checks and file size checks reject unsafe runtime paths. Limit 100 retained jobs, 8 MB encrypted state per job, 5 MB plaintext serialized state, three attempts, and one live worker job per owner. Users explicitly remove completed jobs to regain capacity.
+
+## State and interruption
+`queued -> running(compiling -> validating) -> ready | duplicate | failed | cancelled`.
+Claim includes a random owner token and PID. Never steal work from a live PID; a dead process becomes failed/cancelled on the next run, not automatically requeued. PID reuse may conservatively require operator intervention; this is single-host only. Failed/cancelled jobs can be explicitly retried while attempts remain. Crashes may repeat paid model calls on explicit retry; canonical knowledge is never auto-applied.
+
+Each attempt has a 120-second deadline (1–300 seconds configurable) and per-invocation signals. Cancellation of running work is persisted and observed by a 100 ms local monitor; only that attempt is aborted. Terminal publication checks the claim token and cancellation again. Status reports actual phase, attempt count and timestamps, not invented completion percentages. A caller-owned stop cancels the active job; graceful termination settles encrypted state. Process death leaves a running claim for later detection.
+
+## Cached-plan erasure
+Before completing any canonical cryptographic erasure, invalidate all retained plans and running jobs, since even navigation titles can refer to the erased content. Destroy their job data keys, then save content-free failed state with fresh keys. An interrupted key rotation is recoverable by dropping the now-unreadable old job record; do not restore its plaintext. Running workers cannot publish after their token is invalidated. This is conservative local cache invalidation, not deletion of external provider copies or independent filesystem backups.
+
+## Verification and rollout
+Test real vaults and provider HTTP fixtures, authenticated encryption and erasure, changed authority/snapshots, parallel claims, cancellation/timeout, actual killed workers, explicit retry, file/symlink/size limits and no automatic Wiki commits. Test installed CLI/API and types at Node22/20.0.0, retained main/master gates, strict OpenSpec and isolated committed-candidate review. No push, npm publication, hosted CI or production deployment in this increment. No schema migration; old application versions ignore queue state and cannot run its workers.

@@ -32,6 +32,7 @@ import type {
 } from './types.js';
 import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
+import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInput, type WikiJobRunOptions } from './wiki-jobs.js';
 import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
 import { WikiProof } from './wiki-proof.js';
 import type { WikiPageMeta } from './wiki-types.js';
@@ -125,6 +126,33 @@ export class MemoryVault {
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
   async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
   async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
+  private wikiJobsEngine(): WikiJobs {
+    const bound = async (ceiling: WikiJobCeiling) => {
+      const config = await this.config();
+      return new MemoryVault(this.root, { llm: this.llm, ...(this.journalKey === undefined ? {} : { masterKey: this.journalKey }),
+        principal: { id: this.principal.id, name: this.principal.name, tenantId: config.tenantId,
+          permissions: ['read', 'write'], scopes: [...ceiling.scopes], maxSensitivity: ceiling.maxSensitivity } });
+    };
+    return new WikiJobs({ root: this.root, principal: this.principal, encryption: this.encryption, config: () => this.config(),
+      // Queue/key state shares the writer lock, but never writes canonical knowledge.
+      locked: action => this.settledRead(action),
+      evidence: async (ids, ceiling) => {
+        const records = await (await bound(ceiling)).readDirectory<Record<string, unknown>>('evidence');
+        const available = new Set(records.filter(record => record.meta.type === 'evidence').map(record => record.meta.id));
+        if (ids.some(id => !available.has(id))) throw new AgentMemoryError('NOT_FOUND', 'Wiki job source is unavailable');
+      },
+      compile: async (input, ceiling) => (await bound(ceiling)).wikiIngest({ ...input, apply: false }),
+      preview: async (plan, ceiling) => (await bound(ceiling)).wikiEngine().preview(plan),
+    });
+  }
+  async wikiEnqueue(input: WikiJobInput) { return this.wikiJobsEngine().enqueue(input); }
+  async wikiJobs() { return this.wikiJobsEngine().list(); }
+  async wikiJob(id: string) { return this.wikiJobsEngine().get(id); }
+  async wikiRunJob(options: WikiJobRunOptions = {}) { return this.wikiJobsEngine().run(options); }
+  async wikiCancelJob(id: string) { return this.wikiJobsEngine().cancel(id); }
+  async wikiRetryJob(id: string) { return this.wikiJobsEngine().retry(id); }
+  async wikiJobPlan(id: string) { return this.wikiJobsEngine().plan(id); }
+  async wikiRemoveJob(id: string) { return this.wikiJobsEngine().remove(id); }
   async wikiCorrect(key: string, instruction: string, options: { expectedRevision?: number } = {}) {
     authorize(this.principal, 'read');
     authorize(this.principal, 'write');
@@ -1181,6 +1209,7 @@ export class MemoryVault {
   }
 
   private async completeErasureIntentLocked(intent: ErasureIntent): Promise<string | null> {
+    await invalidateWikiJobPlans(this.root, this.encryption);
     await this.encryption.erase(intent.id);
     if (await this.encryption.hasKey(intent.id)) {
       throw new AgentMemoryError('ENCRYPTION_FAILED', `Unable to destroy the wrapped key for ${intent.id}`);

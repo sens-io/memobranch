@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import { toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
@@ -234,6 +235,7 @@ async function main(): Promise<void> {
 async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
   const action = args.positionals[0] ?? 'catalog';
   const input = { ...args, positionals: args.positionals.slice(1) };
+  if (action === 'jobs') return wikiJobsCommand(vault, input);
   const maxPages = args.flags.has('max-pages') ? Number(requiredFlag(args, 'max-pages')) : undefined;
   if (maxPages !== undefined && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50)) {
     throw new Error('--max-pages must be an integer between 1 and 50');
@@ -304,6 +306,49 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
       print(await vault.wikiRevoke(requiredPositional(input, 0, 'Wiki page key'), requiredFlag(args, 'reason')));
       return;
     default: throw new Error(`Unknown wiki action: ${action}`);
+  }
+}
+
+async function wikiJobsCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
+  const action = args.positionals[0] ?? 'list';
+  const id = () => requiredPositional(args, 1, 'job ID');
+  if (args.flags.has('apply')) throw new Error('Jobs do not auto-apply; use wiki jobs preview and wiki jobs apply explicitly');
+  switch (action) {
+    case 'enqueue': print(await vault.wikiEnqueue({ evidenceIds: [...args.positionals.slice(1), ...csvFlag(args, 'evidence')],
+      ...(args.flags.has('max-pages') ? { maxPages: numberFlag(args, 'max-pages', 20) } : {}) })); return;
+    case 'list': print(await vault.wikiJobs()); return;
+    case 'show': print(await vault.wikiJob(id())); return;
+    case 'plan': print(await vault.wikiJobPlan(id())); return;
+    case 'preview': print(await vault.wikiPreview(await vault.wikiJobPlan(id()))); return;
+    case 'apply': authorize(vault.principal, 'review'); print(await vault.wikiApply(await vault.wikiJobPlan(id()))); return;
+    case 'cancel': print(await vault.wikiCancelJob(id())); return;
+    case 'retry': print(await vault.wikiRetryJob(id())); return;
+    case 'remove': print(await vault.wikiRemoveJob(id())); return;
+    case 'run': case 'work': break;
+    default: throw new Error('Wiki jobs action must be enqueue, list, show, plan, preview, apply, cancel, retry, remove, run or work');
+  }
+  const pollMs = numberFlag(args, 'poll-ms', 1000);
+  if (!Number.isSafeInteger(pollMs) || pollMs < 100 || pollMs > 10000) throw new Error('--poll-ms must be 100–10000');
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  try {
+    await withOperation(controller.signal, async () => {
+      do {
+        const job = await vault.wikiRunJob({ ...(action === 'run' ? { id: id() } : {}), timeoutMs: numberFlag(args, 'timeout-ms', 120000) });
+        if (job || action === 'run' || flagBoolean(args, 'once')) print(job);
+        if (action === 'run' || flagBoolean(args, 'once')) {
+          if (job?.status === 'failed') process.exitCode = 2;
+          if (job?.status === 'cancelled') process.exitCode = 130;
+          return;
+        }
+        if (!job) await delay(pollMs, undefined, { signal: controller.signal });
+      } while (!controller.signal.aborted);
+    });
+  } catch (error) { if (controller.signal.aborted) process.exitCode = 130; else throw error; }
+  finally {
+    process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+    if (controller.signal.aborted) process.exitCode = 130;
   }
 }
 
@@ -486,6 +531,12 @@ Usage:
   amem wiki catalog | rules | migrate
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
+  amem wiki jobs enqueue <evidence-id...> [--max-pages N]
+  amem wiki jobs list | show <job-id> | plan <job-id> | preview <job-id>
+  amem wiki jobs apply <job-id>  (explicit review; never automatic)
+  amem wiki jobs run <job-id> [--timeout-ms N]
+  amem wiki jobs work [--once] [--poll-ms N] [--timeout-ms N]
+  amem wiki jobs cancel | retry | remove <job-id>
   amem wiki apply --file <plan.json|->
   amem wiki preview --file <plan.json|->
   amem wiki correct <page-key> <instruction|-> [--file PATH] [--expected-revision N]

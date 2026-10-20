@@ -42,7 +42,7 @@ The local library also exports `previewDirectoryImport(directory)` and `applyDir
 - Capture uses the existing immutable evidence identity, source URI, scope, sensitivity, encryption and transaction rules. File URIs are absolute, so relocating a source directory changes its source identities. Captured text uses the existing leading/trailing whitespace normalization; this is not a byte-for-byte binary archive.
 - `--progress` prints completed progress on stderr and a final JSON result on stdout. Each file is a separate recoverable evidence transaction, not an all-or-nothing directory transaction. Cancel with Ctrl+C; completed evidence remains. Retry the unchanged preview to reuse saved evidence and finish missing documents. Changed files need a fresh preview.
 - A cancelled/failed import exits nonzero and reports completed entries. Cancellation at a commit boundary can also report `interruptedCommits`; retry is authoritative for identifying deduplicated evidence. The library accepts `applyDirectoryImport(vault, plan, { signal: controller.signal })`; this combines with any parent operation's cancellation. Cancellation during preflight rejects without writing.
-- No candidate extraction, model call or Wiki approval is automatic. Use returned evidence IDs with `wiki ingest`, inspect the resulting plan and approve separately. There is no persisted background-job queue.
+- No candidate extraction, model call or Wiki approval is automatic. Use returned evidence IDs with `wiki ingest`, inspect the resulting plan and approve separately. [Durable local Wiki jobs](wiki-jobs.md) now provide an explicit separate worker; imports do not automatically enqueue compilation.
 
 ## Source versions and update review
 
@@ -58,4 +58,4 @@ Dates require ISO timestamps with an explicit timezone and at most three fractio
 
 ## Remaining roadmap
 
-This increment does not complete the entire second/third roadmap phase. A separate development-source increment now adds [explicit public HTTPS imports](public-web-import.md), not general crawling or article extraction. PDF parsing, durable background compilation with progress, fact-effective historical queries, fixed-version shared vaults, private knowledge merge review and validated experience/skill export still need separate implementation and verification. Nothing here enables unattended scraping, canonical approval, deployment, push or npm publication.
+This increment does not complete the entire second/third roadmap phase. Separate development-source increments add [explicit public HTTPS imports](public-web-import.md) and [durable local compilation jobs](wiki-jobs.md), not general crawling or automatic approval. PDF parsing, fact-effective historical queries, fixed-version shared vaults, private knowledge merge review and validated experience/skill export still need separate implementation and verification. Nothing here enables unattended scraping, canonical approval, deployment, push or npm publication.

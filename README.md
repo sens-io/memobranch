@@ -106,6 +106,8 @@ flowchart LR
 
 > **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
 
+> **Durable Wiki jobs:** [Submit evidence IDs and compile in a separate local worker](docs/wiki-jobs.md), with encrypted proposals, progress, cancellation and explicit crash retry. Review/apply stays separate. Development source only; requires the existing vault master key, including public-input jobs.
+
 ### Requirements
 
 - Node.js 20 or later
