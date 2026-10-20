@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { MemoryVault, packContext, previewDirectoryImport, applyDirectoryImport } from 'memobranch';
 import { Context } from '@deepseek-ai/cordis';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import * as harnessPlugin from 'memobranch/deepseek-harness';
 
 const vault = new MemoryVault(join(process.cwd(), 'knowledge-vault'));
@@ -61,6 +62,7 @@ Object.assign(process.env, { AMEM_TENANT_ID: (await vault.config()).tenantId, AM
   AMEM_ALLOWED_SCOPES: 'public', AMEM_MAX_SENSITIVITY: 'public' });
 const ctx = new Context();
 try {
+  await ctx.plugin(SystemPrompt, {});
   await ctx.plugin(ToolRuntime, {});
   await ctx.plugin(harnessPlugin, { vaultRoot: vault.root });
   const recall = await ctx.tools.execute({ name: 'memory_recall', callId: 'knowledge-budget',
