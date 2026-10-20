@@ -12,6 +12,11 @@ export type { ReindexResult, SearchIndexHealth, SearchOptions, SearchResult } fr
 export type * from './types.js';
 export type * from './wiki-types.js';
 export { MemoryVault } from './vault.js';
+export { packContext, utf8ByteCounter } from './context-budget.js';
+export type { ContextBlock, ContextBudgetOptions, ContextBudgetReport, TokenCounter } from './context-budget.js';
+export { previewDirectoryImport, applyDirectoryImport } from './directory-import.js';
+export type { DirectoryImportPlan, ImportProgress } from './directory-import.js';
+export type { SourceTimelineOptions } from './source-timeline.js';
 export { startWebServer } from './web.js';
 export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';

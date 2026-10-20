@@ -297,20 +297,45 @@ function wikiPageBudget(value: number | undefined): { maxPages?: number } {
 
 function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
   ctx.tools.register(defineTool({
+    name: 'memory_source_timeline',
+    description: 'Inspect authorized source versions by recorded time and current references. Does not reconstruct fact-effective history or restore erased data.',
+    parameters: {
+      sourceUri: { type: 'string', required: true, description: 'Exact source URI.' },
+      from: { type: 'string', description: 'Inclusive recorded-time lower bound, ISO timestamp with timezone.' },
+      to: { type: 'string', description: 'Inclusive recorded-time upper bound, ISO timestamp with timezone.' },
+      offset: { type: 'integer', description: 'Nonnegative version offset.' },
+      limit: { type: 'integer', description: 'Maximum versions (1-100).' },
+    },
+    output: jsonOutput,
+    async execute(args, exec) {
+      wikiArguments(args, ['sourceUri', 'from', 'to', 'offset', 'limit']);
+      const sourceUri = boundedString(args.sourceUri, 'sourceUri', 4096);
+      return runJson(vault, exec.signal, () => vault.sourceTimeline(sourceUri, {
+        ...(args.from === undefined ? {} : { from: boundedString(args.from, 'from', 100) }),
+        ...(args.to === undefined ? {} : { to: boundedString(args.to, 'to', 100) }),
+        offset: boundedInteger(args.offset ?? 0, 'offset', 0, Number.MAX_SAFE_INTEGER),
+        limit: boundedInteger(args.limit ?? 30, 'limit', 1, 100), includeSensitive: false, includeSecret: false,
+      }));
+    },
+  }));
+  ctx.tools.register(defineTool({
     name: 'memory_recall',
     description: 'Read approved ordinary memory and Wiki pages as complete records with source paths, revisions, conditions and uncertainty; no model call.',
     parameters: {
       query: { type: 'string', required: true, description: 'Current task or question.' },
       limit: { type: 'integer', description: 'Maximum matching records (1-50).' },
       maxCharacters: { type: 'integer', description: 'Complete-record output character budget (500-50000).' },
+      maxTokens: { type: 'integer', description: 'Optional estimated token budget (1-100000), using conservative UTF-8 byte counting.' },
     },
     output: jsonOutput,
     async execute(args, exec) {
-      wikiArguments(args, ['query', 'limit', 'maxCharacters']);
+      wikiArguments(args, ['query', 'limit', 'maxCharacters', 'maxTokens']);
       const query = boundedString(args.query, 'query', 2_000);
       const limit = boundedInteger(args.limit ?? config.defaultSearchLimit, 'limit', 1, 50);
       const maxCharacters = boundedInteger(args.maxCharacters ?? config.defaultMaxContextCharacters, 'maxCharacters', 500, 50_000);
-      return runJson(vault, exec.signal, () => vault.recall(query, { limit, maxCharacters, includeSensitive: false, includeSecret: false, semantic: false }));
+      return runJson(vault, exec.signal, () => vault.recall(query, { limit, maxCharacters,
+        ...(args.maxTokens === undefined ? {} : { maxTokens: boundedInteger(args.maxTokens, 'maxTokens', 1, 100_000) }),
+        includeSensitive: false, includeSecret: false, semantic: false }));
     },
   }));
   ctx.tools.register(defineTool({
@@ -335,6 +360,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
       query: { type: 'string', required: true, description: 'Current task or question.' },
       limit: { type: 'integer', description: 'Maximum retrieved records (1-50).' },
       maxCharacters: { type: 'integer', description: 'Maximum returned characters (500-50000).' },
+      maxTokens: { type: 'integer', description: 'Optional conservative estimated token budget (1-100000).' },
       includeSensitive: { type: 'boolean', description: 'Request sensitive records when principal clearance permits.' },
       includeSecret: { type: 'boolean', description: 'Request secret records when principal clearance permits.' },
       semantic: { type: 'boolean', description: 'Enable semantic ranking when configured.' },
@@ -347,6 +373,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
       return run(vault, exec.signal, () => vault.context(query, {
         limit,
         maxCharacters,
+        ...(args.maxTokens === undefined ? {} : { maxTokens: boundedInteger(args.maxTokens, 'maxTokens', 1, 100_000) }),
         includeSensitive: args.includeSensitive ?? false,
         includeSecret: args.includeSecret ?? false,
         semantic: args.semantic ?? false,

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
 import { OperationsTelemetry } from './audit.js';
+import { packContext, type ContextBlock, type ContextBudgetOptions, type ContextBudgetReport } from './context-budget.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
@@ -14,6 +15,7 @@ import { recordCommit, throwIfCancelled, withoutCancellation } from './operation
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
 import { publicSettings, settingsRevision, settingsSchema } from './settings.js';
+import { sourceTimeline, type SourceTimelineOptions } from './source-timeline.js';
 import { pendingTransactionCount, recoverTransactions, type RecoveryResult, VaultTransaction } from './transaction.js';
 import type {
   Actor,
@@ -70,6 +72,7 @@ export interface RecallResult {
   memories: SearchHit[];
   wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[] }>;
   truncated: boolean;
+  budget?: ContextBudgetReport;
 }
 
 interface ErasureIntent {
@@ -719,20 +722,30 @@ export class MemoryVault {
     });
   }
 
-  async recall(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<RecallResult> {
-    authorize(this.principal, 'read');
+  async recall(query: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<RecallResult> {
     const requested = options.maxCharacters ?? 12_000;
     if (!Number.isSafeInteger(requested) || requested < 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Recall character budget must be a positive integer');
     return this.settledRead(async () => {
       const config = await this.config();
-      const maximum = Math.min(requested, config.limits.maxContextCharacters);
+      const records = await this.recallRecords(query, options);
+      const packed = packContext(records.map(({ record }) => ({ id: record.id, section: 'retrieved', text: JSON.stringify(record) })),
+        { ...options, maxCharacters: Math.min(requested, config.limits.maxContextCharacters) });
+      const selected = new Set(packed.selected.map(block => block.id));
+      return { text: packed.text, truncated: packed.truncated, budget: packed.budget,
+        memories: records.filter(item => selected.has(item.record.id) && item.ordinary).map(({ hit, record }) => ({ ...hit, snippet: record.body })),
+        wikiPages: records.filter(item => selected.has(item.record.id) && !item.ordinary).map(item => item.record) };
+    });
+  }
+
+  /** Caller owns a settled read, so every selected record uses the same canonical snapshot. */
+  private async recallRecords(query: string, options: SearchOptions) {
       const hits = await this.search(query, { ...options, includeCandidates: false, includeEvidence: false, expandLinks: false });
       const pages = new Map((await this.wikiEngine().recallPages(hits.filter(hit => hit.path.startsWith('wiki/pages/')).map(hit => hit.id), options)).map(page => [page.meta.id, page]));
       const memories = new Map((await Promise.all(hits.filter(hit => !hit.path.startsWith('wiki/pages/')).map(hit => this.readDocument<MemoryMeta>(hit.path))))
         .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
           && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()))
         .map(page => [page.meta.id, page]));
-      const result: RecallResult = { text: '', memories: [], wikiPages: [], truncated: false };
+      const records: Array<{ hit: SearchHit; ordinary: boolean; record: RecallResult['wikiPages'][number] }> = [];
       for (const hit of hits) {
         throwIfCancelled();
         const page = memories.get(hit.id) ?? pages.get(hit.id);
@@ -742,18 +755,20 @@ export class MemoryVault {
           body: page.body, conditions: [...page.meta.conditions], uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence] };
         // Keep an entire record, including conditions and citations, or omit it.
         // JSON encoding also separates source text from the surrounding prompt.
-        const block = `${result.text ? '\n\n' : ''}${JSON.stringify(record)}`;
-        if (result.text.length + block.length > maximum) { result.truncated = true; continue; }
-        result.text += block;
-        if (ordinary) result.memories.push({ ...hit, snippet: page.body });
-        else result.wikiPages.push(record);
+        records.push({ hit, ordinary, record });
       }
-      return result;
-    });
+      return records;
   }
 
   async reindex(semantic = false): Promise<ReindexResult> {
     return this.refreshSearchIndex(semantic, 'maintain');
+  }
+
+  async sourceTimeline(sourceUri: string, options: SourceTimelineOptions = {}) {
+    return this.settledRead(async () => sourceTimeline(sourceUri,
+      await this.readDirectory<EvidenceMeta>('evidence', 'read', options),
+      (await this.readDirectory<MemoryMeta | WikiPageMeta>('wiki', 'read', options))
+        .filter(document => document.meta.type === 'memory' || document.meta.type === 'wiki-page'), options));
   }
 
   private async refreshSearchIndex(semantic: boolean, permission: Permission): Promise<ReindexResult> {
@@ -766,9 +781,12 @@ export class MemoryVault {
     return result;
   }
 
-  async context(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
+  async contextDetailed(query: string, options: SearchOptions & ContextBudgetOptions = {}) {
+    authorize(this.principal, 'read');
+    return this.settledRead(async () => {
     const config = await this.config();
-    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki'))
+    const recalled = await this.recallRecords(query, options);
+    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki', 'read', options))
       .filter((memory) => memory.meta.type === 'memory' && memory.meta.status === 'active')
       .filter((memory) => !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now())
       .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
@@ -776,16 +794,21 @@ export class MemoryVault {
       .filter((memory) => memory.meta.sensitivity !== 'secret' || options.includeSecret === true)
       .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
       .slice(0, config.residentBudget);
-    const residentLines = residentMemories.map((memory) => `- [${memory.meta.key}](${memory.path}): ${candidateStatement(memory.body)}`);
-    const resident = ['# Resident memory', '', ...(residentLines.length ? residentLines : ['_No authorized resident memories._'])].join('\n');
-    const hits = await this.search(query, options);
-    const sections = hits.map((hit) => `## [${hit.path}]\n${hit.snippet}`);
-    const context = `${resident.trim()}\n\n# Retrieved memory\n\n${sections.join('\n\n')}`;
-    const maximum = Math.max(500, Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters));
-    return context.slice(0, maximum);
+    const blocks: ContextBlock[] = residentMemories.map(memory => ({ id: memory.meta.id, section: 'resident',
+      text: JSON.stringify({ key: memory.meta.key, id: memory.meta.id, path: memory.path, revision: memory.meta.revision,
+        body: memory.body, conditions: memory.meta.conditions, uncertainty: [], evidence: memory.meta.evidence }) }));
+    for (const { record } of recalled) blocks.push({ id: record.id, section: 'retrieved', text: JSON.stringify(record) });
+    const packed = packContext(blocks, { ...options, maxCharacters: Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters) });
+    return { text: packed.text, budget: packed.budget, truncated: packed.truncated,
+      records: packed.selected.map(({ id, section }) => ({ id, section })) };
+    });
   }
 
-  async answer(question: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
+  async context(query: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<string> {
+    return (await this.contextDetailed(query, options)).text;
+  }
+
+  async answer(question: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<string> {
     return this.llm.answer(question, await this.context(question, options));
   }
 

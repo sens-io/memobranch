@@ -10,6 +10,8 @@ import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
+import { applyDirectoryImport, previewDirectoryImport, type DirectoryImportPlan } from './directory-import.js';
+import { withOperation } from './operation.js';
 
 interface ParsedArgs {
   command: string;
@@ -33,6 +35,41 @@ async function main(): Promise<void> {
   const vault = new MemoryVault(root, { principal });
 
   switch (parsed.command) {
+    case 'import': {
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const action = requiredPositional(parsed, 0, 'preview or apply');
+          if (action === 'preview') {
+            print(await previewDirectoryImport(requiredPositional(parsed, 1, 'source directory')));
+          } else if (action === 'apply') {
+            const raw = await readFile(resolve(requiredFlag(parsed, 'plan')), 'utf8');
+            if (Buffer.byteLength(raw) > 200_000) throw new Error('Import preview exceeds the 200 KB limit');
+            const result = await applyDirectoryImport(vault, JSON.parse(raw) as DirectoryImportPlan, {
+              scope: enumFlag(parsed, 'scope', scopes, 'project'), sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+              ...(flagBoolean(parsed, 'progress') ? { onProgress: progress => process.stderr.write(`${JSON.stringify({ completed: progress.completed,
+                total: progress.total, evidenceId: progress.result.evidenceId, commit: progress.result.commit })}\n`) } : {}),
+            });
+            print(result);
+            if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
+          } else throw new Error('Import action must be preview or apply');
+        });
+      } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
+    case 'source': {
+      if (requiredPositional(parsed, 0, 'timeline') !== 'timeline') throw new Error('Source action must be timeline');
+      print(await vault.sourceTimeline(requiredPositional(parsed, 1, 'source URI'), {
+        ...(parsed.flags.has('from') ? { from: requiredFlag(parsed, 'from') } : {}),
+        ...(parsed.flags.has('to') ? { to: requiredFlag(parsed, 'to') } : {}),
+        offset: numberFlag(parsed, 'offset', 0), limit: numberFlag(parsed, 'limit', 30),
+        includeSensitive: flagBoolean(parsed, 'include-sensitive'), includeSecret: flagBoolean(parsed, 'include-secret'),
+      }));
+      return;
+    }
     case 'setup': {
       const action = parsed.positionals[0] ?? 'preview';
       if (!['preview', 'apply', 'verify', 'remove'].includes(action)) throw new Error('Setup action must be preview, apply, verify, or remove');
@@ -122,19 +159,19 @@ async function main(): Promise<void> {
       return;
     case 'recall':
       print(await vault.recall(requiredText(parsed.positionals.join(' '), 'A recall query is required'), {
-        ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000),
+        ...searchOptions(parsed), ...contextBudget(parsed),
       }));
       return;
     case 'context': {
       const query = requiredText(parsed.positionals.join(' '), 'A context query is required');
-      const context = await vault.context(query, { ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000) });
-      if (parsed.flags.has('json')) print({ context });
-      else process.stdout.write(`${context}\n`);
+      const context = await vault.contextDetailed(query, { ...searchOptions(parsed), ...contextBudget(parsed) });
+      if (parsed.flags.has('json')) print({ context: context.text, ...context });
+      else process.stdout.write(`${context.text}\n`);
       return;
     }
     case 'ask': {
       const question = requiredText(parsed.positionals.join(' '), 'A question is required');
-      const answer = await vault.answer(question, { ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000) });
+      const answer = await vault.answer(question, { ...searchOptions(parsed), ...contextBudget(parsed) });
       if (parsed.flags.has('json')) print({ answer });
       else process.stdout.write(`${answer}\n`);
       return;
@@ -377,6 +414,12 @@ function numberFlag(args: ParsedArgs, name: string, fallback: number): number {
   return parsed;
 }
 
+function contextBudget(args: ParsedArgs) {
+  return { maxCharacters: numberFlag(args, 'max-chars', 12_000),
+    ...(args.flags.has('max-tokens') ? { maxTokens: numberFlag(args, 'max-tokens', 1) } : {}),
+    ...(args.flags.has('resident-share') ? { residentShare: numberFlag(args, 'resident-share', 0.25) } : {}) };
+}
+
 function csvFlag(args: ParsedArgs, name: string): string[] {
   return (flagString(args, name) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
 }
@@ -418,8 +461,11 @@ Usage:
   amem forget <memory-id|key> --reason TEXT
   amem erase <memory-id|key> --reason TEXT
   amem search <query> [--semantic] [--include-sensitive] [--include-secret]
-  amem recall <query> [--max-chars N] | explain <query> [--semantic]
-  amem context <query> | ask <question> | get <id> | history
+  amem recall <query> [--max-chars N] [--max-tokens N] | explain <query> [--semantic]
+  amem context <query> [--max-tokens N] [--resident-share 0.25] [--json] | ask <question> | get <id> | history
+  amem import preview <directory> > import-plan.json
+  amem import apply --plan import-plan.json [--scope project] [--sensitivity internal] [--progress]
+  amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove

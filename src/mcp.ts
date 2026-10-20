@@ -97,6 +97,7 @@ function createServer(): McpServer {
     description: 'Return whole approved records with current revisions, sources, and conditions. Oversized records are omitted, never cut mid-condition. Does not approve or write knowledge.',
     inputSchema: z.strictObject({ query: z.string().min(1).max(2_000), limit: z.number().int().min(1).max(50).default(8),
       maxCharacters: z.number().int().min(1).max(50_000).default(12_000),
+      maxTokens: z.number().int().min(1).max(100_000).optional(),
       includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false), semantic: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.recall(input.query, input)));
@@ -108,6 +109,15 @@ function createServer(): McpServer {
       semantic: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.explain(input.query, input)));
+
+  server.registerTool('memory_source_timeline', {
+    title: 'Inspect authorized source versions',
+    description: 'Inspect immutable source versions by recorded time and current page references. Older references suggest review, not automatic invalidation. Does not reconstruct past facts.',
+    inputSchema: z.strictObject({ sourceUri: z.string().min(1).max(4096), from: z.string().optional(), to: z.string().optional(),
+      offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30),
+      includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false) }),
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.sourceTimeline(input.sourceUri, input)));
 
   server.registerTool('memory_wiki_preview', {
     title: 'Review a signed Wiki plan',
@@ -140,17 +150,19 @@ function createServer(): McpServer {
 
   server.registerTool('memory_context', {
     title: 'Build authorized context',
-    description: 'Return resident memory plus ranked snippets bounded for prompt use.',
+    description: 'Return whole authorized resident and retrieved records within character and optional estimated-token budgets.',
     inputSchema: z.object({
       query: z.string().min(1).max(2_000),
       limit: z.number().int().min(1).max(50).default(8),
       maxCharacters: z.number().int().min(500).max(50_000).default(12_000),
+      maxTokens: z.number().int().min(1).max(100_000).optional(),
+      residentShare: z.number().min(0).max(1).optional(),
       includeSensitive: z.boolean().default(false),
       includeSecret: z.boolean().default(false),
       semantic: z.boolean().default(false),
     }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
-  }, async (input) => executeText(() => vault.context(input.query, input)));
+  }, async (input, ctx) => executeText(() => withOperation(ctx.mcpReq.signal, () => vault.context(input.query, input))));
 
   server.registerTool('memory_get', {
     title: 'Read a memory document',

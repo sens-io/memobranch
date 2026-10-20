@@ -31,6 +31,7 @@ try {
     'dist/wiki-links.js', 'dist/wiki-links.d.ts', 'docs/wiki.md',
     'dist/review-diff.js', 'dist/onboarding.js', 'dist/integration-cli.js', 'dist/harness-memory.js',
     'docs/memory-adoption.md', 'docs/integrations.md', 'evaluation/README.md', 'evaluation/cases.mjs',
+    'dist/context-budget.js', 'dist/directory-import.js', 'dist/source-timeline.js', 'docs/knowledge-workflows.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -139,6 +140,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(adoption.stdout);
+  await writeFile(join(consumer, 'verify-installed-knowledge.mjs'), await readFile(join(root, 'scripts/verify-installed-knowledge.mjs')));
+  const knowledge = await exec(process.execPath, ['verify-installed-knowledge.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(knowledge.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

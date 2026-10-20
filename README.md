@@ -102,6 +102,8 @@ flowchart LR
 
 > **Development branch preview:** [Easier setup, approved-context recall, Wiki before/after review and correction](docs/memory-adoption.md), plus [37 reproducible evaluation cases](evaluation/README.md), are available from the current source branch. These additions have not been published to npm yet. Existing npm installation instructions below still refer to the released package.
 
+> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. Web crawling, PDF parsing and team knowledge merges remain future work. These additions are not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later
