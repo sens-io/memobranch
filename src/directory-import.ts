@@ -44,6 +44,15 @@ export async function previewDirectoryImport(directory: string): Promise<Directo
   return (await scanDirectory(directory)).plan;
 }
 
+/** The size contract includes the exact CLI framing, including its final newline. */
+export function serializeDirectoryImportPlan(plan: DirectoryImportPlan): string {
+  const output = `${JSON.stringify(plan, null, 2)}\n`;
+  if (Buffer.byteLength(output, 'utf8') > MAX_PLAN_BYTES) {
+    throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit; select a smaller directory');
+  }
+  return output;
+}
+
 /** Read no more than the maximum preview size, even if the selected file grows. */
 export async function readDirectoryImportPlan(path: string): Promise<DirectoryImportPlan> {
   const canonical = await realpath(resolve(path));
@@ -147,9 +156,7 @@ async function scanDirectory(directory: string) {
   if (!files.length) throw new AgentMemoryError('VALIDATION_FAILED', 'No supported text or Markdown files found');
   const payload = { version: 1 as const, root, files, totalBytes };
   const plan = { ...payload, revision: sha256(JSON.stringify(payload)) };
-  if (Buffer.byteLength(JSON.stringify(plan, null, 2), 'utf8') > MAX_PLAN_BYTES) {
-    throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit; select a smaller directory');
-  }
+  serializeDirectoryImportPlan(plan);
   return { plan, contents };
 }
 

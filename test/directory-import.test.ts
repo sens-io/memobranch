@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan } from '../src/directory-import.js';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, serializeDirectoryImportPlan } from '../src/directory-import.js';
 import { MemoryVault } from '../src/vault.js';
 import { localAdminPrincipal } from '../src/policy.js';
 import { withOperation } from '../src/operation.js';
@@ -121,6 +121,10 @@ test('import: CLI accepts its own large multibyte preview and bounds oversized p
   const plan = join(root, 'plan.json');
   await writeFile(plan, raw);
   assert.deepEqual(await readDirectoryImportPlan(plan), preview);
+  const bytes = Buffer.byteLength(serializeDirectoryImportPlan(preview));
+  const exact = { ...preview, root: preview.root + 'x'.repeat(1_000_000 - bytes) };
+  assert.equal(Buffer.byteLength(serializeDirectoryImportPlan(exact)), 1_000_000);
+  assert.throws(() => serializeDirectoryImportPlan({ ...exact, root: `${exact.root}x` }), { code: 'CONTENT_TOO_LARGE' });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));
   Object.assign(env, { AMEM_PERMISSIONS: 'read', AMEM_ALLOWED_SCOPES: 'project', AMEM_MAX_SENSITIVITY: 'public', AMEM_TENANT_ID: (await vault.config()).tenantId });
   await assert.rejects(promisify(execFile)(process.execPath, [join(process.cwd(), 'dist/cli.js'), 'import', 'apply', '--plan', plan, '--root', vault.root], { env }),

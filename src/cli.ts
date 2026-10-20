@@ -10,7 +10,7 @@ import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
-import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan } from './directory-import.js';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, serializeDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
 
 interface ParsedArgs {
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
         await withOperation(controller.signal, async () => {
           const action = requiredPositional(parsed, 0, 'preview or apply');
           if (action === 'preview') {
-            print(await previewDirectoryImport(requiredPositional(parsed, 1, 'source directory')));
+            process.stdout.write(serializeDirectoryImportPlan(await previewDirectoryImport(requiredPositional(parsed, 1, 'source directory'))));
           } else if (action === 'apply') {
             const plan = await readDirectoryImportPlan(requiredFlag(parsed, 'plan'));
             const result = await applyDirectoryImport(vault, plan, {
