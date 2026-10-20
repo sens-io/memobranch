@@ -58,6 +58,9 @@ const routes: Record<string, Route> = {
     (vault, { confirm: _confirm, ...data }) => vault.wikiSetRules(data)),
   ingest: route('write', z.object({ evidenceIds: z.array(id).min(1).max(100) }).strict(), (vault, data) => vault.wikiIngest({ ...data, apply: false })),
   apply: route('review', z.object({ plan: z.unknown(), ...confirmed }).strict(), (vault, data) => vault.wikiApply(data.plan)),
+  preview: route('read', z.object({ plan: z.unknown() }).strict(), (vault, data) => vault.wikiPreview(data.plan)),
+  correct: route('write', z.object({ key: id, instruction: content }).strict(), (vault, data) => vault.wikiCorrect(data.key, data.instruction)),
+  explain: route('read', z.object({ query: text }).strict(), (vault, data) => vault.explain(data.query)),
   query: route('read', z.object({ question: text }).strict(), (vault, data) => vault.wikiQuery(data.question)),
   file: route('write', z.object({ result: z.unknown(), title: id, pageType: z.enum(['query', 'comparison']) }).strict(),
     (vault, data) => vault.wikiFile(data.result, { title: data.title, pageType: data.pageType, apply: false })),
@@ -75,7 +78,7 @@ const routes: Record<string, Route> = {
 // lock, not just an HTTP queue, so CLI/Harness writers also remain invisible
 // until their transaction settles. Existing mutations already own this lock.
 const snapshotRoutes = new Set(['session', 'records', 'get', 'settings', 'catalog', 'rules',
-  'ingest', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
+  'ingest', 'preview', 'explain', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
 
 async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false): Promise<T> {
   return withFileLock(join(vault.root, '.amem', 'write.lock'), async () => {
@@ -149,7 +152,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     try {
       const chunks: Buffer[] = [];
       let size = 0;
-      const maximum = name === 'apply' || name === 'file' ? reviewRequestBytes : smallRequestBytes;
+      const maximum = name === 'apply' || name === 'file' || name === 'preview' ? reviewRequestBytes : smallRequestBytes;
       for await (const chunk of req) {
         size += Buffer.byteLength(chunk);
         if (size > maximum) {
@@ -168,12 +171,13 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       });
       // A successful preview must be resubmittable through the same adapter.
       // Fail closed before showing a plan that can never pass its approval route.
-      if (name === 'ingest' || name === 'file' || name === 'lint') {
+      if (name === 'ingest' || name === 'file' || name === 'lint' || name === 'correct') {
         const preview = result as { plan?: unknown; plans?: unknown[] };
         for (const plan of preview.plan ? [preview.plan] : preview.plans ?? []) {
           assertReviewBytes({ plan, confirm: true });
         }
       }
+      if (name === 'preview') assertReviewBytes(result);
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       send(res, 200, { result });
     } catch (error) {

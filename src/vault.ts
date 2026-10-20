@@ -65,6 +65,13 @@ export interface ConsolidationResult {
   commit: string | null;
 }
 
+export interface RecallResult {
+  text: string;
+  memories: SearchHit[];
+  wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[] }>;
+  truncated: boolean;
+}
+
 interface ErasureIntent {
   version: 1;
   id: string;
@@ -114,6 +121,24 @@ export class MemoryVault {
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
   async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
+  async wikiPreview(plan: unknown) { return this.wikiEngine().preview(plan); }
+  async wikiCorrect(key: string, instruction: string) {
+    authorize(this.principal, 'read');
+    authorize(this.principal, 'write');
+    const config = await this.config();
+    if (typeof key !== 'string' || !key.trim() || key.length > 200 || key.startsWith('legacy:')
+        || typeof instruction !== 'string' || !instruction.trim() || instruction.length > config.limits.maxContentCharacters) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'A current Wiki key and bounded correction instruction are required');
+    }
+    const target = await this.wikiEngine().pageByKey(key);
+    // Captured evidence intentionally survives a later planning failure; it is
+    // not canonical knowledge and cannot be silently approved by this method.
+    const captured = await this.capture({ content: instruction.trim(), extract: false,
+      sourceUri: `memobranch:correction:${target.meta.id}:${target.meta.revision}`,
+      scope: target.meta.scope, sensitivity: target.meta.sensitivity });
+    const plan = await this.wikiEngine().correct({ key, evidenceId: captured.evidenceId, expectedRevision: target.meta.revision });
+    return { evidenceId: captured.evidenceId, evidenceCommit: captured.commit, plan, commit: null };
+  }
   async wikiQuery(question: string, options: Parameters<WikiEngine['query']>[1] = {}) { return this.wikiEngine().query(question, options); }
   async wikiFile(result: unknown, options: Parameters<WikiEngine['file']>[1]) { return this.wikiEngine().file(result, options); }
   async wikiLint(options: Parameters<WikiEngine['lint']>[0] = {}) { return this.wikiEngine().lint(options); }
@@ -675,6 +700,54 @@ export class MemoryVault {
     }
     if (result.indexRebuilt) await this.telemetry.increment('index_rebuilds');
     return result;
+  }
+
+  async explain(query: string, options: SearchOptions = {}) {
+    const result = await this.searchDetailed(query, options);
+    return { ...result, explanation: {
+      strategy: options.semantic === true && result.semanticStatus === 'ready' && Boolean((await this.config()).index.embeddingModel)
+        && result.hits.some(hit => hit.semanticScore !== undefined) ? 'hybrid' as const : 'lexical' as const,
+      signals: result.hits.map(hit => ({ id: hit.id, path: hit.path, lexicalScore: hit.lexicalScore ?? null,
+        semanticScore: hit.semanticScore ?? null, score: hit.score })),
+      notes: ['Scores are retrieval signals, not probabilities or a factual confidence assessment.',
+        'Only authorized results are shown. Wiki matching uses lexical terms; semantic scores apply to indexed memories when available.'],
+    } };
+  }
+
+  async recall(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<RecallResult> {
+    authorize(this.principal, 'read');
+    const requested = options.maxCharacters ?? 12_000;
+    if (!Number.isSafeInteger(requested) || requested < 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Recall character budget must be a positive integer');
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const config = await this.config();
+      const maximum = Math.min(requested, config.limits.maxContextCharacters);
+      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before recalling canonical data');
+      }
+      const hits = await this.search(query, { ...options, includeCandidates: false, includeEvidence: false, expandLinks: false });
+      const pages = new Map((await this.wikiEngine().recallPages(hits.map(hit => hit.id))).map(page => [page.meta.id, page]));
+      const memories = new Map((await this.readDirectory<MemoryMeta>('wiki'))
+        .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
+          && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()))
+        .map(page => [page.meta.id, page]));
+      const result: RecallResult = { text: '', memories: [], wikiPages: [], truncated: false };
+      for (const hit of hits) {
+        throwIfCancelled();
+        const page = memories.get(hit.id) ?? pages.get(hit.id);
+        if (!page) continue;
+        const ordinary = page.meta.type === 'memory';
+        const record = { key: page.meta.key, id: page.meta.id, path: page.path, revision: page.meta.revision,
+          body: page.body, conditions: [...page.meta.conditions], uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence] };
+        // Keep an entire record, including conditions and citations, or omit it.
+        // JSON encoding also separates source text from the surrounding prompt.
+        const block = `${result.text ? '\n\n' : ''}${JSON.stringify(record)}`;
+        if (result.text.length + block.length > maximum) { result.truncated = true; continue; }
+        result.text += block;
+        if (ordinary) result.memories.push({ ...hit, snippet: page.body });
+        else result.wikiPages.push(record);
+      }
+      return result;
+    });
   }
 
   async reindex(semantic = false): Promise<ReindexResult> {
