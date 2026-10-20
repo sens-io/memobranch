@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { getEventListeners } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { test, type TestContext } from 'node:test';
@@ -300,6 +300,40 @@ test('Wiki jobs: death after atomic result publication preserves a readable plan
   assert.equal((await vault.wikiJob(job.id)).status, 'ready');
   assert.ok((await vault.wikiJobPlan(job.id)).pages[0]!.body.includes('DURABLE_JOB_SOURCE_CANARY'));
   assert.equal(await vault.wikiRunJob({ id: job.id }), null); assert.equal(llm.calls.length, 0);
+});
+
+test('Wiki jobs: erasure destroys keys for unpublished temporary plans after dead-worker recovery', { timeout: 15000 }, async t => {
+  const { vault, input, root } = await fixture(t);
+  const secret = await vault.capture({ content: 'Private page before unpublished cache.', scope: 'project', sensitivity: 'secret', extract: false });
+  await vault.wikiIngest({ evidenceIds: [secret.evidenceId], apply: true });
+  const page = (await vault.wikiCatalog())[0]!;
+  const job = await vault.wikiEnqueue(input);
+  const program = `import { MemoryVault, LlmClient } from ${JSON.stringify(new URL('../dist/index.js', import.meta.url).href)};
+    import { WikiJobStore } from ${JSON.stringify(new URL('../dist/wiki-job-store.js', import.meta.url).href)};
+    import { open } from 'node:fs/promises';
+    const handle=await open(process.argv[1]+'/probe-handle','w'); const prototype=Object.getPrototypeOf(handle); await handle.close();
+    let ready=false; const sync=prototype.sync; prototype.sync=async function(){await sync.call(this); if(ready) process.kill(process.pid,'SIGKILL');};
+    const write=WikiJobStore.prototype.write; WikiJobStore.prototype.write=async function(job){ready=job.status==='ready'; return write.call(this,job);};
+    class Fixture extends LlmClient {async wiki(operation,input){if(operation==='navigate')return {keys:[]};return {pages:input.sources.map(s=>({
+      key:'source:'+s.id,pageType:'source',title:'Source',summary:'Source',body:s.body,evidenceIds:[s.id],links:[],status:'active',conditions:[],uncertainty:[]}))};}}
+    await new MemoryVault(process.argv[1],{masterKey:process.env.AMEM_MASTER_KEY,llm:new Fixture({apiKey:'fixture'})}).wikiRunJob({id:process.argv[2]});`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', program, root, job.id], { env: { ...process.env, AMEM_MASTER_KEY: key }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
+  assert.equal(await new Promise(resolve => child.once('exit', (_code, signal) => resolve(signal))), 'SIGKILL');
+  assert.equal(await vault.wikiRunJob(), null);
+  assert.equal((await vault.wikiJob(job.id)).status, 'failed');
+  const failed = await vault.wikiJob(job.id);
+  const queued = await vault.wikiEnqueue(input);
+  const queuedBefore = await vault.wikiJob(queued.id);
+  const directory = join(root, '.amem/wiki-jobs');
+  const temporary = (await readdir(directory)).find(name => name.endsWith('.tmp'));
+  assert.ok(temporary);
+  const old = JSON.parse(await readFile(join(directory, temporary), 'utf8')) as { meta: Parameters<typeof vault.encryption.decrypt>[0]; body: string };
+  assert.ok((await vault.encryption.decrypt(old.meta, old.body)).body.includes('DURABLE_JOB_SOURCE_CANARY'));
+  await vault.erase(page.id, 'erase unpublished plan cache');
+  await assert.rejects(vault.encryption.decrypt(old.meta, old.body), { code: 'ENCRYPTION_FAILED' });
+  assert.deepEqual(await vault.wikiJob(job.id), failed);
+  assert.deepEqual(await vault.wikiJob(queued.id), queuedBefore);
 });
 
 test('Wiki jobs: bounded private runtime files, symlink refusal, queue capacity and interrupted key rotation recovery', async t => {

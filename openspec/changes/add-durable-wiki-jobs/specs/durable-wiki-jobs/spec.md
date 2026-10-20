@@ -27,3 +27,7 @@ Canonical cryptographic erasure MUST invalidate retained proposals and in-flight
 #### Scenario: Erasure interrupts a job-key rotation
 - **WHEN** recovery resumes with an unreadable old job file
 - **THEN** it discards the unreadable cache rather than restoring plaintext or blocking canonical erasure forever
+
+#### Scenario: A killed publication leaves an unpublished temporary plan
+- **WHEN** a ready temporary file was synchronized before process death, the visible job was recovered as failed, and canonical erasure runs
+- **THEN** erasure rotates every retained job key so the temporary plan is unreadable, while preserving content-free queued and failed records' status and metadata

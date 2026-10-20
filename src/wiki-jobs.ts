@@ -313,12 +313,15 @@ export async function invalidateWikiJobPlans(root: string, encryption: Encryptio
     // A prior erasure may have destroyed this key before publishing content-free state.
     if (!await encryption.hasKey(id)) { await store.remove(id); continue; }
     const job = checkedJob(await store.read(id));
-    if (!job.plan && job.status !== 'running') continue;
+    const invalidate = Boolean(job.plan) || job.status === 'running';
+    // A killed publication can leave a ready plan in an encrypted temporary
+    // file even after dead-worker recovery changed this record to failed.
+    // Rotate every retained key, not just records that currently expose a plan.
     // Once the old key is gone, unlink its ciphertext before any new key can
     // become durable. Interrupted replacement then leaves either an unreadable
     // old cache (handled above) or no file, never old ciphertext under a new key.
     await store.remove(id);
-    finish(job, 'failed', { code: 'VALIDATION_FAILED', reason: 'context-erased' });
+    if (invalidate) finish(job, 'failed', { code: 'VALIDATION_FAILED', reason: 'context-erased' });
     await store.write(job);
   }
 }
