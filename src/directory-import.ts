@@ -46,6 +46,11 @@ export async function previewDirectoryImport(directory: string): Promise<Directo
 
 /** The size contract includes the exact CLI framing, including its final newline. */
 export function serializeDirectoryImportPlan(plan: DirectoryImportPlan): string {
+  return serializeImportPreview(plan);
+}
+
+/** Shared size/framing contract for local and web previews. */
+export function serializeImportPreview(plan: object): string {
   const output = `${JSON.stringify(plan, null, 2)}\n`;
   if (Buffer.byteLength(output, 'utf8') > MAX_PLAN_BYTES) {
     throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit; select a smaller directory');
@@ -55,10 +60,14 @@ export function serializeDirectoryImportPlan(plan: DirectoryImportPlan): string 
 
 /** Read no more than the maximum preview size, even if the selected file grows. */
 export async function readDirectoryImportPlan(path: string): Promise<DirectoryImportPlan> {
+  return await readImportPreview(path) as DirectoryImportPlan;
+}
+
+export async function readImportPreview(path: string): Promise<unknown> {
   const canonical = await realpath(resolve(path));
   const bytes = await readBoundedFile(dirname(canonical), canonical, MAX_PLAN_BYTES);
   if (bytes.length > MAX_PLAN_BYTES) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit');
-  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as DirectoryImportPlan;
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
 }
 
 export async function applyDirectoryImport(vault: MemoryVault, input: DirectoryImportPlan,

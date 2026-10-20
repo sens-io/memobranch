@@ -104,6 +104,8 @@ flowchart LR
 
 > **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. Web crawling, PDF parsing and team knowledge merges remain future work. These additions are not yet published to npm.
 
+> **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
+
 ### Requirements
 
 - Node.js 20 or later

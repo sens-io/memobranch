@@ -58,4 +58,4 @@ Dates require ISO timestamps with an explicit timezone and at most three fractio
 
 ## Remaining roadmap
 
-This increment does not complete the entire second/third roadmap phase. Explicit public-web retrieval (including redirect/address safety), PDF parsing, durable background compilation with progress, fact-effective historical queries, fixed-version shared vaults, private knowledge merge review and validated experience/skill export still need separate implementation and verification. Nothing here enables unattended scraping, canonical approval, deployment, push or npm publication.
+This increment does not complete the entire second/third roadmap phase. A separate development-source increment now adds [explicit public HTTPS imports](public-web-import.md), not general crawling or article extraction. PDF parsing, durable background compilation with progress, fact-effective historical queries, fixed-version shared vaults, private knowledge merge review and validated experience/skill export still need separate implementation and verification. Nothing here enables unattended scraping, canonical approval, deployment, push or npm publication.

@@ -12,6 +12,7 @@ import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
 import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, serializeDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
+import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
 
 interface ParsedArgs {
   command: string;
@@ -54,7 +55,19 @@ async function main(): Promise<void> {
             });
             print(result);
             if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
-          } else throw new Error('Import action must be preview or apply');
+          } else if (action === 'web-preview') {
+            const plan = await previewWebImport(parsed.positionals.slice(1), { timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000) });
+            process.stdout.write(serializeWebImportPlan(plan));
+          } else if (action === 'web-apply') {
+            const result = await applyWebImport(vault, await readWebImportPlan(requiredFlag(parsed, 'plan')), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000),
+              scope: enumFlag(parsed, 'scope', scopes, 'project'), sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+              ...(flagBoolean(parsed, 'progress') ? { onProgress: progress => { process.stderr.write(`${JSON.stringify({ completed: progress.completed,
+                total: progress.total, evidenceId: progress.result.evidenceId, commit: progress.result.commit })}\n`); } } : {}),
+            });
+            print(result);
+            if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
+          } else throw new Error('Import action must be preview, apply, web-preview or web-apply');
         });
       } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
@@ -464,6 +477,8 @@ Usage:
   amem context <query> [--max-tokens N] [--resident-share 0.25] [--json] | ask <question> | get <id> | history
   amem import preview <directory> > import-plan.json
   amem import apply --plan import-plan.json [--scope project] [--sensitivity internal] [--progress]
+  amem import web-preview <https-url...> [--timeout-ms 10000] > web-plan.json
+  amem import web-apply --plan web-plan.json [--scope project] [--sensitivity internal] [--progress]
   amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]

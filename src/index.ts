@@ -17,6 +17,8 @@ export type { ContextBlock, ContextBudgetOptions, ContextBudgetReport, TokenCoun
 export { previewDirectoryImport, applyDirectoryImport, readDirectoryImportPlan } from './directory-import.js';
 export type { DirectoryImportOptions, DirectoryImportPlan, ImportProgress } from './directory-import.js';
 export type { SourceTimelineOptions } from './source-timeline.js';
+export { previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
+export type { WebImportPlan, WebImportOptions, WebImportProgress, WebPreviewOptions } from './web-import.js';
 export { startWebServer } from './web.js';
 export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';
