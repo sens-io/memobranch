@@ -7,7 +7,7 @@ import { scopes, sensitivities, type VaultConfig } from './types.js';
 import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withoutCancellation, withOperation } from './operation.js';
 import { WikiJobStore, wikiJobIdSchema } from './wiki-job-store.js';
 import { wikiPlanSchema } from './wiki-schema.js';
-import type { WikiPlan } from './wiki-types.js';
+import type { WikiPlan, WikiPreview } from './wiki-types.js';
 import { nowIso } from './utils.js';
 
 const evidenceIds = z.array(z.string().regex(/^ev-[a-f0-9]{12,64}$/)).min(1).max(40).refine(ids => new Set(ids).size === ids.length);
@@ -36,7 +36,8 @@ interface Port {
   locked<T>(action: () => Promise<T>): Promise<T>;
   evidence(ids: string[], ceiling: WikiJobCeiling): Promise<void>;
   compile(input: WikiJobInput, ceiling: WikiJobCeiling): Promise<{ duplicate: boolean; plan: WikiPlan | null }>;
-  preview(plan: WikiPlan, ceiling: WikiJobCeiling): Promise<unknown>;
+  preview(plan: WikiPlan, ceiling: WikiJobCeiling): Promise<WikiPreview>;
+  apply(plan: WikiPlan, ceiling: WikiJobCeiling): Promise<{ pageIds: string[]; commit: string | null }>;
 }
 
 /** Explicit local worker; never applies a proposal or starts a background service. */
@@ -113,6 +114,29 @@ export class WikiJobs {
     });
   }
 
+  async preview(id: string): Promise<WikiPreview> {
+    await this.authorize(false);
+    return this.port.locked(async () => {
+      const job = await this.owned(id);
+      if (job.status !== 'ready' || !job.plan) throw invalid();
+      return this.port.preview(job.plan, job.ceiling);
+    });
+  }
+
+  async apply(id: string): Promise<{ pageIds: string[]; commit: string | null }> {
+    await this.authorize(false);
+    authorize(this.port.principal, 'review');
+    const selected = await this.port.locked(async () => {
+      const job = await this.owned(id);
+      if (job.status !== 'ready' || !job.plan) throw invalid();
+      await this.port.preview(job.plan, job.ceiling);
+      return { plan: job.plan, ceiling: job.ceiling };
+    });
+    // Do not nest a canonical mutation inside the runtime writer lock. Existing
+    // wikiApply revalidates permissions and the snapshot under its own lock.
+    return this.port.apply(selected.plan, selected.ceiling);
+  }
+
   async cancel(id: string): Promise<WikiJobStatus> {
     await this.authorize(true);
     return this.port.locked(() => withoutCancellation(async () => {
@@ -121,7 +145,9 @@ export class WikiJobs {
       if (job.status === 'cancelled') return view(job);
       job.cancelRequested = true;
       if (job.status !== 'running' || !live(job.claim?.pid)) {
-        if (job.plan) await this.port.encryption.erase(job.id);
+        // Remove old ciphertext before creating a replacement key. Otherwise a
+        // crash after key creation could leave old ciphertext with a new key.
+        if (job.plan) await this.store.remove(job.id);
         finish(job, 'cancelled', { code: 'OPERATION_CANCELLED', reason: 'cancelled' });
       }
       job.updatedAt = nowIso(); await this.store.write(job); return view(job);
@@ -225,6 +251,15 @@ export class WikiJobs {
             finish(current, 'failed', { code: toAgentMemoryError(error).code, reason: 'compilation-failed' });
             await this.store.write(current);
           }
+          if (['ready', 'duplicate'].includes(current.status) && (parents.some(signal => signal.aborted) || timedOut)) {
+            // A stop can arrive while encryption/fsync/rename is awaiting I/O.
+            // Readers cannot enter until this same writer lock settles it.
+            if (current.plan) await this.store.remove(current.id);
+            finish(current, timedOut && !parents.some(signal => signal.aborted) ? 'failed' : 'cancelled',
+              timedOut && !parents.some(signal => signal.aborted) ? { code: 'DEPENDENCY_UNAVAILABLE', reason: 'deadline' }
+                : { code: 'OPERATION_CANCELLED', reason: 'cancelled' });
+            await this.store.write(current);
+          }
           return view(current);
         }));
       });
@@ -245,7 +280,12 @@ export class WikiJobs {
         // Claim selection needs metadata, not every retained multi-megabyte plan.
         jobs.push({ ...job, plan: null });
       }
-      const target = id ? jobs.find(job => job.id === id) : jobs.filter(job => job.status === 'queued').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0];
+      const eligible = jobs.filter(job => {
+        if (job.status !== 'queued') return false;
+        try { this.cover(job.ceiling); return true; }
+        catch (error) { if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') return false; throw error; }
+      });
+      const target = id ? jobs.find(job => job.id === id) : eligible.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0];
       if (id && !target) throw missing();
       if (!target || target.status !== 'queued') return null;
       if (jobs.some(job => job.status === 'running')) return null;
@@ -271,7 +311,10 @@ export async function invalidateWikiJobPlans(root: string, encryption: Encryptio
     if (!await encryption.hasKey(id)) { await store.remove(id); continue; }
     const job = checkedJob(await store.read(id));
     if (!job.plan && job.status !== 'running') continue;
-    await encryption.erase(id);
+    // Once the old key is gone, unlink its ciphertext before any new key can
+    // become durable. Interrupted replacement then leaves either an unreadable
+    // old cache (handled above) or no file, never old ciphertext under a new key.
+    await store.remove(id);
     finish(job, 'failed', { code: 'VALIDATION_FAILED', reason: 'context-erased' });
     await store.write(job);
   }

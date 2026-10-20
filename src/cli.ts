@@ -319,8 +319,8 @@ async function wikiJobsCommand(vault: MemoryVault, args: ParsedArgs): Promise<vo
     case 'list': print(await vault.wikiJobs()); return;
     case 'show': print(await vault.wikiJob(id())); return;
     case 'plan': print(await vault.wikiJobPlan(id())); return;
-    case 'preview': print(await vault.wikiPreview(await vault.wikiJobPlan(id()))); return;
-    case 'apply': authorize(vault.principal, 'review'); print(await vault.wikiApply(await vault.wikiJobPlan(id()))); return;
+    case 'preview': print(await vault.wikiPreviewJob(id())); return;
+    case 'apply': authorize(vault.principal, 'review'); print(await vault.wikiApplyJob(id())); return;
     case 'cancel': print(await vault.wikiCancelJob(id())); return;
     case 'retry': print(await vault.wikiRetryJob(id())); return;
     case 'remove': print(await vault.wikiRemoveJob(id())); return;

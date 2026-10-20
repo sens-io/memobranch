@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { MemoryVault, LlmClient } from 'memobranch';
+import { MemoryVault, LlmClient, localAdminPrincipal } from 'memobranch';
 
 let calls = 0, hold = false, reached;
 const server = createServer(async (request, response) => {
@@ -68,6 +68,12 @@ try {
   await vault.wikiIngest({ evidenceIds: [confidential.evidenceId], apply: true });
   const secretPage = (await vault.wikiCatalog()).find(page => page.sensitivity === 'secret');
   assert.ok(secretPage);
+  const scoped = new MemoryVault(vault.root, { masterKey, llm, principal: { ...localAdminPrincipal(), tenantId,
+    permissions: ['read', 'write'], scopes: ['public'], maxSensitivity: 'public' } });
+  const narrow = await scoped.wikiEnqueue({ evidenceIds: [next.evidenceId] });
+  assert.equal((await vault.wikiRunJob({ id: narrow.id })).status, 'ready');
+  assert.equal((await vault.wikiPreviewJob(narrow.id)).pages.length, 1);
+  assert.ok((await vault.wikiApplyJob(narrow.id)).commit);
   await vault.erase(secretPage.id, 'installed job cache invalidation');
   assert.equal((await vault.wikiJob(job.id)).error.reason, 'context-erased');
   await assert.rejects(vault.wikiJobPlan(job.id), { code: 'VALIDATION_FAILED' });

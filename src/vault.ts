@@ -127,15 +127,26 @@ export class MemoryVault {
   async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
   async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
   private wikiJobsEngine(): WikiJobs {
-    const bound = async (ceiling: WikiJobCeiling) => {
+    const bound = async (ceiling: WikiJobCeiling, review = false) => {
       const config = await this.config();
+      if (review) for (const scope of ceiling.scopes) authorize(this.principal, 'review', { tenantId: config.tenantId, scope, sensitivity: ceiling.maxSensitivity });
       return new MemoryVault(this.root, { llm: this.llm, ...(this.journalKey === undefined ? {} : { masterKey: this.journalKey }),
         principal: { id: this.principal.id, name: this.principal.name, tenantId: config.tenantId,
-          permissions: ['read', 'write'], scopes: [...ceiling.scopes], maxSensitivity: ceiling.maxSensitivity } });
+          ...(this.principal.email === undefined ? {} : { email: this.principal.email }),
+          permissions: review ? ['read', 'review'] : ['read', 'write'], scopes: [...ceiling.scopes], maxSensitivity: ceiling.maxSensitivity } });
     };
     return new WikiJobs({ root: this.root, principal: this.principal, encryption: this.encryption, config: () => this.config(),
       // Queue/key state shares the writer lock, but never writes canonical knowledge.
-      locked: action => this.settledRead(action),
+      locked: action => this.settledRead(async () => {
+        const erasures = join(this.root, '.amem', 'erasures');
+        if (existsSync(erasures)) {
+          const state = await lstat(erasures);
+          if (!state.isDirectory() || state.isSymbolicLink() || (await readdir(erasures)).some(name => name.endsWith('.json'))) {
+            throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending erasure before accessing Wiki jobs');
+          }
+        }
+        return action();
+      }),
       evidence: async (ids, ceiling) => {
         const records = await (await bound(ceiling)).readDirectory<Record<string, unknown>>('evidence');
         const available = new Set(records.filter(record => record.meta.type === 'evidence').map(record => record.meta.id));
@@ -143,6 +154,7 @@ export class MemoryVault {
       },
       compile: async (input, ceiling) => (await bound(ceiling)).wikiIngest({ ...input, apply: false }),
       preview: async (plan, ceiling) => (await bound(ceiling)).wikiEngine().preview(plan),
+      apply: async (plan, ceiling) => (await bound(ceiling, true)).wikiApply(plan),
     });
   }
   async wikiEnqueue(input: WikiJobInput) { return this.wikiJobsEngine().enqueue(input); }
@@ -152,6 +164,8 @@ export class MemoryVault {
   async wikiCancelJob(id: string) { return this.wikiJobsEngine().cancel(id); }
   async wikiRetryJob(id: string) { return this.wikiJobsEngine().retry(id); }
   async wikiJobPlan(id: string) { return this.wikiJobsEngine().plan(id); }
+  async wikiPreviewJob(id: string) { return this.wikiJobsEngine().preview(id); }
+  async wikiApplyJob(id: string) { return this.wikiJobsEngine().apply(id); }
   async wikiRemoveJob(id: string) { return this.wikiJobsEngine().remove(id); }
   async wikiCorrect(key: string, instruction: string, options: { expectedRevision?: number } = {}) {
     authorize(this.principal, 'read');

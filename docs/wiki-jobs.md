@@ -30,8 +30,8 @@ const status = await vault.wikiJob(submitted.id);
 const jobs = await vault.wikiJobs();
 // Explicitly inspect, then separately authorize application.
 const plan = await vault.wikiJobPlan(submitted.id);
-const preview = await vault.wikiPreview(plan);
-// await vault.wikiApply(plan);
+const preview = await vault.wikiPreviewJob(submitted.id);
+// await vault.wikiApplyJob(submitted.id);
 ```
 
 ## State, cancellation and retry
@@ -44,11 +44,11 @@ After an actual process death, the next worker marks the abandoned attempt faile
 
 ## Authority, encryption and erasure
 
-Jobs bind vault, tenant, submitting identity and the original scope/sensitivity ceiling. They store evidence IDs, not a second raw-source archive. Inspection requires current read authority covering the original ceiling; running/mutating additionally requires current write authority. Only the submitting identity can access its jobs. A later broader identity with the same ID still compiles under the original ceiling; the queue never replays old permissions as a grant. Cancel/remove can clean up one's job after its context ceiling has narrowed, but still require current tenant/read/write authority and the correct master key.
+Jobs bind vault, tenant, submitting identity and the original scope/sensitivity ceiling. They store evidence IDs, not a second raw-source archive. Inspection requires current read authority covering the original ceiling; running/mutating additionally requires current write authority. Only the submitting identity can access its jobs. A later broader identity with the same ID still compiles under the original ceiling; the queue never replays old permissions as a grant. Job-specific preview/apply helpers preserve that ceiling, with **current** review permission required to apply. Manually exported plans retain their original snapshot context; using a differently scoped generic vault to preview/apply them may intentionally fail. Default workers skip queued jobs outside their current ceiling so they do not block eligible work; explicitly naming such a job still fails. Cancel/remove can clean up one's job after its context ceiling has narrowed, but still require current tenant/read/write authority and the correct master key. Cancellation does not revoke a signed plan previously exported and independently held by an authorized reviewer.
 
 State and plans are authenticated-encrypted using per-job data keys under the existing vault key store. Runtime files are private and ignored by canonical Git. File/directory symlinks, oversized or malformed state fail safely. The queue shares the canonical writer lock only for short state/key changes and final validation; provider calls run outside it. Pending canonical recovery must be handled using the existing recovery workflow first.
 
-Canonical cryptographic erasure invalidates **all** retained plans and running claims because a plan may have copied the erased page's title through navigation. Their old job data keys are destroyed and content-free failed states receive new keys. A late worker cannot restore its plan. A crash between key destruction and replacement is handled during erasure recovery by dropping the now-unreadable old cache. A removal interrupted after key destruction is skipped by listing/workers; an administrator can remove that opaque orphan by ID. This does not erase provider-side copies or independent backups; erasing a Wiki page is not erasing independent immutable evidence. Corrupt runtime state can require operator repair before erasure; do not bypass validation or restore erased keys.
+Canonical cryptographic erasure invalidates **all** retained plans and running claims because a plan may have copied the erased page's title through navigation. Their old job data keys and ciphertext are removed **before** creating replacement keys and content-free failed states. A late worker cannot restore its plan. Interrupted cancellation/erasure may remove a cached job entirely; recovery accepts an absent cache or drops a keyless old file, never pairs old ciphertext with a replacement key. A removal interrupted after key destruction is skipped by listing/workers; an administrator can remove that opaque orphan by ID. This does not erase provider-side copies or independent backups; erasing a Wiki page is not erasing independent immutable evidence. Corrupt runtime state can require operator repair before erasure; do not bypass validation or restore erased keys.
 
 ## Bounds and remaining work
 
