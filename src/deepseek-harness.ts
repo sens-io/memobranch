@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
+import { registerAutomaticMemory, type AutomaticMemoryMode } from './harness-memory.js';
 import { MaintenanceService } from './maintenance.js';
 import { combineSignals, throwIfCancelled, withOperation } from './operation.js';
 import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
@@ -22,6 +23,9 @@ export interface Config {
   defaultSensitivity: Sensitivity;
   defaultSearchLimit: number;
   defaultMaxContextCharacters: number;
+  automaticMemory?: AutomaticMemoryMode;
+  automaticMaxInputCharacters?: number;
+  automaticMaxCaptureCharacters?: number;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -47,6 +51,13 @@ export const Config: Schema<Config> = Schema.object({
     .step(1)
     .description('Default maximum rendered context size.')
     .default(12_000),
+  automaticMemory: Schema.union(['off', 'recall', 'recall-and-capture'])
+    .description('Opt-in automatic approved memory/Wiki recall, optionally followed by pending evidence and episode capture. off performs neither.')
+    .default('off'),
+  automaticMaxInputCharacters: Schema.number().min(100).max(2_000).step(1)
+    .description('Maximum user-prompt characters used for automatic local recall.').default(2_000),
+  automaticMaxCaptureCharacters: Schema.number().min(500).max(100_000).step(1)
+    .description('Skip automatic capture when the complete text-only turn exceeds this limit.').default(20_000),
 });
 
 const jsonOutput = {
@@ -80,10 +91,26 @@ export function apply(ctx: Context, config: Config): void {
   if (granted(principal, 'maintain')) registerMaintenanceTools(ctx, vault);
   if (granted(principal, 'sync')) registerSyncTools(ctx, vault);
   registerWikiTools(ctx, vault, principal, resolved);
+  registerAutomaticMemory(ctx, vault, principal, {
+    mode: resolved.automaticMemory ?? 'off', scope: resolved.defaultScope, sensitivity: resolved.defaultSensitivity,
+    limit: resolved.defaultSearchLimit, maxContextCharacters: resolved.defaultMaxContextCharacters,
+    maxInputCharacters: resolved.automaticMaxInputCharacters ?? 2_000,
+    maxCaptureCharacters: resolved.automaticMaxCaptureCharacters ?? 20_000,
+  }, (signal, action) => run(vault, signal, action, false));
 }
 
 function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
   if (granted(principal, 'read')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_preview',
+      description: 'Read an authorized before/after comparison of a proposed Wiki plan; validate permissions and source revisions without applying it.',
+      parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete proposed Wiki plan.' } },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['plan']);
+        return runJson(vault, exec.signal, () => vault.wikiPreview(args.plan));
+      },
+    }));
     ctx.tools.register(defineTool({
       name: 'memory_wiki_catalog',
       description: 'Read authorized Wiki categories, summaries, page links, and revisions without writing knowledge.',
@@ -121,6 +148,21 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     }));
   }
   if (granted(principal, 'write')) {
+    if (granted(principal, 'read')) ctx.tools.register(defineTool({
+      name: 'memory_wiki_correct',
+      description: 'Capture a natural-language correction as immutable evidence and prepare a pending Wiki plan. Never approves or applies it.',
+      parameters: {
+        key: { type: 'string', required: true, description: 'Current Wiki page key (up to 200 characters).' },
+        instruction: { type: 'string', required: true, description: 'Correction to preserve as evidence (up to 100000 characters).' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        wikiArguments(args, ['key', 'instruction']);
+        const key = boundedString(args.key, 'key', 200);
+        const instruction = boundedString(args.instruction, 'instruction', 100_000);
+        return runJson(vault, exec.signal, () => vault.wikiCorrect(key, instruction));
+      },
+    }));
     ctx.tools.register(defineTool({
       name: 'memory_wiki_ingest',
       description: 'Prepare a bounded linked-page plan from immutable evidence. apply=true additionally requires review permission before compilation.',
@@ -251,6 +293,38 @@ function wikiPageBudget(value: number | undefined): { maxPages?: number } {
 }
 
 function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
+  ctx.tools.register(defineTool({
+    name: 'memory_recall',
+    description: 'Read approved ordinary memory and Wiki pages as complete records with source paths, revisions, conditions and uncertainty; no model call.',
+    parameters: {
+      query: { type: 'string', required: true, description: 'Current task or question.' },
+      limit: { type: 'integer', description: 'Maximum matching records (1-50).' },
+      maxCharacters: { type: 'integer', description: 'Complete-record output character budget (500-50000).' },
+    },
+    output: jsonOutput,
+    async execute(args, exec) {
+      wikiArguments(args, ['query', 'limit', 'maxCharacters']);
+      const query = boundedString(args.query, 'query', 2_000);
+      const limit = boundedInteger(args.limit ?? config.defaultSearchLimit, 'limit', 1, 50);
+      const maxCharacters = boundedInteger(args.maxCharacters ?? config.defaultMaxContextCharacters, 'maxCharacters', 500, 50_000);
+      return runJson(vault, exec.signal, () => vault.recall(query, { limit, maxCharacters, includeSensitive: false, includeSecret: false, semantic: false }));
+    },
+  }));
+  ctx.tools.register(defineTool({
+    name: 'memory_explain',
+    description: 'Search authorized records and expose actual matching scores and search strategy. Does not infer hidden records or fabricate reasoning.',
+    parameters: {
+      query: { type: 'string', required: true, description: 'Search query.' },
+      limit: { type: 'integer', description: 'Maximum matching records (1-50).' },
+    },
+    output: jsonOutput,
+    async execute(args, exec) {
+      wikiArguments(args, ['query', 'limit']);
+      const query = boundedString(args.query, 'query', 2_000);
+      const limit = boundedInteger(args.limit ?? config.defaultSearchLimit, 'limit', 1, 50);
+      return runJson(vault, exec.signal, () => vault.explain(query, { limit, includeSensitive: false, includeSecret: false, semantic: false }));
+    },
+  }));
   ctx.tools.register(defineTool({
     name: 'memory_context',
     description: 'Build authorized resident and retrieved memory context before a task that depends on durable knowledge.',
@@ -559,6 +633,9 @@ function resolveConfig(config: Config): Config {
     defaultSensitivity: oneOf(config.defaultSensitivity, sensitivities, 'defaultSensitivity'),
     defaultSearchLimit: boundedInteger(config.defaultSearchLimit, 'defaultSearchLimit', 1, 50),
     defaultMaxContextCharacters: boundedInteger(config.defaultMaxContextCharacters, 'defaultMaxContextCharacters', 500, 50_000),
+    automaticMemory: oneOf(config.automaticMemory ?? 'off', ['off', 'recall', 'recall-and-capture'] as const, 'automaticMemory'),
+    automaticMaxInputCharacters: boundedInteger(config.automaticMaxInputCharacters ?? 2_000, 'automaticMaxInputCharacters', 100, 2_000),
+    automaticMaxCaptureCharacters: boundedInteger(config.automaticMaxCaptureCharacters ?? 20_000, 'automaticMaxCaptureCharacters', 500, 100_000),
   };
 }
 
@@ -566,7 +643,7 @@ function granted(principal: Principal, permission: Permission): boolean {
   return principal.permissions.includes('admin') || principal.permissions.includes(permission);
 }
 
-async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
+async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Promise<T>, sanitizeErrors = true): Promise<T> {
   const lifetime = lifetimes.get(vault);
   const combined = combineSignals(lifetime ? [signal, lifetime.controller.signal] : [signal]);
   const pending = withOperation(combined.signal, async () => {
@@ -574,14 +651,14 @@ async function run<T>(vault: MemoryVault, signal: AbortSignal, action: () => Pro
       const value = await action();
       throwIfCancelled();
       return value;
-    } catch (error) { throw safeError(error); }
+    } catch (error) { throw sanitizeErrors ? safeError(error) : error; }
   });
   lifetime?.pending.add(pending);
   try {
     return await pending;
   } catch (error) {
     // A pre-dispatch cancellation is thrown outside the callback above.
-    if (error instanceof AgentMemoryError) throw safeError(error);
+    if (sanitizeErrors && error instanceof AgentMemoryError) throw safeError(error);
     throw error;
   } finally {
     combined.dispose();

@@ -9,6 +9,7 @@ import { MemoryVault } from './vault.js';
 import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
+import { runIntegrationSetup } from './integration-cli.js';
 
 interface ParsedArgs {
   command: string;
@@ -32,6 +33,20 @@ async function main(): Promise<void> {
   const vault = new MemoryVault(root, { principal });
 
   switch (parsed.command) {
+    case 'setup': {
+      const action = parsed.positionals[0] ?? 'preview';
+      if (!['preview', 'apply', 'verify', 'remove'].includes(action)) throw new Error('Setup action must be preview, apply, verify, or remove');
+      const client = flagString(parsed, 'client') ?? 'claude-code';
+      if (client !== 'claude-code') throw new Error('Only the claude-code project configuration is supported');
+      const permissions = flagString(parsed, 'permissions') ?? 'read';
+      if (permissions !== 'read' && permissions !== 'read,write') throw new Error('Setup permissions must be read or read,write');
+      const expectedRevision = flagString(parsed, 'expected-revision');
+      print(await runIntegrationSetup(action as 'preview' | 'apply' | 'verify' | 'remove', {
+        client, configPath: resolve(flagString(parsed, 'config') ?? '.mcp.json'), vaultRoot: root, permissions,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }));
+      return;
+    }
     case 'init': {
       const initRoot = resolve(parsed.positionals[0] ?? root);
       print(await new MemoryVault(initRoot, { principal }).initialize(flagString(parsed, 'name')));
@@ -102,6 +117,14 @@ async function main(): Promise<void> {
       print(await vault.searchDetailed(query, searchOptions(parsed)));
       return;
     }
+    case 'explain':
+      print(await vault.explain(requiredText(parsed.positionals.join(' '), 'A search query is required'), searchOptions(parsed)));
+      return;
+    case 'recall':
+      print(await vault.recall(requiredText(parsed.positionals.join(' '), 'A recall query is required'), {
+        ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000),
+      }));
+      return;
     case 'context': {
       const query = requiredText(parsed.positionals.join(' '), 'A context query is required');
       const context = await vault.context(query, { ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000) });
@@ -199,6 +222,16 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
       print(await vault.wikiApply(plan));
       return;
     }
+    case 'preview': {
+      const document = await jsonFileFrom(args);
+      const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
+      print(await vault.wikiPreview(plan));
+      return;
+    }
+    case 'correct':
+      print(await vault.wikiCorrect(requiredPositional(input, 0, 'Wiki key'),
+        await contentFrom({ ...input, positionals: input.positionals.slice(1) })));
+      return;
     case 'query':
       print(await vault.wikiQuery(requiredText(input.positionals.join(' '), 'A Wiki question is required'), budget));
       return;
@@ -373,6 +406,8 @@ function help(): string {
 Usage:
   amem init [path] [--name NAME]
   amem config [migrate] | policy | version
+  amem setup [preview|apply|verify|remove] [--client claude-code] [--config .mcp.json] --root VAULT
+    apply/remove require --expected-revision HASH; --permissions read,write is explicit opt-in
   amem capture <text|-> [--extract] [--scope SCOPE] [--sensitivity LEVEL]
   amem extract <evidence-id>
   amem propose <statement> --key KEY [--kind fact] [--explicit] [--evidence path,...]
@@ -380,6 +415,7 @@ Usage:
   amem forget <memory-id|key> --reason TEXT
   amem erase <memory-id|key> --reason TEXT
   amem search <query> [--semantic] [--include-sensitive] [--include-secret]
+  amem recall <query> [--max-chars N] | explain <query> [--semantic]
   amem context <query> | ask <question> | get <id> | history
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]
@@ -388,6 +424,8 @@ Usage:
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
   amem wiki apply --file <plan.json|->
+  amem wiki preview --file <plan.json|->
+  amem wiki correct <page-key> <instruction|-> [--file PATH]
   amem wiki query <question> [--max-pages N]
   amem wiki file --file <query-result.json|-> --title TEXT [--page-type query|comparison] [--apply]
   amem wiki lint [--semantic] [--max-pages N]
