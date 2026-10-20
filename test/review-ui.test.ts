@@ -95,6 +95,18 @@ const preview = { kind: 'repair', pages: [{ key: 'return-policy', title: '退货
 const wikiDocument = { path: 'wiki/concept/return-policy.md', meta: { id: 'wiki-return-policy', type: 'wiki-page', key: 'return-policy', title: '退货政策',
   revision: 3, status: 'active', scope: 'user', sensitivity: 'internal', evidence: before.evidence, conditions: after.conditions, uncertainty: after.uncertainty }, body: after.body };
 
+test('web branding: login and sidebar reuse the README image instead of the letter mark', () => {
+  const ui = harness(() => success({}));
+  for (const render of ['login()', 'shell()']) {
+    ui.run(render);
+    assert.equal(ui.run("app.querySelectorAll('img').length"), 1);
+    assert.equal(ui.run("app.querySelector('img').src"), '/assets/logo.png');
+    assert.equal(ui.run("app.querySelector('img').alt"), '', 'the adjacent product name already labels the brand');
+    assert.equal(nodes(ui.app).some(node => node.className === 'mark'), false);
+    assert.match(ui.app.textContent, /MemoBranch/);
+  }
+});
+
 test('review UI: validated canonical comparison gates approval and applies the original signed plan', async () => {
   const pending = deferred<Response>();
   const ui = harness(request => request.operation === 'preview' ? pending.promise : success({ commit: 'abcdef123456' }));

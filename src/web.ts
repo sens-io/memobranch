@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -103,6 +104,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
   const { port: _port, ...vaultOptions } = options;
   const initial = new MemoryVault(root, vaultOptions);
   await settledRead(initial, () => initial.settings(), true); // Recovery diagnostics remain reachable.
+  const logo = await readFile(new URL('../assets/logo.png', import.meta.url));
   const token = randomBytes(32).toString('hex');
   const tokenBytes = Buffer.from(`Bearer ${token}`);
   const active = new Set<AbortController>();
@@ -128,6 +130,11 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     if (stopping) return send(res, 503, { error: { code: 'STOPPING', message: 'Server is stopping' } });
     if (req.headers.host !== authority) return send(res, 403, { error: { code: 'AUTHORIZATION_DENIED', message: 'Invalid host' } });
     const path = req.url ?? '/';
+    if (req.method === 'GET' && path === '/assets/logo.png') {
+      res.setHeader('Content-Type', 'image/png');
+      res.end(logo);
+      return;
+    }
     if (req.method === 'GET' && (path === '/' || path === '/app.js' || path === '/style.css')) {
       res.setHeader('Content-Type', path === '/' ? 'text/html; charset=utf-8' : path === '/app.js' ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8');
       res.end(path === '/' ? webHtml : path === '/app.js' ? webScript : webCss);

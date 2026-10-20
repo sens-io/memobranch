@@ -69,6 +69,9 @@ try {
       assert.equal(response.status, 200);
       assert.equal((await response.json()).result.name, 'installed package smoke');
       assert.equal((await fetch(web.url + '/app.js')).status, 200);
+      const logo = await fetch(web.url + '/assets/logo.png');
+      assert.equal(logo.headers.get('content-type'), 'image/png');
+      assert.deepEqual(Buffer.from(await logo.arrayBuffer()), await readFile('node_modules/memobranch/assets/logo.png'));
       console.log('Installed package: authenticated Web console and bundled assets passed.');
     } finally { await web.stop(); }
     const metadata = JSON.parse(await readFile('node_modules/memobranch/package.json', 'utf8'));
