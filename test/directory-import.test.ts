@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
-import { applyDirectoryImport, previewDirectoryImport } from '../src/directory-import.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan } from '../src/directory-import.js';
 import { MemoryVault } from '../src/vault.js';
 import { localAdminPrincipal } from '../src/policy.js';
 import { withOperation } from '../src/operation.js';
@@ -73,7 +75,7 @@ test('import: cancelled batch reports completed commits and retry finishes only 
   const { source, vault } = await fixture(t);
   const plan = await previewDirectoryImport(source);
   const controller = new AbortController();
-  const partial = await withOperation(controller.signal, () => applyDirectoryImport(vault, plan, { onProgress: () => controller.abort() }));
+  const partial = await applyDirectoryImport(vault, plan, { signal: controller.signal, onProgress: () => controller.abort() });
   assert.equal(partial.status, 'cancelled');
   assert.equal(partial.entries.length, 1);
   assert.ok(partial.entries[0]!.result.commit);
@@ -82,6 +84,8 @@ test('import: cancelled batch reports completed commits and retry finishes only 
   assert.equal(retry.status, 'completed');
   assert.equal(retry.entries[0]!.result.duplicate, true);
   assert.equal(retry.entries[1]!.result.duplicate, false);
+  const parent = new AbortController(); parent.abort();
+  await assert.rejects(withOperation(parent.signal, () => applyDirectoryImport(vault, plan, { signal: new AbortController().signal })), { code: 'OPERATION_CANCELLED' });
 });
 
 test('import: current tenant/write/scope/sensitivity and encryption remain authoritative', async t => {
@@ -100,4 +104,27 @@ test('import: current tenant/write/scope/sensitivity and encryption remain autho
     assert.equal((await vault.get(item.result.evidenceId)).meta.sensitivity, 'secret');
   }
   assert.equal((await reader.listRecords({ collection: 'evidence' })).total, 0);
+});
+
+test('import: CLI accepts its own large multibyte preview and bounds oversized plan reads', async t => {
+  const { root, source, vault } = await fixture(t);
+  let directory = source;
+  for (let index = 0; index < 3; index++) {
+    directory = join(directory, `${'文'.repeat(60)}${index}`);
+    await mkdir(directory);
+  }
+  await rm(join(source, 'a.md')); await rm(join(source, 'b.txt'));
+  for (let index = 0; index < 100; index++) await writeFile(join(directory, `${'资料'.repeat(10)}${index}.txt`), 'synthetic');
+  const preview = await previewDirectoryImport(source);
+  const raw = JSON.stringify(preview, null, 2);
+  assert.ok(Buffer.byteLength(raw) > 200_000);
+  const plan = join(root, 'plan.json');
+  await writeFile(plan, raw);
+  assert.deepEqual(await readDirectoryImportPlan(plan), preview);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));
+  Object.assign(env, { AMEM_PERMISSIONS: 'read', AMEM_ALLOWED_SCOPES: 'project', AMEM_MAX_SENSITIVITY: 'public', AMEM_TENANT_ID: (await vault.config()).tenantId });
+  await assert.rejects(promisify(execFile)(process.execPath, [join(process.cwd(), 'dist/cli.js'), 'import', 'apply', '--plan', plan, '--root', vault.root], { env }),
+    (error: unknown) => /AUTHORIZATION_DENIED/.test(String((error as { stderr?: string }).stderr)));
+  await writeFile(plan, Buffer.alloc(1_000_001, 'x'));
+  await assert.rejects(readDirectoryImportPlan(plan), { code: 'CONTENT_TOO_LARGE' });
 });

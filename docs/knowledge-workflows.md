@@ -41,7 +41,7 @@ The local library also exports `previewDirectoryImport(directory)` and `applyDir
 - All source content is re-read and checked against the entire preview before the first capture. Added, removed or modified supported files require a new preview. Apply captures that verified in-memory snapshot; later filesystem changes are not silently substituted.
 - Capture uses the existing immutable evidence identity, source URI, scope, sensitivity, encryption and transaction rules. File URIs are absolute, so relocating a source directory changes its source identities. Captured text uses the existing leading/trailing whitespace normalization; this is not a byte-for-byte binary archive.
 - `--progress` prints completed progress on stderr and a final JSON result on stdout. Each file is a separate recoverable evidence transaction, not an all-or-nothing directory transaction. Cancel with Ctrl+C; completed evidence remains. Retry the unchanged preview to reuse saved evidence and finish missing documents. Changed files need a fresh preview.
-- A cancelled/failed import exits nonzero and reports completed entries. Cancellation at a commit boundary can also report `interruptedCommits`; retry is authoritative for identifying deduplicated evidence. The library supports `withOperation` cancellation internally; pass an `AbortSignal` using the operation wrapper when integrating it.
+- A cancelled/failed import exits nonzero and reports completed entries. Cancellation at a commit boundary can also report `interruptedCommits`; retry is authoritative for identifying deduplicated evidence. The library accepts `applyDirectoryImport(vault, plan, { signal: controller.signal })`; this combines with any parent operation's cancellation. Cancellation during preflight rejects without writing.
 - No candidate extraction, model call or Wiki approval is automatic. Use returned evidence IDs with `wiki ingest`, inspect the resulting plan and approve separately. There is no persisted background-job queue.
 
 ## Source versions and update review
@@ -54,7 +54,7 @@ memobranch source timeline 'file:///absolute/project-docs/atlas.md' --root ./vau
 
 Changing and reimporting a document appends evidence under the same source URI. `sourceTimeline` (library), `memory_source_timeline` (MCP/Harness) and the CLI report authorized versions and the current ordinary/Wiki pages referencing each version. Scope/sensitivity classifications have independent latest versions; a secret update cannot mark a public version as old. `older-source-reference` means someone should review the relationship, **not** that a historical comparison page is necessarily incorrect. Versions outside the selected date window may still determine which version is latest. Paging applies after date filtering.
 
-Dates require ISO timestamps with an explicit timezone. They filter **recorded time** only; these operations do not answer what was factually valid at a past date, reconstruct old Wiki revisions, reverse revocation, restore erased keys, or claim that a newer document is true. Current permissions apply to every result and count.
+Dates require ISO timestamps with an explicit timezone and at most three fractional-second digits (millisecond precision). They filter **recorded time** only; these operations do not answer what was factually valid at a past date, reconstruct old Wiki revisions, reverse revocation, restore erased keys, or claim that a newer document is true. Current permissions and transitive source/lifecycle checks apply to every returned reference and count.
 
 ## Remaining roadmap
 

@@ -226,6 +226,12 @@ export class WikiEngine {
     return [...state.eligible.values()].filter(page => ids.includes(page.meta.id) && page.meta.status === 'active');
   }
 
+  /** Reuse transitive provenance and lifecycle checks for source-reference views. */
+  async referencePages(options: { includeSensitive?: boolean; includeSecret?: boolean } = {}): Promise<Array<MarkdownDocument<MemoryMeta | WikiPageMeta>>> {
+    const state = await this.load('read', false, options);
+    return [...state.eligible.values()].map(page => required(state.documents.get(page.path), 'Wiki page is unavailable') as unknown as MarkdownDocument<MemoryMeta | WikiPageMeta>);
+  }
+
   /** A correction remains a proposal, grounded in a separately captured human instruction. */
   async correct(options: { key: string; evidenceId: string; expectedRevision: number }): Promise<WikiPlan> {
     authorize(this.port.principal, 'read');

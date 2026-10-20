@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { MemoryVault } from '../src/vault.js';
 import { localAdminPrincipal } from '../src/policy.js';
+import { LlmClient } from '../src/llm.js';
 
 async function fixture(t: TestContext) {
   await mkdir(join(process.cwd(), '.scratch'), { recursive: true });
@@ -55,8 +56,35 @@ test('source: narrower readers do not learn secret versions or their effects on 
 test('source: invalid recorded-time ranges and paging fail, missing sources reveal no hidden count', async t => {
   const { vault, uri } = await fixture(t);
   for (const options of [{ from: 'yesterday' }, { from: '2026-10-20' }, { from: '2026-02-30T00:00:00Z' },
+    { from: '2026-10-20T00:00:00.1231Z' }, { from: '2026-10-20T00:00:00.1239Z', to: '2026-10-20T00:00:00.1231Z' },
     { from: '2026-10-20T00:00:00Z', to: '2026-10-19T00:00:00Z' }, { offset: -1 }, { limit: 101 }]) {
     await assert.rejects(vault.sourceTimeline(uri, options), { code: 'VALIDATION_FAILED' });
   }
   assert.equal((await vault.sourceTimeline(uri)).total, 0);
+});
+
+test('source: references cannot reveal derived page keys when any transitive source is inaccessible', async t => {
+  const { vault, uri } = await fixture(t);
+  class MixedSources extends LlmClient {
+    override async wiki<T>(operation: string, raw: object): Promise<T> {
+      if (operation === 'navigate') return { keys: [] } as T;
+      const input = raw as { sources: Array<{ id: string }> };
+      return { pages: input.sources.map(source => ({ key: `source:${source.id}`, title: 'Mixed sources', pageType: 'source',
+        summary: 'Restricted mixed-source summary', body: 'Atlas uses two differently scoped sources.', evidenceIds: input.sources.map(item => item.id),
+        links: [], status: 'active', conditions: [], uncertainty: [] })) } as T;
+    }
+  }
+  const compiler = new MemoryVault(vault.root, { llm: new MixedSources({ apiKey: '', model: 'local-source-fixture' }) });
+  const hidden = await compiler.capture({ content: 'Public-scope evidence unavailable to the project-only reader.',
+    sourceUri: 'fixture:hidden', scope: 'public', sensitivity: 'public' });
+  const visible = await compiler.capture({ content: 'Project-only evidence.', sourceUri: uri, scope: 'project', sensitivity: 'public' });
+  const proposal = await compiler.wikiIngest({ evidenceIds: [hidden.evidenceId, visible.evidenceId] });
+  await compiler.wikiApply(proposal.plan);
+  const reader = new MemoryVault(vault.root, { principal: { ...localAdminPrincipal(), tenantId: (await vault.config()).tenantId,
+    permissions: ['read'], scopes: ['project'], maxSensitivity: 'public' } });
+  assert.equal((await reader.wikiCatalog()).length, 0);
+  const result = await reader.sourceTimeline(uri);
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.items[0]!.references, []);
+  assert.ok(!JSON.stringify(result).includes(hidden.evidenceId));
 });

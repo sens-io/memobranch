@@ -1,10 +1,10 @@
 import { constants, type Dirent } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
-import { extname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
-import { throwIfCancelled } from './operation.js';
+import { combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 import { authorize } from './policy.js';
 import type { Scope, Sensitivity } from './types.js';
 import { sha256 } from './utils.js';
@@ -13,6 +13,7 @@ import type { CaptureResult, MemoryVault } from './vault.js';
 const MAX_FILES = 100;
 const MAX_BYTES = 5_000_000;
 const MAX_FILE_BYTES = 1_000_000;
+const MAX_PLAN_BYTES = 1_000_000;
 const ignored = new Set(['node_modules', 'dist', 'build', 'coverage', 'vendor']);
 const extensions = new Set(['.md', '.markdown', '.txt']);
 
@@ -31,13 +32,36 @@ export interface ImportProgress {
   result: CaptureResult;
 }
 
+export interface DirectoryImportOptions {
+  scope?: Scope;
+  sensitivity?: Sensitivity;
+  signal?: AbortSignal;
+  onProgress?: (progress: ImportProgress) => void;
+}
+
 /** CLI/local-library only: never register caller-controlled filesystem reads as a server tool. */
 export async function previewDirectoryImport(directory: string): Promise<DirectoryImportPlan> {
   return (await scanDirectory(directory)).plan;
 }
 
+/** Read no more than the maximum preview size, even if the selected file grows. */
+export async function readDirectoryImportPlan(path: string): Promise<DirectoryImportPlan> {
+  const canonical = await realpath(resolve(path));
+  const bytes = await readBoundedFile(dirname(canonical), canonical, MAX_PLAN_BYTES);
+  if (bytes.length > MAX_PLAN_BYTES) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit');
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as DirectoryImportPlan;
+}
+
 export async function applyDirectoryImport(vault: MemoryVault, input: DirectoryImportPlan,
-  options: { scope?: Scope; sensitivity?: Sensitivity; onProgress?: (progress: ImportProgress) => void } = {}) {
+  options: DirectoryImportOptions = {}) {
+  if (!options.signal) return applySnapshot(vault, input, options);
+  const parent = operationSignal();
+  const combined = combineSignals(parent ? [parent, options.signal] : [options.signal]);
+  try { return await withOperation(combined.signal, () => applySnapshot(vault, input, options)); }
+  finally { combined.dispose(); }
+}
+
+async function applySnapshot(vault: MemoryVault, input: DirectoryImportPlan, options: DirectoryImportOptions) {
   const config = await vault.config();
   const scope = options.scope ?? 'project';
   const sensitivity = options.sensitivity ?? 'internal';
@@ -122,26 +146,30 @@ async function scanDirectory(directory: string) {
   }
   if (!files.length) throw new AgentMemoryError('VALIDATION_FAILED', 'No supported text or Markdown files found');
   const payload = { version: 1 as const, root, files, totalBytes };
-  return { plan: { ...payload, revision: sha256(JSON.stringify(payload)) }, contents };
+  const plan = { ...payload, revision: sha256(JSON.stringify(payload)) };
+  if (Buffer.byteLength(JSON.stringify(plan, null, 2), 'utf8') > MAX_PLAN_BYTES) {
+    throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit; select a smaller directory');
+  }
+  return { plan, contents };
 }
 
-async function readBoundedFile(root: string, path: string): Promise<Buffer> {
+async function readBoundedFile(root: string, path: string, maximum = MAX_FILE_BYTES): Promise<Buffer> {
   const canonical = await realpath(path);
-  if (canonical !== path || !canonical.startsWith(`${root}${sep}`)) throw new AgentMemoryError('VALIDATION_FAILED', 'Import source escaped its directory');
+  if (canonical !== path || !canonical.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) throw new AgentMemoryError('VALIDATION_FAILED', 'Import source escaped its directory');
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const start = await handle.stat();
     if (!start.isFile()) throw new AgentMemoryError('VALIDATION_FAILED', 'Import supports regular files only');
-    if (start.size > MAX_FILE_BYTES) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
+    if (start.size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
     const chunks: Buffer[] = [];
     let size = 0;
     while (true) {
       throwIfCancelled();
-      const buffer = Buffer.alloc(Math.min(65536, MAX_FILE_BYTES + 1 - size));
+      const buffer = Buffer.alloc(Math.min(65536, maximum + 1 - size));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
       size += bytesRead;
-      if (size > MAX_FILE_BYTES) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
+      if (size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
       chunks.push(buffer.subarray(0, bytesRead));
     }
     const end = await handle.stat();

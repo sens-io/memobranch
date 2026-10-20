@@ -10,7 +10,7 @@ import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
-import { applyDirectoryImport, previewDirectoryImport, type DirectoryImportPlan } from './directory-import.js';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
 
 interface ParsedArgs {
@@ -46,9 +46,8 @@ async function main(): Promise<void> {
           if (action === 'preview') {
             print(await previewDirectoryImport(requiredPositional(parsed, 1, 'source directory')));
           } else if (action === 'apply') {
-            const raw = await readFile(resolve(requiredFlag(parsed, 'plan')), 'utf8');
-            if (Buffer.byteLength(raw) > 200_000) throw new Error('Import preview exceeds the 200 KB limit');
-            const result = await applyDirectoryImport(vault, JSON.parse(raw) as DirectoryImportPlan, {
+            const plan = await readDirectoryImportPlan(requiredFlag(parsed, 'plan'));
+            const result = await applyDirectoryImport(vault, plan, {
               scope: enumFlag(parsed, 'scope', scopes, 'project'), sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
               ...(flagBoolean(parsed, 'progress') ? { onProgress: progress => process.stderr.write(`${JSON.stringify({ completed: progress.completed,
                 total: progress.total, evidenceId: progress.result.evidenceId, commit: progress.result.commit })}\n`) } : {}),

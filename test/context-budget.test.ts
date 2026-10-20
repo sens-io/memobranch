@@ -47,6 +47,17 @@ test('budget: custom tokenizer is named, exact, and rejects invalid counters/bud
     tokenCounter: { name: 'invalid', estimated: false, count: text => text ? value : 0 } }));
 });
 
+test('budget: a matching resident too large for its reservation retains its search rank', () => {
+  const result = packContext([
+    { id: 'top', section: 'resident', text: 'aaaa' },
+    { id: 'top', section: 'retrieved', text: 'aaaa' },
+    { id: 'second', section: 'retrieved', text: 'bbbb' },
+  ], { maxCharacters: 8 });
+  assert.equal(result.text, 'aaaa');
+  assert.equal(result.selected[0]!.section, 'retrieved');
+  assert.deepEqual(result.budget.omitted.filter(item => item.reason === 'budget'), [{ id: 'second', reason: 'budget' }]);
+});
+
 test('context: approved resident/search overlap appears once, complete with conditions and no secret key requirement', async t => {
   await mkdir(join(process.cwd(), '.scratch'), { recursive: true });
   const root = await mkdtemp(join(process.cwd(), '.scratch/context-budget-'));

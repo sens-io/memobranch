@@ -105,7 +105,9 @@ try {
   await writeFile(join(consumer, 'wiki-public-types.ts'), `
     import { MemoryVault, type WikiCatalogEntry, type WikiCitation, type WikiLintResult,
       type WikiPageDraft, type WikiPageMeta, type WikiPageType, type WikiPlan,
-      type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult } from 'memobranch';
+      type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult,
+      type TokenCounter, type ContextBudgetReport, type DirectoryImportPlan, type DirectoryImportOptions,
+      previewDirectoryImport, applyDirectoryImport } from 'memobranch';
     export async function publicWikiWorkflow(vault: MemoryVault, evidenceId: string) {
       const prepared = await vault.wikiIngest({ evidenceIds: [evidenceId] });
       const plan: WikiPlan | null = prepared.plan;
@@ -124,6 +126,15 @@ try {
       const page: Pick<WikiPageMeta, 'id' | 'pageType'> | undefined = catalog[0]
         ? { id: catalog[0].id, pageType: catalog[0].pageType } : undefined;
       return { plan, preview, recalled, catalog, citations, pageType, lint, rules, page };
+    }
+    export async function publicKnowledgeWorkflow(vault: MemoryVault, directory: string) {
+      const counter: TokenCounter = { name: 'fixture-bytes', estimated: true, count: text => Buffer.byteLength(text) };
+      const packed = await vault.contextDetailed('Atlas', { maxTokens: 100, tokenCounter: counter });
+      const budget: ContextBudgetReport = packed.budget;
+      const preview: DirectoryImportPlan = await previewDirectoryImport(directory);
+      const options: DirectoryImportOptions = { signal: new AbortController().signal, scope: 'project' };
+      const imported = await applyDirectoryImport(vault, preview, options);
+      return { budget, imported, timeline: await vault.sourceTimeline('fixture:types') };
     }
   `);
   await exec(process.execPath, [join(consumer, 'node_modules/typescript/bin/tsc'),

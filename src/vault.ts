@@ -767,8 +767,7 @@ export class MemoryVault {
   async sourceTimeline(sourceUri: string, options: SourceTimelineOptions = {}) {
     return this.settledRead(async () => sourceTimeline(sourceUri,
       await this.readDirectory<EvidenceMeta>('evidence', 'read', options),
-      (await this.readDirectory<MemoryMeta | WikiPageMeta>('wiki', 'read', options))
-        .filter(document => document.meta.type === 'memory' || document.meta.type === 'wiki-page'), options));
+      await this.wikiEngine().referencePages(options), options));
   }
 
   private async refreshSearchIndex(semantic: boolean, permission: Permission): Promise<ReindexResult> {

@@ -7,6 +7,9 @@ import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { MemoryVault, packContext, previewDirectoryImport, applyDirectoryImport } from 'memobranch';
+import { Context } from '@deepseek-ai/cordis';
+import { ToolRuntime } from '@deepseek-ai/dsh-tools';
+import * as harnessPlugin from 'memobranch/deepseek-harness';
 
 const vault = new MemoryVault(join(process.cwd(), 'knowledge-vault'));
 await vault.initialize('installed knowledge workflows');
@@ -14,6 +17,8 @@ const directory = join(process.cwd(), 'knowledge-docs');
 await mkdir(directory);
 await writeFile(join(directory, 'atlas.md'), 'Atlas seven day retention.');
 const plan = await previewDirectoryImport(directory);
+const cancelled = new AbortController(); cancelled.abort();
+await assert.rejects(applyDirectoryImport(vault, plan, { signal: cancelled.signal }), { code: 'OPERATION_CANCELLED' });
 const imported = await applyDirectoryImport(vault, plan, { scope: 'public', sensitivity: 'public' });
 assert.equal(imported.status, 'completed');
 const source = imported.entries[0];
@@ -33,6 +38,7 @@ const exec = promisify(execFile);
 const cli = join(process.cwd(), 'node_modules/memobranch/dist/cli.js');
 const invoke = async (...args) => JSON.parse((await exec(process.execPath, [cli, ...args, '--root', vault.root], { timeout: 20_000 })).stdout);
 assert.equal((await invoke('context', 'Atlas', '--max-tokens', '1', '--json')).text, '');
+assert.deepEqual(await invoke('import', 'preview', directory), plan);
 assert.equal((await invoke('source', 'timeline', source.sourceUri)).timeBasis, 'recorded-time-only');
 const planPath = join(process.cwd(), 'knowledge-plan.json');
 await writeFile(planPath, JSON.stringify(plan));
@@ -51,4 +57,19 @@ try {
   const recalled = await client.callTool({ name: 'memory_recall', arguments: { query: 'Atlas', maxTokens: 1 } });
   assert.equal(JSON.parse(recalled.content[0].text).text, '');
 } finally { await client.close(); }
-console.log('Installed package: whole-record budgets, directory imports, source timeline, CLI and MCP passed.');
+Object.assign(process.env, { AMEM_TENANT_ID: (await vault.config()).tenantId, AMEM_PERMISSIONS: 'read',
+  AMEM_ALLOWED_SCOPES: 'public', AMEM_MAX_SENSITIVITY: 'public' });
+const ctx = new Context();
+try {
+  await ctx.plugin(ToolRuntime, {});
+  await ctx.plugin(harnessPlugin, { vaultRoot: vault.root });
+  const recall = await ctx.tools.execute({ name: 'memory_recall', callId: 'knowledge-budget',
+    arguments: { query: 'Atlas', maxTokens: 1 }, signal: new AbortController().signal });
+  assert.equal(recall.isError, false, JSON.stringify(recall));
+  assert.equal(recall.value.text, '');
+  const history = await ctx.tools.execute({ name: 'memory_source_timeline', callId: 'knowledge-history',
+    arguments: { sourceUri: source.sourceUri }, signal: new AbortController().signal });
+  assert.equal(history.isError, false, JSON.stringify(history));
+  assert.equal(history.value.total, 1);
+} finally { await ctx.fiber.dispose(); }
+console.log('Installed package: whole-record budgets, directory imports, cancellation, source timeline, CLI, MCP and Harness passed.');

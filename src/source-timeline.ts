@@ -19,7 +19,9 @@ export function sourceTimeline(sourceUri: string, evidence: MarkdownDocument<Evi
   const { offset = 0, limit = 30 } = options;
   const date = (value: string | undefined, fallback: number) => {
     if (value === undefined) return fallback;
-    if (!z.iso.datetime({ offset: true }).safeParse(value).success) throw new AgentMemoryError('VALIDATION_FAILED', 'Timeline dates require ISO timestamps with an explicit timezone');
+    if (!z.iso.datetime({ offset: true }).safeParse(value).success || /\.\d{4,}/.test(value)) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Timeline dates require ISO timestamps with a timezone and at most millisecond precision');
+    }
     return Date.parse(value);
   };
   const from = date(options.from, -Infinity);
