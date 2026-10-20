@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import childProcess, { type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { syncBuiltinESMExports } from 'node:module';
+import { PassThrough } from 'node:stream';
+import { mock, test } from 'node:test';
 import { runIntegrationSetup } from '../src/integration-cli.js';
 import { applyClientSetup, previewClientSetup, removeClientSetup, verifyClientSetup } from '../src/onboarding.js';
 import { principalFromEnv } from '../src/policy.js';
@@ -118,4 +122,100 @@ test('invalid JSON, non-object structure, symlinks, excessive config, and forged
   plan.entry.env.AMEM_PERMISSIONS = 'admin';
   await assert.rejects(applyClientSetup(plan), /permissions/);
   assert.equal(existsSync(options.configPath), false);
+}));
+
+test('apply rejects oversized rendered output before backup, ownership, or installation and preserves original bytes', async () => fixture(async (options) => {
+  await mkdir(join(options.configPath, '..'), { recursive: true });
+  for (const value of [
+    { settings: Array(200_000).fill(0) },
+    { settings: Array(100_000).fill(0), label: '界'.repeat(140_000) },
+  ]) {
+    const original = JSON.stringify(value);
+    const expanded = JSON.stringify(value, null, 2);
+    assert.ok(Buffer.byteLength(original) < 1_048_576);
+    assert.ok(Buffer.byteLength(expanded) > 1_048_576);
+    if ('label' in value) assert.ok(expanded.length < 1_048_576, 'output limit counts UTF-8 bytes, not characters');
+    await writeFile(options.configPath, original);
+    const plan = await previewClientSetup(options);
+    await assert.rejects(applyClientSetup(plan), /would exceed the 1 MiB limit/);
+    assert.equal(await readFile(options.configPath, 'utf8'), original);
+    assert.equal(existsSync(`${options.configPath}.memobranch-state.json`), false);
+    assert.equal(JSON.parse(await readFile(options.configPath, 'utf8')).mcpServers, undefined);
+    const files = await readdir(join(options.configPath, '..'));
+    assert.equal(files.some((name) => name.startsWith('.mcp.json.memobranch-backup-')), false);
+    assert.equal(files.some((name) => name.startsWith('.mcp.json.memobranch-tmp-')), false);
+  }
+}));
+
+test('remove refuses oversized rendered output while retaining the current entry and ownership record', async () => fixture(async (options) => {
+  const plan = await previewClientSetup(options);
+  const applied = await applyClientSetup(plan);
+  const current = JSON.parse(await readFile(options.configPath, 'utf8'));
+  current.settings = Array(200_000).fill(0);
+  const original = JSON.stringify(current);
+  assert.ok(Buffer.byteLength(original) < 1_048_576);
+  await writeFile(options.configPath, original);
+  const state = await readFile(applied.statePath, 'utf8');
+  await assert.rejects(removeClientSetup({ ...options, expectedRevision: sha256(original) }), /would exceed the 1 MiB limit/);
+  assert.equal(await readFile(options.configPath, 'utf8'), original);
+  assert.equal(await readFile(applied.statePath, 'utf8'), state);
+  assert.deepEqual(JSON.parse(await readFile(options.configPath, 'utf8')).mcpServers.memobranch, plan.entry);
+}));
+
+test('verification waits for child close and escalates termination on protocol, output and process errors', async () => fixture(async (options) => {
+  await applyClientSetup(await previewClientSetup(options));
+  for (const failure of ['protocol', 'output', 'process', 'timeout'] as const) {
+    const fake = new EventEmitter();
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const signals: Array<NodeJS.Signals | undefined> = [];
+    let closed = false;
+    let requestSeen = false;
+    Object.assign(fake, {
+      stdin, stdout, stderr,
+      kill(signal?: NodeJS.Signals) {
+        signals.push(signal);
+        if (signal === 'SIGKILL') queueMicrotask(() => {
+          closed = true;
+          stdin.destroy(); stdout.destroy(); stderr.destroy();
+          fake.emit('close', null, 'SIGKILL');
+        });
+        return true;
+      },
+      unref() {},
+    });
+    stdin.on('data', () => {
+      if (requestSeen) return;
+      requestSeen = true;
+      queueMicrotask(() => {
+        if (failure === 'protocol') stdout.write('invalid-json\n');
+        else if (failure === 'output') stderr.write(Buffer.alloc(1_048_577));
+        else if (failure === 'process') fake.emit('error', new Error('private provider details'));
+      });
+    });
+    const spawn = mock.method(childProcess, 'spawn', () => fake as unknown as ChildProcessWithoutNullStreams);
+    // Speed up only the protocol deadline; exercise real cleanup timers and
+    // require the returned promise to wait for the child close notification.
+    const originalTimeout = globalThis.setTimeout;
+    const timeout = mock.method(globalThis, 'setTimeout', ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      originalTimeout(callback, delay === 8_000 ? 10 : delay, ...args)) as typeof setTimeout);
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(verifyClientSetup(options), (error: Error) => {
+        assert.equal(closed, true, `${failure}: verification must wait for the child to close`);
+        assert.doesNotMatch(error.message, /private provider details/);
+        return failure === 'protocol' ? /invalid protocol/.test(error.message)
+          : failure === 'output' ? /output exceeded/.test(error.message)
+          : failure === 'timeout' ? /timed out/.test(error.message)
+          : /Could not start/.test(error.message);
+      });
+      assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+    } finally {
+      timeout.mock.restore();
+      spawn.mock.restore();
+      syncBuiltinESMExports();
+      stdin.destroy(); stdout.destroy(); stderr.destroy();
+    }
+  }
 }));

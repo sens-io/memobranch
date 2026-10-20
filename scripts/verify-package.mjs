@@ -123,7 +123,7 @@ try {
     }
   `);
   await exec(process.execPath, [join(consumer, 'node_modules/typescript/bin/tsc'),
-    '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+    '--ignoreConfig', '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
     'wiki-public-types.ts'], { cwd: consumer, env, maxBuffer: 4 * 1024 * 1024 });
   // Copy only the consumer program: every runtime import resolves from its installed dependencies.
   await writeFile(join(consumer, 'verify-installed-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki.mjs')));

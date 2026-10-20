@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -82,10 +82,10 @@ export async function applyClientSetup(plan: ClientSetupPlan): Promise<{ applied
       return { applied: false, revision: current.revision, backupPath: state?.backupPath ?? null, statePath };
     }
     if (state) fail('An existing setup ownership record needs inspection before a new installation');
+    const next = { ...current.json, mcpServers: { ...servers(current.json), memobranch: currentPlan.entry } };
+    const nextText = renderClientConfig(next);
     const backupPath = current.text === null ? null : `${options.configPath}.memobranch-backup-${randomUUID()}`;
     if (backupPath) await writeFile(backupPath, current.text!, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    const next = { ...current.json, mcpServers: { ...servers(current.json), memobranch: currentPlan.entry } };
-    const nextText = `${JSON.stringify(next, null, 2)}\n`;
     // The backup/state files carry only this explicitly selected installation.
     // A crash before ownership is recorded leaves the client entry untouched by remove.
     await replaceChecked(options.configPath, current.revision, nextText);
@@ -112,7 +112,7 @@ export async function removeClientSetup(options: ClientSetupOptions & { expected
     const nextServers = { ...currentServers };
     delete nextServers.memobranch;
     const next = { ...current.json, mcpServers: nextServers };
-    const text = `${JSON.stringify(next, null, 2)}\n`;
+    const text = renderClientConfig(next);
     await replaceChecked(normalized.configPath, current.revision, text);
     await rm(statePath);
     return { removed: true, revision: sha256(text), backupPath: state.backupPath };
@@ -191,6 +191,7 @@ function servers(json: Record<string, unknown>): Record<string, unknown> {
 }
 
 async function replaceChecked(path: string, expectedRevision: string, text: string): Promise<void> {
+  assertConfigOutputSize(text);
   if ((await readConfig(path)).revision !== expectedRevision) fail('Client configuration changed; create and review a new preview');
   const temporary = `${path}.memobranch-tmp-${randomUUID()}`;
   try {
@@ -211,52 +212,90 @@ async function atomicPrivateWrite(path: string, text: string): Promise<void> {
 async function probeServer(entry: ClientSetupEntry): Promise<unknown> {
   // Ensure the same tenant/permission parsing as a fresh real client launch.
   principalFromEnv(entry.env);
-  return new Promise((resolveProbe, rejectProbe) => {
-    const child = spawn(entry.command, entry.args, { env: { ...process.env, ...entry.env }, stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = '';
-    let received = 0;
-    let settled = false;
-    const timer = setTimeout(() => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification timed out; check that the package is built')), 8_000);
-    const finish = (error?: Error, result?: unknown) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.stdin.end();
-      child.kill('SIGTERM');
-      if (error) rejectProbe(error); else resolveProbe(result);
-    };
-    const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
-    child.on('error', () => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Could not start the packaged MCP server')));
-    child.stdin.on('error', () => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification connection closed')));
-    child.on('exit', () => { if (!settled) finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP server exited before verification')); });
-    child.stderr.on('data', (buffer: Buffer) => {
-      received += buffer.length;
-      if (received > MAX_CONFIG_BYTES) finish(new AgentMemoryError('CONTENT_TOO_LARGE', 'MCP verification output exceeded its limit'));
-    });
-    child.stdout.on('data', (buffer: Buffer) => {
-      received += buffer.length;
-      if (received > MAX_CONFIG_BYTES) return finish(new AgentMemoryError('CONTENT_TOO_LARGE', 'MCP verification output exceeded its limit'));
-      output += buffer.toString('utf8');
-      for (;;) {
-        const newline = output.indexOf('\n');
-        if (newline < 0 || settled) break;
-        const line = output.slice(0, newline);
-        output = output.slice(newline + 1);
-        let response: unknown;
-        try { response = JSON.parse(line); } catch { finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP server returned an invalid protocol message')); break; }
-        if (!isObject(response)) continue;
-        if (response.error) { finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification request failed')); break; }
-        if (response.id === 1) {
-          send({ jsonrpc: '2.0', method: 'notifications/initialized' });
-          send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_version', arguments: {} } });
-        } else if (response.id === 2) {
-          if (!isObject(response.result) || response.result.isError) finish(new AgentMemoryError('AUTHORIZATION_DENIED', 'MCP server could not read the selected vault with the generated identity'));
-          else finish(undefined, response.result);
+  const child = spawn(entry.command, entry.args, { env: { ...process.env, ...entry.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let closed = false;
+  const closedPromise = new Promise<void>((resolveClosed) => child.once('close', () => { closed = true; resolveClosed(); }));
+  try {
+    return await new Promise((resolveProbe, rejectProbe) => {
+      let output = '';
+      let received = 0;
+      let settled = false;
+      const timer = setTimeout(() => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification timed out; check that the package is built')), 8_000);
+      const finish = (error?: Error, result?: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) rejectProbe(error); else resolveProbe(result);
+      };
+      const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+      child.on('error', () => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Could not start the packaged MCP server')));
+      child.stdin.on('error', () => finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification connection closed')));
+      child.on('exit', () => { if (!settled) finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP server exited before verification')); });
+      child.stderr.on('data', (buffer: Buffer) => {
+        if (settled) return;
+        received += buffer.length;
+        if (received > MAX_CONFIG_BYTES) finish(new AgentMemoryError('CONTENT_TOO_LARGE', 'MCP verification output exceeded its limit'));
+      });
+      child.stdout.on('data', (buffer: Buffer) => {
+        if (settled) return;
+        received += buffer.length;
+        if (received > MAX_CONFIG_BYTES) return finish(new AgentMemoryError('CONTENT_TOO_LARGE', 'MCP verification output exceeded its limit'));
+        output += buffer.toString('utf8');
+        for (;;) {
+          const newline = output.indexOf('\n');
+          if (newline < 0 || settled) break;
+          const line = output.slice(0, newline);
+          output = output.slice(newline + 1);
+          let response: unknown;
+          try { response = JSON.parse(line); } catch { finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP server returned an invalid protocol message')); break; }
+          if (!isObject(response)) continue;
+          if (response.error) { finish(new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification request failed')); break; }
+          if (response.id === 1) {
+            send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+            send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_version', arguments: {} } });
+          } else if (response.id === 2) {
+            if (!isObject(response.result) || response.result.isError) finish(new AgentMemoryError('AUTHORIZATION_DENIED', 'MCP server could not read the selected vault with the generated identity'));
+            else finish(undefined, response.result);
+          }
         }
-      }
+      });
+      send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'memobranch-setup-verifier', version: '1' } } });
     });
-    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'memobranch-setup-verifier', version: '1' } } });
-  });
+  } finally {
+    await stopProbeServer(child, () => closed, closedPromise);
+  }
+}
+
+async function stopProbeServer(child: ChildProcessWithoutNullStreams, isClosed: () => boolean, closedPromise: Promise<void>): Promise<void> {
+  child.stdin.destroy();
+  if (isClosed()) return;
+  child.kill('SIGTERM');
+  if (await waitForClose(closedPromise, 500)) return;
+  child.kill('SIGKILL');
+  if (await waitForClose(closedPromise, 2_000)) return;
+  // Bound cleanup even if the OS cannot report termination. The canonical
+  // server does not create descendants; these streams belong to this child.
+  child.stdout.destroy();
+  child.stderr.destroy();
+  child.unref();
+  throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'MCP verification process did not close after termination');
+}
+
+async function waitForClose(closed: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([closed.then(() => true), new Promise<false>((resolveTimeout) => { timer = setTimeout(() => resolveTimeout(false), timeoutMs); })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+function renderClientConfig(value: Record<string, unknown>): string {
+  const text = `${JSON.stringify(value, null, 2)}\n`;
+  assertConfigOutputSize(text);
+  return text;
+}
+
+function assertConfigOutputSize(text: string): void {
+  if (Buffer.byteLength(text, 'utf8') > MAX_CONFIG_BYTES) fail('Updated client configuration would exceed the 1 MiB limit; the original file was not changed');
 }
 
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
