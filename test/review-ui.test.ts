@@ -107,6 +107,28 @@ test('web branding: login and sidebar reuse the README image instead of the lett
   }
 });
 
+test('web theme: the new split login retains failure feedback and in-memory authentication', async () => {
+  let accepted = false;
+  const ui = harness(() => accepted ? success({ principal: { name: 'Test operator', permissions: ['read'] }, name: 'Test vault' }) : failure('AUTHORIZATION_DENIED'));
+  ui.run('login()');
+  assert.ok(nodes(ui.app).some(node => node.className === 'login-story'));
+  assert.ok(nodes(ui.app).some(node => node.className === 'login-access'));
+  const input = find(ui.app, node => node.tagName === 'input' && node.type === 'password');
+  const login = find(ui.app, node => node.tagName === 'form');
+  input.value = 'invalid-fixture';
+  await login.fire('submit');
+  assert.equal(input.value, '');
+  assert.equal(ui.run('token'), '');
+  assert.match(ui.app.textContent, /权限不足/);
+  accepted = true;
+  input.value = 'accepted-fixture';
+  await login.fire('submit');
+  assert.equal(input.value, '');
+  assert.equal(ui.run('token'), 'accepted-fixture');
+  assert.ok(nodes(ui.app).some(node => node.className === 'sidebar'));
+  assert.match(ui.app.textContent, /Test operator/);
+});
+
 test('review UI: validated canonical comparison gates approval and applies the original signed plan', async () => {
   const pending = deferred<Response>();
   const ui = harness(request => request.operation === 'preview' ? pending.promise : success({ commit: 'abcdef123456' }));
