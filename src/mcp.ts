@@ -95,33 +95,34 @@ function createServer(): McpServer {
   server.registerTool('memory_recall', {
     title: 'Recall approved memory and Wiki context',
     description: 'Return whole approved records with current revisions, sources, and conditions. Oversized records are omitted, never cut mid-condition. Does not approve or write knowledge.',
-    inputSchema: z.object({ query: z.string().min(1).max(2_000), limit: z.number().int().min(1).max(50).default(8),
+    inputSchema: z.strictObject({ query: z.string().min(1).max(2_000), limit: z.number().int().min(1).max(50).default(8),
       maxCharacters: z.number().int().min(1).max(50_000).default(12_000),
       includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false), semantic: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
-  }, async input => execute(() => vault.recall(input.query, input)));
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.recall(input.query, input)));
 
   server.registerTool('memory_explain', {
     title: 'Explain actual retrieval signals',
     description: 'Show returned lexical and semantic scores, not inferred factual confidence.',
-    inputSchema: z.object({ query: z.string().min(1).max(2_000), limit: z.number().int().min(1).max(50).default(8),
+    inputSchema: z.strictObject({ query: z.string().min(1).max(2_000), limit: z.number().int().min(1).max(50).default(8),
       semantic: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
-  }, async input => execute(() => vault.explain(input.query, input)));
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.explain(input.query, input)));
 
   server.registerTool('memory_wiki_preview', {
     title: 'Review a signed Wiki plan',
     description: 'Verify the current authorized plan and show actual before/after restrictions, sources, dependent pages and bounded text changes without applying.',
-    inputSchema: z.object({ plan: z.unknown() }),
+    inputSchema: z.strictObject({ plan: z.unknown() }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
-  }, async input => execute(() => vault.wikiPreview(input.plan)));
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiPreview(input.plan)));
 
   server.registerTool('memory_wiki_correct', {
     title: 'Propose a source-grounded correction',
     description: 'Capture the human correction as evidence and propose a signed repair. No approval. Evidence can remain if planning fails.',
-    inputSchema: z.object({ key: z.string().min(1).max(200), instruction: z.string().min(1).max(1_000_000) }),
+    inputSchema: z.strictObject({ key: z.string().min(1).max(200), instruction: z.string().min(1).max(1_000_000), expectedRevision: z.number().int().min(1).optional() }),
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
-  }, async input => execute(() => vault.wikiCorrect(input.key, input.instruction)));
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiCorrect(input.key, input.instruction,
+    input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision })));
 
   server.registerTool('memory_config', {
     title: 'Read effective configuration',

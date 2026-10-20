@@ -154,13 +154,16 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
       parameters: {
         key: { type: 'string', required: true, description: 'Current Wiki page key (up to 200 characters).' },
         instruction: { type: 'string', required: true, description: 'Correction to preserve as evidence (up to 100000 characters).' },
+        expectedRevision: { type: 'integer', description: 'Revision read by the caller; reject a newer target before saving evidence.' },
       },
       output: jsonOutput,
       async execute(args, exec) {
-        wikiArguments(args, ['key', 'instruction']);
+        wikiArguments(args, ['key', 'instruction', 'expectedRevision']);
         const key = boundedString(args.key, 'key', 200);
         const instruction = boundedString(args.instruction, 'instruction', 100_000);
-        return runJson(vault, exec.signal, () => vault.wikiCorrect(key, instruction));
+        const expectedRevision = args.expectedRevision === undefined ? undefined : boundedInteger(args.expectedRevision, 'expectedRevision', 1, Number.MAX_SAFE_INTEGER);
+        return runJson(vault, exec.signal, () => vault.wikiCorrect(key, instruction,
+          expectedRevision === undefined ? {} : { expectedRevision }));
       },
     }));
     ctx.tools.register(defineTool({

@@ -29,7 +29,7 @@ The Web console provides the same comparison for compilation, filing, repairs an
 amem wiki correct entity:atlas "Retention changed to 14 days; keep the deployment restriction." --root /absolute/vault
 ```
 
-The Web document view offers the same action. It requires both read and write permission. The operation captures the original human instruction as immutable evidence tied to the target revision, then requests a signed `repair` proposal and a source summary. It preserves provenance and applicable conditions, and never approves itself. Review the proposal and explicitly apply it with review permission.
+The Web document view offers the same action. It requires both read and write permission and sends the displayed revision, rejecting a newer target before evidence capture. CLI, MCP, Harness and SDK callers can supply `expectedRevision` (`--expected-revision` in CLI) for the same protection; omitting it intentionally targets the latest current page. The operation captures the original human instruction as immutable evidence tied to the target revision, then requests a signed `repair` proposal and a source summary. It preserves provenance and applicable conditions, and never approves itself. Review the proposal and explicitly apply it with review permission.
 
 If planning fails or the target changes, the captured evidence can remain. The failure does not mean all writes were rolled back. Successful output reports `evidenceCommit` for the captured source and `commit:null` for the not-yet-applied repair. Legacy ordinary memories keep their existing candidate/approval workflow. Changing the authority of a source or silently declaring one conflicting claim true is not part of this feature.
 

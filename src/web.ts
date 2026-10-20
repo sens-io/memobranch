@@ -59,7 +59,7 @@ const routes: Record<string, Route> = {
   ingest: route('write', z.object({ evidenceIds: z.array(id).min(1).max(100) }).strict(), (vault, data) => vault.wikiIngest({ ...data, apply: false })),
   apply: route('review', z.object({ plan: z.unknown(), ...confirmed }).strict(), (vault, data) => vault.wikiApply(data.plan)),
   preview: route('read', z.object({ plan: z.unknown() }).strict(), (vault, data) => vault.wikiPreview(data.plan)),
-  correct: route('write', z.object({ key: id, instruction: content }).strict(), (vault, data) => vault.wikiCorrect(data.key, data.instruction)),
+  correct: route('write', z.object({ key: id, instruction: content, expectedRevision: z.number().int().min(1) }).strict(), (vault, data) => vault.wikiCorrect(data.key, data.instruction, { expectedRevision: data.expectedRevision })),
   explain: route('read', z.object({ query: text }).strict(), (vault, data) => vault.explain(data.query)),
   query: route('read', z.object({ question: text }).strict(), (vault, data) => vault.wikiQuery(data.question)),
   file: route('write', z.object({ result: z.unknown(), title: id, pageType: z.enum(['query', 'comparison']) }).strict(),
@@ -78,7 +78,7 @@ const routes: Record<string, Route> = {
 // lock, not just an HTTP queue, so CLI/Harness writers also remain invisible
 // until their transaction settles. Existing mutations already own this lock.
 const snapshotRoutes = new Set(['session', 'records', 'get', 'settings', 'catalog', 'rules',
-  'ingest', 'preview', 'explain', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
+  'ingest', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
 
 async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false): Promise<T> {
   return withFileLock(join(vault.root, '.amem', 'write.lock'), async () => {

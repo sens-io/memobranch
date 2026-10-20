@@ -21,7 +21,7 @@ export interface WikiPort {
   principal: Principal;
   llm: LlmClient;
   config(): Promise<VaultConfig>;
-  read(directory: 'wiki' | 'evidence', permission: Permission): Promise<Document[]>;
+  read(directory: 'wiki' | 'evidence', permission: Permission, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<Document[]>;
   scan(directory: 'wiki' | 'evidence', permission: Permission): Promise<{ documents: Document[]; errors: string[] }>;
   catalogMatches(): Promise<boolean>;
   sign(value: object): Promise<string>;
@@ -220,8 +220,9 @@ export class WikiEngine {
     return required(state.eligible.get(key), 'Wiki page is unavailable');
   }
 
-  async recallPages(ids: string[]): Promise<Page[]> {
-    const state = await this.load('read');
+  async recallPages(ids: string[], options: { includeSensitive?: boolean; includeSecret?: boolean } = {}): Promise<Page[]> {
+    if (!ids.length) return [];
+    const state = await this.load('read', false, options);
     return [...state.eligible.values()].filter(page => ids.includes(page.meta.id) && page.meta.status === 'active');
   }
 
@@ -390,7 +391,7 @@ export class WikiEngine {
   }
 
   async search(query: string, options: { includeSensitive?: boolean; includeSecret?: boolean; limit?: number }): Promise<SearchHit[]> {
-    const state = await this.load('read');
+    const state = await this.load('read', false, options);
     const terms = unique(query.toLowerCase().split(/\s+/u).filter(Boolean));
     return [...state.eligible.values()].filter((page) => !page.meta.key.startsWith('legacy:') && page.meta.status === 'active')
       .filter((page) => page.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
@@ -402,12 +403,12 @@ export class WikiEngine {
       }).filter((hit) => hit.score > 0).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, options.limit ?? state.config.limits.maxResults);
   }
 
-  private async load(permission: Permission, tolerant = false): Promise<State> {
+  private async load(permission: Permission, tolerant = false, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<State> {
     throwIfCancelled();
     const config = await this.port.config();
     authorize(this.port.principal, permission, { tenantId: config.tenantId });
     const scans = tolerant ? await Promise.all([this.port.scan('wiki', permission), this.port.scan('evidence', permission)]) : [];
-    const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission), ...await this.port.read('evidence', permission)];
+    const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission, selection), ...await this.port.read('evidence', permission, selection)];
     const state: State = { sourceIds: [], permission, config, documents: new Map(), pages: new Map(), rules: [], evidence: new Map(), receipts: [], eligible: new Map(), issues: scans.flatMap((scan) => scan.errors.map(() => ({ kind: 'invalid-document', message: 'An authorized managed document failed schema or integrity validation; inspect doctor diagnostics.', pageKeys: [], evidenceIds: [], pageVersions: {} }))) };
     for (const document of documents) {
       state.documents.set(document.path, document);

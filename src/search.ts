@@ -72,6 +72,7 @@ export interface RefreshOptions {
 
 export interface SearchResult {
   hits: SearchHit[];
+  strategy: 'lexical' | 'hybrid';
   semanticStatus: 'disabled' | 'ready' | 'degraded';
   indexRebuilt: boolean;
 }
@@ -190,7 +191,7 @@ export class PersistentSearchIndex {
     documents.push(...ephemeral);
 
     const queryTerms = tokenize(query);
-    if (queryTerms.length === 0) return { hits: [], semanticStatus, indexRebuilt: refreshed.rebuilt };
+    if (queryTerms.length === 0) return { hits: [], strategy: 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
     const documentFrequency = frequencies(documents, queryTerms);
     const lexical = new Map(documents.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, documents.length)]));
     let semantic = new Map<string, number>();
@@ -261,6 +262,7 @@ export class PersistentSearchIndex {
           score: Number(score.toFixed(4)),
           lexicalScore: Number(lexicalScore.toFixed(4)),
           semanticScore: Number(semanticScore.toFixed(4)),
+          ...(semantic.has(document.path) ? { semanticApplied: true } : {}),
           snippet: makeSnippet(canonical.body, queryTerms),
           links,
           backlinks: backlinkMap.get(document.path) ?? [],
@@ -270,7 +272,7 @@ export class PersistentSearchIndex {
         return null;
       }
     }));
-    return { hits: verified.filter((hit): hit is SearchHit => hit !== null), semanticStatus, indexRebuilt: refreshed.rebuilt };
+    return { hits: verified.filter((hit): hit is SearchHit => hit !== null), strategy: semantic.size > 0 ? 'hybrid' : 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
   }
 
   async health(): Promise<SearchIndexHealth> {

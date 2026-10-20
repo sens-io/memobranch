@@ -228,10 +228,13 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
       print(await vault.wikiPreview(plan));
       return;
     }
-    case 'correct':
+    case 'correct': {
+      const expectedRevision = args.flags.has('expected-revision') ? numberFlag(args, 'expected-revision', 0) : undefined;
       print(await vault.wikiCorrect(requiredPositional(input, 0, 'Wiki key'),
-        await contentFrom({ ...input, positionals: input.positionals.slice(1) })));
+        await contentFrom({ ...input, positionals: input.positionals.slice(1) }),
+        expectedRevision === undefined ? {} : { expectedRevision }));
       return;
+    }
     case 'query':
       print(await vault.wikiQuery(requiredText(input.positionals.join(' '), 'A Wiki question is required'), budget));
       return;
@@ -425,7 +428,7 @@ Usage:
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
   amem wiki apply --file <plan.json|->
   amem wiki preview --file <plan.json|->
-  amem wiki correct <page-key> <instruction|-> [--file PATH]
+  amem wiki correct <page-key> <instruction|-> [--file PATH] [--expected-revision N]
   amem wiki query <question> [--max-pages N]
   amem wiki file --file <query-result.json|-> --title TEXT [--page-type query|comparison] [--apply]
   amem wiki lint [--semantic] [--max-pages N]

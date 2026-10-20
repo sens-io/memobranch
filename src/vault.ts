@@ -100,7 +100,7 @@ export class MemoryVault {
       principal: this.principal,
       llm: this.llm,
       config: () => this.config(),
-      read: (directory, permission) => this.readDirectory<Record<string, unknown>>(directory, permission),
+      read: (directory, permission, selection) => this.readDirectory<Record<string, unknown>>(directory, permission, selection),
       scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
       catalogMatches: () => this.wikiCatalogMatches(),
       sign: (value) => new WikiProof(this.root).sign(value),
@@ -121,8 +121,8 @@ export class MemoryVault {
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
   async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
-  async wikiPreview(plan: unknown) { return this.wikiEngine().preview(plan); }
-  async wikiCorrect(key: string, instruction: string) {
+  async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
+  async wikiCorrect(key: string, instruction: string, options: { expectedRevision?: number } = {}) {
     authorize(this.principal, 'read');
     authorize(this.principal, 'write');
     const config = await this.config();
@@ -130,13 +130,17 @@ export class MemoryVault {
         || typeof instruction !== 'string' || !instruction.trim() || instruction.length > config.limits.maxContentCharacters) {
       throw new AgentMemoryError('VALIDATION_FAILED', 'A current Wiki key and bounded correction instruction are required');
     }
-    const target = await this.wikiEngine().pageByKey(key);
+    const target = await this.settledRead(() => this.wikiEngine().pageByKey(key));
+    if (options.expectedRevision !== undefined && (!Number.isSafeInteger(options.expectedRevision)
+      || options.expectedRevision < 1 || target.meta.revision !== options.expectedRevision)) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki correction target changed; reload its current revision');
+    }
     // Captured evidence intentionally survives a later planning failure; it is
     // not canonical knowledge and cannot be silently approved by this method.
     const captured = await this.capture({ content: instruction.trim(), extract: false,
       sourceUri: `memobranch:correction:${target.meta.id}:${target.meta.revision}`,
       scope: target.meta.scope, sensitivity: target.meta.sensitivity });
-    const plan = await this.wikiEngine().correct({ key, evidenceId: captured.evidenceId, expectedRevision: target.meta.revision });
+    const plan = await this.settledRead(() => this.wikiEngine().correct({ key, evidenceId: captured.evidenceId, expectedRevision: target.meta.revision }));
     return { evidenceId: captured.evidenceId, evidenceCommit: captured.commit, plan, commit: null };
   }
   async wikiQuery(question: string, options: Parameters<WikiEngine['query']>[1] = {}) { return this.wikiEngine().query(question, options); }
@@ -703,30 +707,28 @@ export class MemoryVault {
   }
 
   async explain(query: string, options: SearchOptions = {}) {
-    const result = await this.searchDetailed(query, options);
-    return { ...result, explanation: {
-      strategy: options.semantic === true && result.semanticStatus === 'ready' && Boolean((await this.config()).index.embeddingModel)
-        && result.hits.some(hit => hit.semanticScore !== undefined) ? 'hybrid' as const : 'lexical' as const,
-      signals: result.hits.map(hit => ({ id: hit.id, path: hit.path, lexicalScore: hit.lexicalScore ?? null,
-        semanticScore: hit.semanticScore ?? null, score: hit.score })),
-      notes: ['Scores are retrieval signals, not probabilities or a factual confidence assessment.',
-        'Only authorized results are shown. Wiki matching uses lexical terms; semantic scores apply to indexed memories when available.'],
-    } };
+    return this.settledRead(async () => {
+      const result = await this.searchDetailed(query, options);
+      return { ...result, explanation: {
+        strategy: result.strategy,
+        signals: result.hits.map(hit => ({ id: hit.id, path: hit.path, lexicalScore: hit.lexicalScore ?? null,
+          semanticScore: hit.semanticApplied ? hit.semanticScore ?? null : null, score: hit.score })),
+        notes: ['Scores are retrieval signals, not probabilities or a factual confidence assessment.',
+          'Only authorized results are shown. Wiki matching uses lexical terms; semantic scores apply to indexed memories when available.'],
+      } };
+    });
   }
 
   async recall(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<RecallResult> {
     authorize(this.principal, 'read');
     const requested = options.maxCharacters ?? 12_000;
     if (!Number.isSafeInteger(requested) || requested < 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Recall character budget must be a positive integer');
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    return this.settledRead(async () => {
       const config = await this.config();
       const maximum = Math.min(requested, config.limits.maxContextCharacters);
-      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
-        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before recalling canonical data');
-      }
       const hits = await this.search(query, { ...options, includeCandidates: false, includeEvidence: false, expandLinks: false });
-      const pages = new Map((await this.wikiEngine().recallPages(hits.map(hit => hit.id))).map(page => [page.meta.id, page]));
-      const memories = new Map((await this.readDirectory<MemoryMeta>('wiki'))
+      const pages = new Map((await this.wikiEngine().recallPages(hits.filter(hit => hit.path.startsWith('wiki/pages/')).map(hit => hit.id), options)).map(page => [page.meta.id, page]));
+      const memories = new Map((await Promise.all(hits.filter(hit => !hit.path.startsWith('wiki/pages/')).map(hit => this.readDocument<MemoryMeta>(hit.path))))
         .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
           && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()))
         .map(page => [page.meta.id, page]));
@@ -1510,12 +1512,19 @@ export class MemoryVault {
     return documents;
   }
 
-  private async readDirectory<T extends object>(directory: string, permission: Permission = 'read'): Promise<Array<MarkdownDocument<T>>> {
+  private async readDirectory<T extends object>(directory: string, permission: Permission = 'read', selection?: Pick<SearchOptions, 'includeSensitive' | 'includeSecret'>): Promise<Array<MarkdownDocument<T>>> {
     const config = await this.config();
     authorize(this.principal, permission, { tenantId: config.tenantId });
     const documents: Array<MarkdownDocument<T>> = [];
     for (const file of await listMarkdown(resolveInside(this.root, directory))) {
       try {
+        if (selection) {
+          // Inspect the envelope classification before asking for a
+          // key. Opting out of confidential recall must not decrypt it first.
+          const projection = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+          const sensitivity = sensitivityOf(projection.meta);
+          if (sensitivity === 'sensitive' && selection.includeSensitive !== true || sensitivity === 'secret' && selection.includeSecret !== true) continue;
+        }
         documents.push(await this.readDocument<T>(toPosix(relative(this.root, file)), permission));
       } catch (error) {
         if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') continue;
@@ -1523,6 +1532,18 @@ export class MemoryVault {
       }
     }
     return documents;
+  }
+
+  private async settledRead<T>(action: () => Promise<T>): Promise<T> {
+    authorize(this.principal, 'read');
+    await this.config(); // Reject absent vaults and foreign tenants before creating a lock.
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      await this.config();
+      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
+      }
+      return action();
+    });
   }
 
   private async scanDirectory<T extends object>(directory: string, permission: Permission = 'read'): Promise<{ documents: Array<MarkdownDocument<T>>; errors: string[] }> {

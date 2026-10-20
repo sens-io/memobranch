@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { createServer } from 'node:http';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { LlmClient } from '../src/llm.js';
 import { MemoryVault } from '../src/vault.js';
 import { localAdminPrincipal, type Principal } from '../src/policy.js';
@@ -98,6 +101,9 @@ test('review: correction saves immutable original words and needs a separate app
   assert.match(target.after.body, /14 days/);
   assert.ok(preview.pages.some(page => page.key === `source:${result.evidenceId}`));
   await vault.wikiApply(result.plan);
+  const beforeStale = await state(vault);
+  await assert.rejects(vault.wikiCorrect('entity:atlas', 'Do not record a correction to a version I have not read.', { expectedRevision: 1 }), /target changed/);
+  assert.equal(await state(vault), beforeStale);
   assert.equal((await vault.wikiCatalog()).find(page => page.key === 'entity:atlas')!.revision, 2);
   assert.equal(await readFile(join(vault.root, evidence.evidencePath), 'utf8'), original);
 });
@@ -194,6 +200,46 @@ test('explain: reports the actual scores without calling zero semantic scores hy
   assert.ok(result.explanation.notes.some(note => /not probabilities/.test(note)));
 });
 
+test('recall: unrelated encrypted sources or memories do not require a key for public retrieval', async t => {
+  const { vault, plan } = await fixture(t);
+  const candidate = await vault.propose({ key: 'Atlas public', statement: 'Atlas uses separate restoration.', kind: 'fact',
+    scope: 'public', sensitivity: 'public', confidence: 1, explicit: true, conditions: [], tags: [] });
+  await vault.approve(candidate.id);
+  const secret = await vault.propose({ key: 'Unrelated confidential preference', statement: 'CONFIDENTIAL_CANARY', kind: 'fact',
+    scope: 'user', sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [] });
+  await vault.approve(secret.id);
+  await vault.capture({ content: 'UNRELATED_SECRET_EVIDENCE', scope: 'user', sensitivity: 'secret' });
+  const reader = new MemoryVault(vault.root, { masterKey: '' });
+  assert.equal((await reader.recall('Atlas')).memories.length, 1);
+  assert.doesNotMatch((await reader.recall('Atlas')).text, /CONFIDENTIAL_CANARY|UNRELATED_SECRET_EVIDENCE/);
+  // The Wiki retrieval path must also filter before decrypting unrelated evidence.
+  // Regenerate a proposal because the approved ordinary catalog legitimately changed.
+  const regenerated = await vault.wikiIngest({ evidenceIds: plan.sourceIds });
+  await vault.wikiApply(regenerated.plan);
+  assert.ok((await reader.recall('Atlas')).wikiPages.length);
+  await assert.rejects(reader.recall('CONFIDENTIAL_CANARY', { includeSecret: true }), { code: 'ENCRYPTION_KEY_UNAVAILABLE' });
+});
+
+test('explain: empty semantic score maps remain lexical; actually computed zero scores remain distinguishable', async t => {
+  const { vault } = await fixture(t);
+  const candidate = await vault.propose({ key: 'Atlas protected', statement: 'Atlas confidential deployment preference.', kind: 'preference',
+    scope: 'user', sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [] });
+  await vault.approve(candidate.id);
+  class EmbedFixture extends LlmClient {
+    constructor() { super({ apiKey: 'fixture', model: 'fixture', embeddingModel: 'fixture' }); }
+    override async embed(inputs: string[]): Promise<number[][]> { return inputs.map(() => [1, 0]); }
+  }
+  const settings = await vault.settings();
+  settings.values.index.embeddingModel = 'fixture';
+  await vault.updateSettings(settings.values, settings.revision);
+  const reader = new MemoryVault(vault.root, { llm: new EmbedFixture(), masterKey: '45'.repeat(32) });
+  const result = await reader.explain('Atlas', { semantic: true, includeSecret: true });
+  assert.equal(result.semanticStatus, 'ready');
+  assert.equal(result.explanation.strategy, 'lexical');
+  assert.equal(result.explanation.signals[0]!.semanticScore, null);
+  assert.equal(result.hits[0]!.semanticScore, 0, 'retain the existing ranking-score API');
+});
+
 test('diff: huge changed regions have bounded output and explicit omissions', () => {
   const result = reviewDiff(`same\n${'old\n'.repeat(10_000)}tail`, `same\n${'new\n'.repeat(10_000)}tail`);
   assert.equal(result.added, 10_000);
@@ -220,10 +266,78 @@ test('web review: actual routes enforce authentication, preview and separate cor
   assert.equal(preview.body.result.pages.length, 2);
   assert.equal((await call('preview', { plan: { ...plan, proof: '0'.repeat(64) } })).status, 400);
   assert.equal((await call('apply', { plan, confirm: true })).status, 200);
-  const correction = await call('correct', { key: 'entity:atlas', instruction: 'The approved retention should be 14 days.' });
+  const correction = await call('correct', { key: 'entity:atlas', instruction: 'The approved retention should be 14 days.', expectedRevision: 1 });
   assert.equal(correction.status, 200);
   assert.equal(correction.body.result.plan.kind, 'repair');
   assert.equal((await vault.wikiCatalog()).find(page => page.key === 'entity:atlas')!.revision, 1);
   assert.equal((await call('preview', { plan: correction.body.result.plan })).status, 200);
   assert.equal((await call('explain', { query: 'Atlas' })).body.result.explanation.strategy, 'lexical');
+});
+
+test('MCP adoption: cancellation while waiting prevents correction evidence and provider work', async t => {
+  const { vault, plan } = await fixture(t);
+  await vault.wikiApply(plan);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY')) as Record<string, string>;
+  Object.assign(env, { AMEM_TENANT_ID: (await vault.config()).tenantId, AMEM_PERMISSIONS: 'read,write',
+    AMEM_ALLOWED_SCOPES: 'public', AMEM_MAX_SENSITIVITY: 'public' });
+  const client = new Client({ name: 'adoption-cancellation', version: '1' });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(process.cwd(), 'dist/mcp.js'), vault.root], env, stderr: 'pipe' }));
+  t.after(() => client.close());
+  let release!: () => void;
+  let entered!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const lock = withFileLock(join(vault.root, '.amem/write.lock'), async () => { entered(); await hold; });
+  t.after(() => release());
+  await started;
+  const before = await state(vault);
+  const controller = new AbortController();
+  const call = client.callTool({ name: 'memory_wiki_correct', arguments: { key: 'entity:atlas', instruction: 'Cancelled words must not be saved.', expectedRevision: 1 } }, { signal: controller.signal });
+  const rejected = assert.rejects(call);
+  // The ordered transport has dispatched the earlier correction by this barrier.
+  await client.callTool({ name: 'memory_version', arguments: {} });
+  controller.abort();
+  await rejected;
+  await client.callTool({ name: 'memory_version', arguments: {} });
+  release(); await lock;
+  // Allow the abandoned handler's lock retry interval to elapse before asserting.
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await client.callTool({ name: 'memory_recall', arguments: { query: 'Atlas' } });
+  assert.equal(await state(vault), before);
+  assert.equal((await vault.listRecords({ collection: 'evidence', offset: 0, limit: 100, query: '', status: '' })).total, 1);
+});
+
+test('MCP adoption: cancelling correction compilation closes its real provider request', async t => {
+  const { vault, plan } = await fixture(t);
+  await vault.wikiApply(plan);
+  let reached!: () => void;
+  let disconnected!: () => void;
+  const requestStarted = new Promise<void>(resolve => { reached = resolve; });
+  const requestClosed = new Promise<void>(resolve => { disconnected = resolve; });
+  const provider = createServer((_req, res) => { reached(); res.once('close', disconnected); });
+  await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
+  t.after(() => { provider.closeAllConnections(); provider.close(); });
+  const address = provider.address();
+  assert.ok(address && typeof address !== 'string');
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY')) as Record<string, string>;
+  Object.assign(env, { AMEM_TENANT_ID: (await vault.config()).tenantId, AMEM_PERMISSIONS: 'read,write',
+    AMEM_ALLOWED_SCOPES: 'public', AMEM_MAX_SENSITIVITY: 'public', AMEM_LLM_API_KEY: 'local-fixture',
+    AMEM_LLM_BASE_URL: `http://127.0.0.1:${address.port}/v1`, AMEM_LLM_TIMEOUT_MS: '10000', AMEM_LLM_MAX_RETRIES: '0' });
+  const client = new Client({ name: 'adoption-provider-cancellation', version: '1' });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(process.cwd(), 'dist/mcp.js'), vault.root], env, stderr: 'pipe' }));
+  t.after(() => client.close());
+  const controller = new AbortController();
+  const call = client.callTool({ name: 'memory_wiki_correct', arguments: { key: 'entity:atlas', instruction: 'Evidence can remain, but cancel the pending provider.', expectedRevision: 1 } }, { signal: controller.signal });
+  const rejected = assert.rejects(call);
+  await requestStarted;
+  controller.abort();
+  await rejected;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([requestClosed, new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error('Cancelled provider request did not close')), 2000);
+    })]);
+  } finally { clearTimeout(timeout); }
+  assert.equal((await vault.wikiCatalog()).find(page => page.key === 'entity:atlas')!.revision, 1);
+  assert.equal((await vault.listRecords({ collection: 'evidence', offset: 0, limit: 100, query: '', status: '' })).total, 2);
 });

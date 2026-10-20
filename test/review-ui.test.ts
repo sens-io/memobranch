@@ -161,7 +161,7 @@ test('review UI: page correction saves evidence, previews the proposed repair an
   assert.match(dialog.textContent, /正在保存纠正原话并生成修订计划/);
   await form.fire('submit');
   assert.equal(ui.requests.filter(request => request.operation === 'correct').length, 1);
-  assert.deepEqual(ui.requests.find(request => request.operation === 'correct')?.data, { key: 'return-policy', instruction: instruction.value });
+  assert.deepEqual(ui.requests.find(request => request.operation === 'correct')?.data, { key: 'return-policy', instruction: instruction.value, expectedRevision: 3 });
   pending.resolve(success({ evidenceId: 'ev-123456789abc', plan, commit: null })); await submission;
   assert.equal(submit.disabled, false);
   assert.match(dialog.textContent, /纠正原话已保存 · 证据 ev-123456789abc/);
@@ -172,6 +172,24 @@ test('review UI: page correction saves evidence, previews the proposed repair an
   await button(dialog, '批准并应用此计划').fire('click');
   assert.equal(dialog.isConnected, false, 'applied correction closes the old document version');
   assert.deepEqual(ui.requests.find(request => request.operation === 'apply')?.data, { plan, confirm: true });
+});
+
+test('review UI: correction sends the displayed revision even after the canonical page changes', async () => {
+  let currentRevision = 7;
+  const ui = harness(request => request.operation === 'get'
+    ? success({ ...wikiDocument, meta: { ...wikiDocument.meta, revision: currentRevision } })
+    : failure(request.data.expectedRevision === currentRevision ? 'DEPENDENCY_UNAVAILABLE' : 'VALIDATION_FAILED'));
+  await ui.run("openDocument('wiki-return-policy')");
+  const dialog = find(ui.body, node => node.tagName === 'dialog');
+  assert.match(dialog.textContent, /当前版本 v7/);
+  currentRevision = 8;
+  named(dialog, 'instruction').value = '更正我当前看到的退货政策';
+  await find(dialog, node => node.tagName === 'form').fire('submit');
+  assert.deepEqual(ui.requests.find(request => request.operation === 'correct')?.data,
+    { key: 'return-policy', instruction: '更正我当前看到的退货政策', expectedRevision: 7 });
+  assert.equal(ui.requests.filter(request => request.operation === 'get').length, 1, 'must not silently reread a newer page for the correction');
+  assert.match(dialog.textContent, /数据版本已变化/);
+  assert.equal(ui.requests.some(request => request.operation === 'preview' || request.operation === 'apply'), false);
 });
 
 test('review UI: planning failure warns that correction evidence may remain; reader has no correction form', async () => {
