@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { z } from 'zod';
 import type { EncryptionManager } from './encryption.js';
 import { AgentMemoryError, toAgentMemoryError, errorCodes } from './errors.js';
@@ -305,7 +306,9 @@ export class WikiJobs {
 
 /** Called only under the vault writer lock as part of recoverable canonical erasure. */
 export async function invalidateWikiJobPlans(root: string, encryption: EncryptionManager): Promise<void> {
-  const store = new WikiJobStore(root, encryption);
+  // Legacy atomic-memory operations support a vault-directory alias. Resolve
+  // that already-authorized vault for cache cleanup; public job paths stay strict.
+  const store = new WikiJobStore(await realpath(root), encryption);
   for (const id of await store.ids()) {
     // A prior erasure may have destroyed this key before publishing content-free state.
     if (!await encryption.hasKey(id)) { await store.remove(id); continue; }

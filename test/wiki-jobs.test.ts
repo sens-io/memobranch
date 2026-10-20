@@ -229,6 +229,20 @@ test('Wiki jobs: current snapshots reject stale result reads and bad source stat
   assert.equal(llm.calls.length, count);
 });
 
+test('Wiki jobs: cache invalidation preserves legacy atomic erasure through a vault directory alias', async t => {
+  const { vault, input, root } = await fixture(t);
+  const queued = await vault.wikiEnqueue(input);
+  const candidate = await vault.propose({ kind: 'preference', key: 'alias', statement: 'ALIAS_COMPAT_CANARY', scope: 'project',
+    sensitivity: 'secret', confidence: 1, explicit: true, conditions: [], tags: [] });
+  await vault.approve(candidate.id);
+  const target = (await vault.search('ALIAS_COMPAT_CANARY', { includeSecret: true }))[0]!;
+  const alias = join(root, 'alias'); await symlink(root, alias, 'dir');
+  await new MemoryVault(alias, { masterKey: key }).erase(target.id, 'preserve legacy alias erasure');
+  assert.equal(await vault.encryption.hasKey(target.id), false);
+  assert.equal((await vault.wikiJob(queued.id)).status, 'queued');
+  await assert.rejects(new MemoryVault(alias, { masterKey: key }).wikiEnqueue(input), { code: 'VALIDATION_FAILED' });
+});
+
 test('Wiki jobs: canonical erasure destroys retained plan keys and invalidates active claims', async t => {
   const { vault, root, input, llm } = await fixture(t);
   const confidential = await vault.capture({ content: 'ERASE_JOB_CANARY', scope: 'project', sensitivity: 'secret', extract: false });
