@@ -7,13 +7,14 @@ import { Resolver } from 'node:dns/promises';
 import { getEventListeners } from 'node:events';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import https from 'node:https';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import * as api from 'memobranch';
 
 const exec = promisify(execFile);
-const dist = dirname(fileURLToPath(import.meta.resolve('memobranch')));
+const dist = dirname(createRequire(import.meta.url).resolve('memobranch'));
 const { requestPinnedWebSource } = await import(pathToFileURL(join(dist, 'web-source.js')).href);
 const { createWebImportWorkflow } = await import(pathToFileURL(join(dist, 'web-import.js')).href);
 for (const name of ['previewWebImport', 'applyWebImport', 'readWebImportPlan', 'serializeWebImportPlan']) assert.equal(typeof api[name], 'function');
