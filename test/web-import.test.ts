@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { getEventListeners } from 'node:events';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { test, type TestContext } from 'node:test';
@@ -143,4 +143,5 @@ test('web import CLI: private URL refusal does not create a vault or bypass thro
   await assert.rejects(promisify(execFile)(process.execPath, [join(process.cwd(), 'dist/cli.js'), 'import', 'web-preview', 'https://127.0.0.1/', '--root', join(root, 'absent')],
     { env: { ...process.env, HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9' } }),
   (error: unknown) => /VALIDATION_FAILED/.test(String((error as { stderr?: string }).stderr)));
+  await assert.rejects(stat(join(root, 'absent')), { code: 'ENOENT' });
 });

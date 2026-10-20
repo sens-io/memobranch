@@ -12,14 +12,14 @@ import { test, type TestContext } from 'node:test';
 import { fetchPublicWebSource, isPublicWebAddress, publicWebUrl, requestPinnedWebSource, resolvePublicWebAddress } from '../src/web-source.js';
 
 test('public web policy: private/special/tunnel addresses and ambiguous URL forms are rejected', () => {
-  for (const address of ['0.0.0.0', '10.2.3.4', '100.64.0.1', '127.0.0.1', '169.254.169.254', '172.31.1.1', '192.168.1.2',
+  for (const address of ['0.0.0.0', '10.2.3.4', '100.64.0.1', '127.0.0.1', '168.63.129.16', '169.254.169.254', '172.31.1.1', '192.168.1.2',
     '192.0.0.9', '192.0.2.1', '192.88.99.2', '198.18.0.1', '198.51.100.1', '203.0.113.1', '224.0.0.1', '255.255.255.255',
     '::', '::1', '::ffff:8.8.8.8', '64:ff9b::808:808', 'fc00::1', 'fe80::1', '2001::1', '2001:db8::1', '2002:808:808::1',
     '3ffe::1', '3fff::1', '5f00::1', 'ff02::1', '8.8.8.8%eth0', '127.1', 'not-an-ip']) assert.equal(isPublicWebAddress(address), false, address);
   for (const address of ['8.8.8.8', '1.1.1.1', '93.184.216.34', '2606:4700:4700::1111', '2001:4860:4860::8888']) assert.equal(isPublicWebAddress(address), true, address);
   for (const url of ['http://docs.example/', 'file:///etc/passwd', 'https://user:password@docs.example/', 'https://docs.example:444/',
     'https://localhost/', 'https://a.localhost/', 'https://a.local/', 'https://a.internal/', 'https://a.home.arpa/', 'https://singlelabel/',
-    'https://127.1/', 'https://2130706433/', 'https://0x7f000001/', 'https://0177.0.0.1/', 'https://[::1]/',
+    'https://127.1/', 'https://168.63.129.16/', 'https://2130706433/', 'https://0x7f000001/', 'https://0177.0.0.1/', 'https://[::1]/',
     'https://[::ffff:127.0.0.1]/', 'https://docs.example/\nsecret', 'https://docs.example\\@127.0.0.1/']) assert.throws(() => publicWebUrl(url), url);
   assert.equal(publicWebUrl('https://Docs.Example.:443/path#anchor').href, 'https://docs.example/path');
   assert.throws(() => publicWebUrl(`https://docs.example/${'文'.repeat(1000)}`), /Normalized/);
@@ -40,6 +40,8 @@ test('public web DNS: every answer is checked, including mixed and IPv6 answers'
   await assert.rejects(resolvePublicWebAddress('docs.example', new AbortController().signal), /exclusively/);
   dns.setV4(['8.8.8.8']);
   dns.setV6(['::1']);
+  await assert.rejects(resolvePublicWebAddress('docs.example', new AbortController().signal), /exclusively/);
+  dns.setV6([]); dns.setV4(['168.63.129.16']);
   await assert.rejects(resolvePublicWebAddress('docs.example', new AbortController().signal), /exclusively/);
 });
 
