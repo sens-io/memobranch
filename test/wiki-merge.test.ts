@@ -236,6 +236,63 @@ test('Wiki merge: approval observes its own and enclosing cancellation before wr
   assert.deepEqual(await readdir(join(vault.root, '.amem/transactions')), []);
 });
 
+for (const enclosing of [false, true]) {
+  test(`Wiki merge: ${enclosing ? 'enclosing' : 'owned'} approval cancellation during real lock cleanup reports its commit`, async t => {
+    const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input), controller = new AbortController();
+    const originalRm = fsPromises.rm; let injected = false, reported: Array<{ commit: string }> | undefined;
+    const hook = t.mock.method(fsPromises, 'rm', async (...args: Parameters<typeof fsPromises.rm>) => {
+      if (!injected && String(args[0]) === join(vault.root, '.amem', 'write.lock')) { injected = true; controller.abort(); }
+      return originalRm(...args);
+    }); syncBuiltinESMExports();
+    try {
+      const action = () => enclosing ? withOperation(controller.signal, () => vault.wikiApply(prepared.plan))
+        : vault.wikiApply(prepared.plan, { signal: controller.signal });
+      await assert.rejects(action(), error => {
+        assert.equal((error as { code?: string }).code, 'OPERATION_CANCELLED');
+        reported = (error as { safeDetails?: { committed?: Array<{ commit: string }> } }).safeDetails?.committed;
+        assert.equal(reported?.length, 1); return true;
+      });
+    } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(injected, true); assert.equal(reported![0]!.commit, await vault.git.run(['rev-parse', 'HEAD']));
+    assert.match((await vault.get(wikiPageId(input.pageKey))).body, /Manually combined/);
+    assert.deepEqual(await readdir(join(vault.root, '.amem/transactions')), []);
+    assert.deepEqual(await vault.wikiApply(prepared.plan), { pageIds: [], commit: null });
+  });
+}
+
+for (const boundary of ['revalidation', 'expiry-cleanup', 'cancel-cleanup'] as const) {
+  test(`Wiki merge: standalone preview rejects ${boundary} after asynchronous checks`, async t => {
+    const { vault, input } = await fixture(t), now = Date.now, deadline = now() + 60_000, controller = new AbortController();
+    const pages = await Promise.all((await vault.wikiCatalog()).map(entry => vault.get(entry.id)));
+    for (const page of pages) { page.meta.expiresAt = new Date(deadline).toISOString(); await save(vault, page); }
+    const fromCommit = await vault.git.run(['rev-parse', 'HEAD']);
+    for (const page of pages) { delete page.meta.expiresAt; await save(vault, page); }
+    const prepared = await vault.wikiMergePrepare({ ...input, fromCommit }), head = await vault.git.run(['rev-parse', 'HEAD']);
+    const originalRm = fsPromises.rm; let injected = false;
+    const hook = t.mock.method(fsPromises, 'rm', async (...args: Parameters<typeof fsPromises.rm>) => {
+      if (boundary !== 'revalidation' && !injected && String(args[0]) === join(vault.root, '.amem', 'write.lock')) {
+        injected = true; if (boundary === 'cancel-cleanup') controller.abort(); else Date.now = () => deadline + 1;
+      }
+      return originalRm(...args);
+    }); syncBuiltinESMExports();
+    try {
+      if (boundary === 'revalidation') {
+        // Inject only after the engine's final real snapshot action completes,
+        // retaining actual files, current schemas and the signed proposal.
+        const engine = vault['wikiEngine']((permission, action) => vault['settledRead'](async () => {
+          const result = await action(); injected = true; Date.now = () => deadline + 1; return result;
+        }, permission));
+        await assert.rejects(engine.preview(prepared.plan), /no longer currently effective/);
+      } else {
+        await assert.rejects(withOperation(controller.signal, () => vault.wikiPreview(prepared.plan)),
+          { code: boundary === 'cancel-cleanup' ? 'OPERATION_CANCELLED' : 'VALIDATION_FAILED' });
+      }
+    } finally { Date.now = now; hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(injected, true); assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+    await vault.wikiPreview(prepared.plan);
+  });
+}
+
 for (const boundary of ['before-ready', 'after-ready'] as const) {
   test(`Wiki merge: cancellation ${boundary} rolls back or reports the completed commit`, async t => {
     const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input), controller = new AbortController();

@@ -42,7 +42,7 @@ import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
 import { WikiProof } from './wiki-proof.js';
 import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions } from './wiki-snapshot.js';
-import { builtinWikiRuleId } from './wiki-schema.js';
+import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
 import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
 import { reviewDiff } from './review-diff.js';
 
@@ -255,11 +255,23 @@ export class MemoryVault {
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
   async wikiApply(plan: unknown, options: { signal?: AbortSignal } = {}) {
-    if (!options.signal) return this.wikiEngine().apply(plan);
+    const finish = async () => {
+      const result = await this.wikiEngine().apply(plan);
+      throwIfCancelled();
+      return result;
+    };
+    if (!options.signal) return finish();
     const parent = operationSignal(), combined = combineSignals(parent ? [parent, options.signal] : [options.signal]);
-    try { return await withOperation(combined.signal, () => this.wikiEngine().apply(plan)); } finally { combined.dispose(); }
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
   }
-  async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
+  async wikiPreview(plan: unknown) {
+    const parsed = wikiPlanSchema.safeParse(plan);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded Wiki data');
+    const result = await this.settledRead(() => this.wikiEngine().preview(parsed.data));
+    throwIfCancelled();
+    if (parsed.data.merge) assertMergeTime(parsed.data.merge);
+    return result;
+  }
   private wikiJobsEngine(): WikiJobs {
     const bound = async (ceiling: WikiJobCeiling, review = false) => {
       const config = await this.config();

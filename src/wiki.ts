@@ -222,6 +222,7 @@ export class WikiEngine {
         before: old ? version(old) : null, after: version(after), diff: reviewDiff(old?.body ?? '', after.body) };
     });
     await this.revalidate(state);
+    if (plan.merge) assertMergeTime(plan.merge);
     return { kind: plan.kind, pages, affectedPageKeys: pages.filter(page => page.operation !== 'unchanged').map(page => page.key) };
   }
 
