@@ -21,19 +21,27 @@ async function fixture(name, sensitivity = 'internal') {
   const first = await vault.capture({ content: 'Installed historical merge source.', scope: 'project', sensitivity, extract: false });
   await vault.wikiIngest({ evidenceIds: [first.evidenceId], apply: true });
   const fromCommit = await vault.git.run(['rev-parse', 'HEAD']);
+  const targetId = (await vault.wikiCatalog()).find(page => page.key === 'entity:installed-merge').id;
+  const historicalBody = (await vault.get(targetId)).body;
   const second = await vault.capture({ content: 'Installed current merge source.', scope: 'project', sensitivity, extract: false });
   await vault.wikiIngest({ evidenceIds: [second.evidenceId], apply: true });
-  return { vault, first, second, calls: () => calls, input: { fromCommit, pageKey: 'entity:installed-merge', expectedRevision: 2,
+  const currentBody = (await vault.get(targetId)).body;
+  return { vault, first, second, historicalBody, currentBody, calls: () => calls, input: { fromCommit, pageKey: 'entity:installed-merge', expectedRevision: 2,
     body: 'Installed human combination of historical and current knowledge. 中文 🧠📚', summary: 'Explicit manual review.' } };
 }
 
-const { vault, input, first, second, calls } = await fixture('manual-merge-vault');
+const { vault, input, first, second, historicalBody, currentBody, calls } = await fixture('manual-merge-vault');
 const originalSource = await readFile(join(vault.root, first.evidencePath)), head = await vault.git.run(['rev-parse', 'HEAD']), count = calls();
 const prepared = await vault.wikiMergePrepare(input);
 assert.equal(prepared.plan.kind, 'merge'); assert.equal(prepared.plan.merge.fromCommit, input.fromCommit);
 assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head); assert.equal(calls(), count);
 const target = prepared.preview.pages.find(page => page.key === input.pageKey);
 assert.match(target.before.body, /Installed current merge source/); assert.match(target.after.body, /Installed human combination/);
+assert.notEqual(historicalBody, currentBody);
+assert.equal(prepared.comparison.base.pages.find(page => page.meta.key === input.pageKey).body, historicalBody);
+assert.equal(prepared.comparison.current.body, currentBody); assert.equal(target.before.body, currentBody);
+assert.equal(prepared.plan.pages.find(page => page.key === input.pageKey).body, input.body);
+assert.ok(target.after.body.includes(input.body)); assert.ok(target.after.body.includes('中文 🧠📚'));
 assert.ok(target.after.conditions.includes('Synthetic condition.')); assert.ok(target.after.uncertainty.includes('Not verified advice.'));
 assert.deepEqual(new Set(target.after.evidence), new Set([first.evidencePath, second.evidencePath]));
 const forged = structuredClone(prepared.plan); forged.pages[0].body = 'Modified after signing.';
@@ -48,7 +56,13 @@ const cliPrepared = await exec(process.execPath, [cli, 'wiki', 'merge-prepare', 
 await writeFile('manual-proposal.json', cliPrepared.stdout, { mode: 0o600 });
 const plan = JSON.parse(cliPrepared.stdout).plan;
 assert.equal(plan.kind, 'merge');
-await exec(process.execPath, [cli, 'wiki', 'preview', '--file', 'manual-proposal.json', '--root', vault.root]);
+const cliComparison = JSON.parse(cliPrepared.stdout).comparison;
+assert.equal(cliComparison.base.pages.find(page => page.meta.key === input.pageKey).body, historicalBody);
+assert.equal(cliComparison.current.body, currentBody);
+const cliPreview = JSON.parse((await exec(process.execPath, [cli, 'wiki', 'preview', '--file', 'manual-proposal.json', '--root', vault.root])).stdout);
+const cliTarget = cliPreview.pages.find(page => page.key === input.pageKey);
+assert.equal(cliTarget.before.body, currentBody); assert.equal(cliTarget.after.body, target.after.body);
+assert.ok(cliTarget.after.body.includes('中文 🧠📚'));
 const approved = await exec(process.execPath, [cli, 'wiki', 'apply', '--file', 'manual-proposal.json', '--root', vault.root]);
 assert.ok(JSON.parse(approved.stdout).commit);
 const currentPage = (await vault.wikiCatalog()).find(page => page.key === input.pageKey);
