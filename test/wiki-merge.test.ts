@@ -81,6 +81,17 @@ test('Wiki merge: bounded input, full ancestor, current expected revision and co
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
 });
 
+test('Wiki merge: malformed Unicode is rejected rather than silently rewritten at storage', async t => {
+  const { vault, input } = await fixture(t);
+  for (const patch of [{ body: 'Malformed \uD800 body.' }, { summary: 'Malformed \uDFFF summary.' }, { title: 'Malformed \uD800 title.' }]) {
+    await assert.rejects(vault.wikiMergePrepare({ ...input, ...patch }), { code: 'VALIDATION_FAILED' });
+  }
+  const prepared = await vault.wikiMergePrepare({ ...input, body: '中文合并 🧠📚 retains conditions.' });
+  const expected = prepared.preview.pages.find(page => page.key === input.pageKey)!.after.body;
+  await vault.wikiApply(prepared.plan);
+  assert.equal((await vault.get(wikiPageId(input.pageKey))).body, expected);
+});
+
 test('Wiki merge: tampering the draft, origin, projection or proof cannot approve anything', async t => {
   const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input), head = await vault.git.run(['rev-parse', 'HEAD']);
   for (const modify of [

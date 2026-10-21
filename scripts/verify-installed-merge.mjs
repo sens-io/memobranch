@@ -24,7 +24,7 @@ async function fixture(name, sensitivity = 'internal') {
   const second = await vault.capture({ content: 'Installed current merge source.', scope: 'project', sensitivity, extract: false });
   await vault.wikiIngest({ evidenceIds: [second.evidenceId], apply: true });
   return { vault, first, second, calls: () => calls, input: { fromCommit, pageKey: 'entity:installed-merge', expectedRevision: 2,
-    body: 'Installed human combination of historical and current knowledge.', summary: 'Explicit manual review.' } };
+    body: 'Installed human combination of historical and current knowledge. 中文 🧠📚', summary: 'Explicit manual review.' } };
 }
 
 const { vault, input, first, second, calls } = await fixture('manual-merge-vault');
@@ -38,6 +38,7 @@ assert.ok(target.after.conditions.includes('Synthetic condition.')); assert.ok(t
 assert.deepEqual(new Set(target.after.evidence), new Set([first.evidencePath, second.evidencePath]));
 const forged = structuredClone(prepared.plan); forged.pages[0].body = 'Modified after signing.';
 await assert.rejects(vault.wikiApply(forged), { code: 'VALIDATION_FAILED' });
+await assert.rejects(vault.wikiMergePrepare({ ...input, body: 'Malformed \uD800 body.' }), { code: 'VALIDATION_FAILED' });
 const cancelled = new AbortController(); cancelled.abort();
 await assert.rejects(vault.wikiMergePrepare({ ...input, signal: cancelled.signal }), { code: 'OPERATION_CANCELLED' });
 await writeFile('manual-input.json', JSON.stringify(input), { mode: 0o600 });
@@ -48,6 +49,8 @@ assert.equal(plan.kind, 'merge');
 await exec(process.execPath, [cli, 'wiki', 'preview', '--file', 'manual-proposal.json', '--root', vault.root]);
 const approved = await exec(process.execPath, [cli, 'wiki', 'apply', '--file', 'manual-proposal.json', '--root', vault.root]);
 assert.ok(JSON.parse(approved.stdout).commit);
+const currentPage = (await vault.wikiCatalog()).find(page => page.key === input.pageKey);
+assert.equal((await vault.get(currentPage.id)).body, target.after.body);
 assert.deepEqual(await vault.wikiApply(plan), { pageIds: [], commit: null });
 assert.deepEqual(await readFile(join(vault.root, first.evidencePath)), originalSource);
 assert.equal(calls(), count);

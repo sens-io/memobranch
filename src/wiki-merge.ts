@@ -31,10 +31,10 @@ export interface WikiMergeOrigin {
   expiresAt?: string | undefined;
 }
 
-const clean = (maximum: number) => z.string().trim().min(1).max(maximum).regex(/^[^\u0000-\u001f\u007f]+$/u);
+const clean = (maximum: number) => z.string().trim().min(1).max(maximum).regex(/^[^\u0000-\u001f\u007f]+$/u).refine(value => !/[\uD800-\uDFFF]/u.test(value));
 export const mergeOptionsSchema = z.object({
   fromCommit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), pageKey: clean(200),
-  expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), body: z.string().trim().min(1).max(100_000).refine(value => !value.includes('\0')),
+  expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), body: z.string().trim().min(1).max(100_000).refine(value => !/[\0\uD800-\uDFFF]/u.test(value)),
   summary: clean(2000), title: clean(300).optional(), includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
   signal: z.instanceof(AbortSignal).optional(),
 }).strict();
