@@ -112,6 +112,144 @@ const preview = { kind: 'repair', pages: [{ key: 'return-policy', title: '退货
 const wikiDocument = { path: 'wiki/concept/return-policy.md', meta: { id: 'wiki-return-policy', type: 'wiki-page', key: 'return-policy', title: '退货政策',
   revision: 3, status: 'active', scope: 'user', sensitivity: 'internal', evidence: before.evidence, conditions: after.conditions, uncertainty: after.uncertainty }, body: after.body };
 
+const timeDocument = { path: 'wiki/fact/mem-0123456789ab.md', meta: { id: 'mem-0123456789ab', type: 'memory', key: '时间测试',
+  revision: 7, status: 'active', scope: 'user', sensitivity: 'internal', evidence: before.evidence, conditions: ['保留适用条件'],
+  createdAt: '2020-01-01T00:00:00Z', validFrom: '2030-01-01T12:30:45.123Z', validUntil: '2031-01-01T00:00:00.000Z' }, body: '保留正文 <script>notExecutable()</script>' };
+const datedResult = (offset = 0) => ({ at: '2030-06-01T00:00:00.000Z', offset, limit: 1, total: 3, reconstruction: false,
+  items: [{ ...timeDocument.meta, body: timeDocument.body, path: timeDocument.path, recordedAt: timeDocument.meta.createdAt,
+    uncertainty: ['Effective end is unknown.'], status: 'superseded' }] });
+
+test('time UI: UTC calendar validation preserves milliseconds without guessing dates or rolling invalid days', () => {
+  const ui = harness(() => success({}));
+  assert.equal(ui.run("utcTimestamp('2030-01-01T12:30:45.123')"), '2030-01-01T12:30:45.123Z');
+  assert.equal(ui.run("utcTimestamp('2030-01-01T12:30')"), '2030-01-01T12:30:00.000Z');
+  assert.equal(ui.run("utcInput('2030-01-01T20:30:45.123+08:00')"), '2030-01-01T12:30:45.123');
+  for (const invalid of ['2030-02-30T12:30', '2030-01-01T24:00', '2030-01-01T12:30:60', '2030-01-01T12:30:45.1234', '2030-01-01T12:30Z', '']) {
+    assert.throws(() => ui.run('utcTimestamp(' + JSON.stringify(invalid) + ')'));
+  }
+  const unknown = ui.run("memoryTime({createdAt:'2030-01-01',status:'active'})") as Element;
+  assert.match(unknown.textContent, /时间未知.*开始（包含）：未知.*结束（不包含）：未知/s);
+  assert.doesNotMatch(unknown.textContent, /2030-01-01/);
+  assert.match((ui.run("memoryTime({validUntil:'2000-01-01T00:00:00Z',status:'active'})") as Element).textContent, /已结束/);
+  assert.match((ui.run("memoryTime({validFrom:'2999-01-01T00:00:00Z',status:'active'})") as Element).textContent, /尚未生效/);
+});
+
+test('time UI: reviewer confirms displayed version and both nullable bounds, then reloads canonical detail', async () => {
+  let saved = false;
+  const ui = harness(request => request.operation === 'get'
+    ? success(saved ? { ...timeDocument, meta: { ...timeDocument.meta, revision: 8, validUntil: undefined } } : timeDocument)
+    : (saved = true, success({ revision: 8, commit: 'saved-commit' })));
+  let refreshed = 0; ui.context.changed = async () => { refreshed += 1; };
+  await ui.run("openDocument('mem-0123456789ab',changed)");
+  const dialog = find(ui.body, node => node.tagName === 'dialog');
+  const from = named(dialog, 'validFrom'), until = named(dialog, 'validUntil');
+  assert.equal(from.value, '2030-01-01T12:30:45.123'); assert.equal(from.type, 'datetime-local'); assert.equal(from.required, false);
+  until.value = '';
+  const form = find(dialog, node => node.tagName === 'form');
+  ui.context.confirmResult = false; await form.fire('submit');
+  assert.equal(ui.requests.filter(r => r.operation === 'memory-validity').length, 0);
+  assert.match(dialog.textContent, /原结束：2031-01-01.*新结束：未知/s);
+  ui.context.confirmResult = true; await form.fire('submit');
+  assert.deepEqual(ui.requests.find(r => r.operation === 'memory-validity')?.data, {
+    id: timeDocument.meta.id, validFrom: timeDocument.meta.validFrom, validUntil: null, expectedRevision: 7, confirm: true,
+  });
+  assert.match(dialog.textContent, /当前版本 v8/); assert.equal(refreshed, 1);
+  assert.equal(ui.requests.filter(r => r.operation === 'get').length, 2);
+  assert.equal(nodes(dialog).some(node => node.tagName === 'script'), false);
+});
+
+test('time UI: read-only and withdrawn or non-memory records have no time writer', async () => {
+  for (const [permissions, document] of [
+    [['read'], timeDocument], [['admin'], { ...timeDocument, meta: { ...timeDocument.meta, status: 'revoked' } }],
+    [['admin'], wikiDocument],
+  ] as const) {
+    const ui = harness(() => success(document), [...permissions]);
+    await ui.run("openDocument('record')");
+    assert.equal(nodes(ui.body).some(node => node.name === 'validFrom'), false);
+    assert.equal(ui.requests.length, 1);
+  }
+});
+
+test('time UI: equal/reversed calendar bounds fail before any mutation and remain editable', async () => {
+  const ui = harness(() => success(timeDocument)); await ui.run("openDocument('record')");
+  const dialog = find(ui.body, node => node.tagName === 'dialog'), form = find(dialog, node => node.tagName === 'form');
+  named(dialog, 'validUntil').value = named(dialog, 'validFrom').value;
+  await form.fire('submit'); assert.match(dialog.textContent, /开始时间必须早于结束时间/);
+  named(dialog, 'validUntil').value = '2020-01-01T00:00'; await form.fire('submit');
+  assert.equal(ui.requests.length, 1); assert.equal(form.isConnected, true);
+});
+
+test('time UI: stale save cannot retry blindly and fresh read changes the next displayed revision', async () => {
+  let current = timeDocument;
+  const ui = harness(request => request.operation === 'get' ? success(current) : failure('VALIDATION_FAILED'));
+  await ui.run("openDocument('record')"); const dialog = find(ui.body, node => node.tagName === 'dialog');
+  await find(dialog, node => node.tagName === 'form').fire('submit');
+  assert.equal(ui.requests.filter(r => r.operation === 'memory-validity').length, 1);
+  assert.match(dialog.textContent, /未自动重试/);
+  assert.equal(nodes(dialog).some(node => node.tagName === 'form'), false);
+  current = { ...timeDocument, meta: { ...timeDocument.meta, revision: 9 } };
+  await button(dialog, '重新读取当前版本').fire('click');
+  assert.match(dialog.textContent, /当前版本 v9/);
+  await find(dialog, node => node.tagName === 'form').fire('submit');
+  assert.deepEqual(ui.requests.filter(r => r.operation === 'memory-validity').map(r => r.data.expectedRevision), [7, 9]);
+});
+
+test('time UI: closing or disconnecting before a pending read prevents a late editor or write', async () => {
+  for (const stop of ['close', 'logout']) {
+    const pending = deferred<Response>(); const ui = harness(() => pending.promise);
+    const opened = ui.run("openDocument('record')");
+    if (stop === 'close') find(ui.body, node => node.tagName === 'dialog').close(); else ui.run('logout()');
+    pending.resolve(success(timeDocument)); await opened;
+    assert.equal(nodes(ui.body).some(node => node.name === 'validFrom'), false);
+    assert.equal(ui.requests.length, 1);
+  }
+});
+
+test('time UI: successful commit stays successful if detail refresh fails', async () => {
+  let gets = 0;
+  const ui = harness(request => request.operation === 'memory-validity' ? success({ revision: 8, commit: 'saved-commit' })
+    : ++gets === 1 ? success(timeDocument) : failure('AUTHORIZATION_DENIED'));
+  await ui.run("openDocument('record')"); const dialog = find(ui.body, node => node.tagName === 'dialog');
+  await find(dialog, node => node.tagName === 'form').fire('submit');
+  assert.match(ui.run('notice.textContent'), /有效期已保存.*v8/);
+  assert.match(dialog.textContent, /权限不足/);
+  assert.equal(nodes(dialog).some(node => node.name === 'validFrom'), false);
+  assert.equal(ui.requests.filter(r => r.operation === 'memory-validity').length, 1);
+});
+
+test('time UI: dated paging uses capped limits and submitted criteria, preserving retained warnings and source text', async () => {
+  const ui = harness(request => success({ ...datedResult(request.data.offset), at: request.data.at }));
+  const view = ui.run('datedMemories()') as { element: Element }; ui.body.append(view.element);
+  const form = find(view.element, node => node.tagName === 'form');
+  named(view.element, 'at').value = '2030-06-01T00:00'; named(view.element, 'key').value = '  时间测试  ';
+  assert.equal(named(view.element, 'includeUnknown').checked, false);
+  await form.fire('submit');
+  assert.deepEqual(ui.requests[0]?.data, { at: '2030-06-01T00:00:00.000Z', key: '时间测试', includeUnknown: false, offset: 0, limit: 20 });
+  assert.match(view.element.textContent, /不是历史 Wiki.*本次读取版本 v7.*已被替代.*来源.*不确定性/s);
+  assert.equal(nodes(view.element).some(node => node.tagName === 'script'), false);
+  named(view.element, 'at').value = '2039-01-01T00:00'; named(view.element, 'key').value = '未提交的名称';
+  await button(view.element, '下一页').fire('click');
+  assert.equal(ui.requests[1]?.data.offset, 1); assert.equal(ui.requests[1]?.data.at, ui.requests[0]?.data.at);
+  assert.equal(ui.requests[1]?.data.key, '时间测试');
+  named(view.element, 'includeUnknown').checked = true; await form.fire('submit');
+  assert.equal(ui.requests[2]?.data.offset, 0); assert.equal(ui.requests[2]?.data.includeUnknown, true);
+  assert.equal(ui.requests[2]?.data.key, '未提交的名称');
+});
+
+test('time UI: superseded reads and page cleanup cannot overwrite the latest dated result', async () => {
+  const old = deferred<Response>(); let calls = 0;
+  const ui = harness(request => ++calls === 2 ? old.promise : success({ ...datedResult(), at: request.data.at }));
+  const view = ui.run('datedMemories()') as { element: Element }; ui.body.append(view.element);
+  const form = find(view.element, node => node.tagName === 'form'); named(view.element, 'at').value = '2030-06-01T00:00';
+  await form.fire('submit');
+  const refresh = button(view.element, '刷新已提交的日期查询').fire('click');
+  named(view.element, 'at').value = '2030-07-01T00:00'; await form.fire('submit');
+  old.resolve(success({ ...datedResult(), at: '1999-01-01T00:00:00Z' })); await refresh;
+  assert.match(view.element.textContent, /查询时刻（UTC）：2030-07-01/); assert.doesNotMatch(view.element.textContent, /1999-01-01/);
+  const count = ui.requests.length; ui.run('pageCleanup()'); await button(view.element, '刷新已提交的日期查询').fire('click');
+  assert.equal(ui.requests.length, count);
+});
+
 test('web branding: login and sidebar reuse the README image instead of the letter mark', () => {
   const ui = harness(() => success({}));
   for (const render of ['login()', 'shell()']) {

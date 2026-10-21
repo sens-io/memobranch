@@ -110,6 +110,8 @@ flowchart LR
 
 > **Effective-time views (development source):** [Explicitly reviewed memory intervals and dated retained-record queries](docs/effective-time.md) distinguish fact time from record time. Current context excludes not-yet-effective/ended memories; dated reads preserve current permissions and withdrawal. Not historical Wiki reconstruction or a published npm feature.
 
+> **Web time management (development source):** [Inspect interval warnings, review UTC endpoints and query retained records by date](docs/web-effective-time.md) in the console. Saves require the displayed revision and explicit confirmation; unknown time is not inferred. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

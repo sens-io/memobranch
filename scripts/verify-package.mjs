@@ -35,6 +35,7 @@ try {
     'dist/web-source.js', 'dist/web-import.js', 'dist/web-import.d.ts', 'docs/public-web-import.md',
     'dist/wiki-jobs.js', 'dist/wiki-jobs.d.ts', 'dist/wiki-job-store.js', 'docs/wiki-jobs.md',
     'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
+    'docs/web-effective-time.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }

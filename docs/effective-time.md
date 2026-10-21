@@ -38,7 +38,7 @@ This is an explicit annotation of an existing record, not automatic temporal ext
 
 MCP and DeepSeek Harness expose read-only `memory_at` with `at`, optional `key`, `includeUnknown`, `offset`, `limit`. MCP also permits explicit `includeSensitive`/`includeSecret`, subject to current policy and key checks. Time annotation is provided by the local library/CLI and confirmed authenticated HTTP, not a new model write tool.
 
-HTTP POST `/api/memories-at` accepts the dated read fields without confidential opt-ins. `/api/memory-validity` requires `{id, validFrom, validUntil, expectedRevision, confirm:true}` with nullable bounds. Existing Host/Origin/token, JSON limits and permission checks remain. These are programmatic routes; this increment does not add browser date controls.
+HTTP POST `/api/memories-at` accepts the dated read fields without confidential opt-ins. `/api/memory-validity` requires `{id, validFrom, validUntil, expectedRevision, confirm:true}` with nullable bounds. Existing Host/Origin/token, JSON limits and permission checks remain. A separate [Web effective-time increment](web-effective-time.md) now adds explicit UTC controls and revision-bound review in the development-source console; this core contract does not imply historical Wiki reconstruction.
 
 ## Current use and Wiki dependencies
 

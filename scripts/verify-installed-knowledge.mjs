@@ -100,6 +100,12 @@ try {
     return { status: response.status, data: await response.json() };
   };
   assert.equal((await call('memories-at', { at })).data.result.total, 1);
+  const listing = (await call('records', { collection: 'memories' })).data.result;
+  assert.equal(listing.items[0].revision, 3);
+  assert.equal(listing.items[0].validFrom, '2001-01-01T00:00:00.000Z');
+  assert.equal(listing.items[0].validUntil, '2999-01-01T00:00:00.000Z');
+  const script = await (await fetch(`${web.url}/app.js`)).text();
+  assert.match(script, /核对并保存有效期/); assert.match(script, /查询时刻（UTC）/); assert.match(script, /datetime-local/);
   assert.equal((await call('memory-validity', { id: approved.memoryId, validFrom: null, validUntil: null, expectedRevision: 3 })).status, 400);
   const saved = await call('memory-validity', { id: approved.memoryId, validFrom: null, validUntil: null, expectedRevision: 3, confirm: true });
   assert.equal(saved.status, 200); assert.equal(saved.data.result.revision, 4);
