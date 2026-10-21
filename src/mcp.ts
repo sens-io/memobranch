@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import * as z from 'zod/v4';
 import { toAgentMemoryError } from './errors.js';
+import { modelDocument } from './evidence.js';
 import { MaintenanceService } from './maintenance.js';
 import { throwIfCancelled, withOperation } from './operation.js';
 import { authorize, principalFromEnv } from './policy.js';
@@ -178,7 +179,7 @@ function createServer(): McpServer {
     description: 'Read one authorized evidence, candidate, or canonical record by id.',
     inputSchema: z.object({ id: z.string().min(1).max(512) }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
-  }, async ({ id }) => execute(() => vault.get(id)));
+  }, async ({ id }) => execute(async () => modelDocument(await vault.get(id))));
 
   server.registerTool('memory_consolidate', {
     title: 'Consolidate candidates',

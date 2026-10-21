@@ -15,8 +15,12 @@ PDF parsing MUST run outside the caller event loop with enforceable time, source
 - **THEN** it is terminated before the operation returns and no capture starts
 
 ### Requirement: Honest provenance and model inputs
-Extracted text MUST retain page numbers, parser identity and extraction warnings. Completely textless or encrypted PDFs MUST NOT be reported as successfully parsed. Original bytes MUST NOT be included in model source or context payloads.
+Extracted text MUST retain page numbers, parser identity and extraction warnings. Completely textless or encrypted PDFs MUST NOT be reported as successfully parsed. Original bytes MUST NOT be included in model source/context payloads or MCP/Harness record-tool responses; deliberate authorized local original reads remain available.
 
 #### Scenario: An authorized PDF evidence source is compiled into Wiki
 - **WHEN** model input is constructed
 - **THEN** it contains the page-labelled extracted text and source identity, not the encoded original, and approval remains a separate operation
+
+#### Scenario: An agent reads PDF evidence using memory_get
+- **WHEN** the current read authority permits that evidence
+- **THEN** MCP and Harness return its page text and identity but omit the original field without modifying the stored canonical record

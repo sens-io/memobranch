@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
+import { modelDocument } from './evidence.js';
 import { registerAutomaticMemory, type AutomaticMemoryMode } from './harness-memory.js';
 import { MaintenanceService } from './maintenance.js';
 import { combineSignals, throwIfCancelled, withOperation } from './operation.js';
@@ -435,7 +436,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     parameters: { id: { type: 'string', required: true, description: 'Managed document ID.' } },
     output: jsonOutput,
     async execute({ id }, exec) {
-      return runJson(vault, exec.signal, () => vault.get(boundedString(id, 'id', 512)));
+      return runJson(vault, exec.signal, async () => modelDocument(await vault.get(boundedString(id, 'id', 512))));
     },
   }));
 

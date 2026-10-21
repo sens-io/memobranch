@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError } from './errors.js';
+import { modelDocument } from './evidence.js';
 import { factEffectiveAt, factValidityConditions } from './effective-time.js';
 import type { LlmClient } from './llm.js';
 import { wikiLocalLinks } from './wiki-links.js';
@@ -745,7 +746,7 @@ function restrictions(values: Array<{ scope: Scope; sensitivity: Sensitivity }>)
   return { scope: scopes[Math.min(...values.map((value) => scopes.indexOf(value.scope)), 3)]!, sensitivity: sensitivities[Math.max(...values.map((value) => sensitivities.indexOf(value.sensitivity)), 0)]! };
 }
 
-function sourceMetadata(source: Evidence) { const { pdfOriginal: _original, ...metadata } = source.meta; return metadata; }
+function sourceMetadata(source: Evidence) { return modelDocument(source).meta; }
 function sourceDto(source: Evidence): object { return { ...sourceMetadata(source), path: source.path, body: source.body }; }
 
 function rulesDto(state: State): object[] {

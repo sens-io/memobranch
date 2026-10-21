@@ -90,3 +90,9 @@ export function asEvidenceDocument(
   assertEvidenceDocument(document, options);
   return document as unknown as MarkdownDocument<EvidenceMeta>;
 }
+
+/** Model-facing record reads keep extracted text, never the encoded source file. */
+export function modelDocument<T extends object>(document: MarkdownDocument<T>): MarkdownDocument<Omit<T, 'pdfOriginal'>> {
+  const { pdfOriginal: _original, ...meta } = document.meta as T & { pdfOriginal?: unknown };
+  return { ...document, meta };
+}
