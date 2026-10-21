@@ -2,6 +2,7 @@ import { AgentMemoryError } from './errors.js';
 import type { EvidenceMeta, MarkdownDocument, Scope, Sensitivity } from './types.js';
 import { scopes, sensitivities } from './types.js';
 import { sha256 } from './utils.js';
+import { assertPdfEvidence } from './pdf-evidence.js';
 
 const EVIDENCE_HASH_DOMAIN = 'memobranch:evidence:v2';
 
@@ -15,6 +16,10 @@ export function legacyEvidenceDigest(scope: Scope, sourceUri: string, content: s
   return sha256(`${scope}\0${sourceUri}\0${content}`);
 }
 
+export function pdfEvidenceDigest(scope: Scope, sensitivity: Sensitivity, sourceUri: string, content: string): string {
+  return sha256(`memobranch:evidence:pdf:v1\0${evidenceDigest(scope, sensitivity, sourceUri, content)}`);
+}
+
 function assertSourceUri(sourceUri: string): void {
   // Scope and sensitivity are enums. The remaining identity prefix must not
   // contain its delimiter; content itself may still contain arbitrary NULs.
@@ -26,7 +31,7 @@ function assertSourceUri(sourceUri: string): void {
 export function evidenceDigestVersion(
   document: MarkdownDocument<Record<string, unknown>>,
   options: { allowLegacyEvidence?: boolean } = {},
-): 1 | 2 {
+): 1 | 2 | 3 {
   const { meta, body, path } = document;
   const id = typeof meta.id === 'string' ? meta.id : '';
   const scope = typeof meta.scope === 'string' && scopes.includes(meta.scope as Scope) ? meta.scope as Scope : null;
@@ -40,13 +45,22 @@ export function evidenceDigestVersion(
     typeof meta.actor !== 'string' || !meta.actor.trim() ||
     (meta.sourceUri !== undefined && typeof meta.sourceUri !== 'string') ||
     typeof meta.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(meta.sha256) ||
-    (meta.digestVersion !== undefined && meta.digestVersion !== 2) ||
+    (meta.digestVersion !== undefined && meta.digestVersion !== 2 && meta.digestVersion !== 3) ||
     (meta.legacySha256 !== undefined && (typeof meta.legacySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(meta.legacySha256)))
   ) {
     throw new AgentMemoryError('VALIDATION_FAILED', `Invalid evidence schema: ${path}`);
   }
   const sourceUri = typeof meta.sourceUri === 'string' ? meta.sourceUri : '';
   const content = body.slice(prefix.length);
+  if (meta.digestVersion === 3) {
+    assertPdfEvidence(meta.pdfOriginal, content);
+    const digest = pdfEvidenceDigest(scope, sensitivity, sourceUri, content);
+    if (meta.sha256 !== digest || id !== `ev-${digest.slice(0, 12)}` || meta.legacySha256 !== undefined) {
+      throw new AgentMemoryError('VALIDATION_FAILED', `PDF evidence identity validation failed: ${path}`);
+    }
+    return 3;
+  }
+  if (meta.pdfOriginal !== undefined) throw new AgentMemoryError('VALIDATION_FAILED', `PDF original requires evidence digest version 3: ${path}`);
   const currentDigest = evidenceDigest(scope, sensitivity, sourceUri, content);
   if (meta.sha256 === currentDigest) {
     if (id === `ev-${currentDigest.slice(0, 12)}`) return 2;

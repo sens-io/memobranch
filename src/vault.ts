@@ -9,7 +9,8 @@ import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './confi
 import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion } from './evidence.js';
+import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest } from './evidence.js';
+import { assertPdfEvidence } from './pdf-evidence.js';
 import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityConditions, factValidityFields, type MemoriesAtOptions, type MemoryValidityUpdate } from './effective-time.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
@@ -28,6 +29,7 @@ import type {
   MarkdownDocument,
   MemoryMeta,
   ProposedMemory,
+  PdfOriginal,
   Scope,
   SearchHit,
   Sensitivity,
@@ -53,6 +55,7 @@ export interface CaptureOptions {
   scope?: Scope;
   sensitivity?: Sensitivity;
   extract?: boolean;
+  pdfOriginal?: PdfOriginal;
 }
 
 export interface CaptureResult {
@@ -390,7 +393,9 @@ export class MemoryVault {
     const scope = options.scope ?? 'user';
     const sensitivity = options.sensitivity ?? 'internal';
     authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
-    const digest = evidenceDigest(scope, sensitivity, options.sourceUri ?? '', content);
+    const pdfOriginal = options.pdfOriginal === undefined ? undefined : structuredClone(options.pdfOriginal);
+    if (pdfOriginal !== undefined) assertPdfEvidence(pdfOriginal, content);
+    const digest = (pdfOriginal === undefined ? evidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
     const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
@@ -408,7 +413,8 @@ export class MemoryVault {
         scope,
         sensitivity,
         sha256: digest,
-        digestVersion: 2,
+        digestVersion: pdfOriginal === undefined ? 2 : 3,
+        ...(pdfOriginal === undefined ? {} : { pdfOriginal }),
         immutable: true,
       };
       const evidence = { path, meta, body: `# Evidence ${evidenceId}\n\n${content}` };

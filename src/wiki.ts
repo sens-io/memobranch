@@ -513,7 +513,7 @@ export class WikiEngine {
   private context(state: State, keys: string[], sources: Evidence[] = []): object {
     const pages = keys.map((key) => required(state.eligible.get(key), 'Wiki context page is unavailable'));
     const evidencePaths = new Set([...sources.map((source) => source.path), ...pages.flatMap((page) => page.meta.evidence)]);
-    const evidence = [...state.evidence.values()].filter((source) => evidencePaths.has(source.path)).map((source) => ({ ...source.meta, path: source.path }));
+    const evidence = [...state.evidence.values()].filter((source) => evidencePaths.has(source.path)).map((source) => ({ ...sourceMetadata(source), path: source.path }));
     return { rules: rulesDto(state), catalog: this.entries(state), evidence, sources: sources.map(sourceDto), pages: pages.map((page) => ({ ...page.meta, body: page.body })) };
   }
 
@@ -745,7 +745,8 @@ function restrictions(values: Array<{ scope: Scope; sensitivity: Sensitivity }>)
   return { scope: scopes[Math.min(...values.map((value) => scopes.indexOf(value.scope)), 3)]!, sensitivity: sensitivities[Math.max(...values.map((value) => sensitivities.indexOf(value.sensitivity)), 0)]! };
 }
 
-function sourceDto(source: Evidence): object { return { ...source.meta, path: source.path, body: source.body }; }
+function sourceMetadata(source: Evidence) { const { pdfOriginal: _original, ...metadata } = source.meta; return metadata; }
+function sourceDto(source: Evidence): object { return { ...sourceMetadata(source), path: source.path, body: source.body }; }
 
 function rulesDto(state: State): object[] {
   return state.rules.length ? state.rules.map((rule) => ({ ...rule.meta, instructions: rule.body })) : [{ id: builtinWikiRuleId, revision: 1, purpose: defaultWikiPurpose, instructions: defaultWikiInstructions }];

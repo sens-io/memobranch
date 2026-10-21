@@ -73,9 +73,24 @@ export interface EvidenceMeta {
   scope: Scope;
   sensitivity: Sensitivity;
   sha256: string;
-  digestVersion?: 2;
+  digestVersion?: 2 | 3;
   legacySha256?: string;
   immutable: true;
+  /** Exact PDF bytes, never part of a model source/context payload. */
+  pdfOriginal?: PdfOriginal;
+}
+
+export interface PdfOriginal {
+  version: 1;
+  mediaType: 'application/pdf';
+  encoding: 'base64';
+  bytes: number;
+  sha256: string;
+  data: string;
+  pages: number;
+  parser: string;
+  emptyPages: number[];
+  extractionSha256: string;
 }
 
 export interface CandidateMeta {
