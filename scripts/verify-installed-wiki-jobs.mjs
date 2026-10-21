@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { MemoryVault, LlmClient, localAdminPrincipal } from 'memobranch';
+import { MemoryVault, LlmClient, localAdminPrincipal, startWebServer } from 'memobranch';
 
 let calls = 0, hold = false, reached;
 const server = createServer(async (request, response) => {
@@ -78,5 +78,32 @@ try {
   assert.equal((await vault.wikiJob(job.id)).error.reason, 'context-erased');
   await assert.rejects(vault.wikiJobPlan(job.id), { code: 'VALIDATION_FAILED' });
   assert.ok(calls >= 5, 'must reach the actual HTTP fixture');
+  const web = await startWebServer(vault.root, { masterKey, llm });
+  try {
+    const request = async (operation, data = {}) => {
+      const response = await fetch(web.url + '/api/' + operation, { method: 'POST', headers: {
+        Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(data) });
+      const body = await response.json(); return { status: response.status, ...body };
+    };
+    const source = await vault.capture({ content: 'Installed Web task workflow.', extract: false, scope: 'public', sensitivity: 'public' });
+    const enqueued = await request('jobs-enqueue', { evidenceIds: [source.evidenceId], confirm: true });
+    assert.equal(enqueued.status, 200); const id = enqueued.result.id;
+    assert.equal((await request('jobs-run', { id, confirm: true })).result.accepted, true);
+    const deadline = Date.now() + 20000;
+    while ((await request('jobs-show', { id })).result.status !== 'ready') {
+      if (Date.now() > deadline) throw new Error('Installed Web job did not settle');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok((await request('jobs-list')).result.some(job => job.id === id));
+    const review = await request('jobs-review', { id });
+    assert.deepEqual(review.result, await vault.wikiReviewJob(id));
+    assert.equal((await request('jobs-apply', { id, proof: '0'.repeat(64), confirm: true })).error.code, 'VALIDATION_FAILED');
+    assert.ok((await request('jobs-apply', { id, proof: review.result.plan.proof, confirm: true })).result.commit);
+    assert.equal((await request('jobs-remove', { id, confirm: true })).result.removed, true);
+    assert.equal(await vault.encryption.hasKey(id), false);
+    assert.match(await (await fetch(web.url + '/app.js')).text(), /jobs-review/);
+    console.log('Installed package: authenticated Web Wiki job enqueue/run/status/review/proof-bound approval/removal passed.');
+  } finally { await web.stop(); }
   console.log('Installed package: durable encrypted Wiki jobs, public types/API/CLI, explicit approval, owned cancellation/retry, duplicate avoidance and erasure invalidation passed (fixture model, no external provider quality claim).');
 } finally { await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }); }

@@ -106,7 +106,7 @@ flowchart LR
 
 > **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
 
-> **Durable Wiki jobs:** [Submit evidence IDs and compile in a separate local worker](docs/wiki-jobs.md), with encrypted proposals, progress, cancellation and explicit crash retry. Review/apply stays separate. Development source only; requires the existing vault master key, including public-input jobs.
+> **Durable Wiki jobs:** [Submit evidence IDs and explicitly compile from the Web console or a separate local worker](docs/wiki-jobs.md), with encrypted proposals, progress, cancellation and explicit crash retry. Review/apply stays separate and Web approval binds the displayed proof. Development source only; requires the existing vault master key, including public-input jobs.
 
 ### Requirements
 
@@ -408,6 +408,7 @@ Maintainers: [one-command npm release and recovery guide](docs/releasing.md).
 
 - **Memory:** filter and paginate records, inspect provenance, capture evidence, propose, approve/reject and revoke memories.
 - **LLM Wiki:** browse pages, prepare ingestion plans, run read-only queries, explicitly prepare answer-filing plans, run structural/semantic lint and separately approve plans. Edit purpose/rules with revision checks.
+- **Compilation jobs (development source, not published npm):** enqueue existing evidence, explicitly execute once, monitor persisted stages, cancel/retry/remove and compare/approve the exact displayed plan. Leaving the page stops polling, not compilation; normal server shutdown cancels its owned attempt.
 - **Configuration:** edit non-secret operational settings with administrator authorization and stale-write protection. Identity, tenant, credentials, encryption policy and remote URLs stay outside the browser.
 - **Operations:** inspect health and history, rebuild the lexical index, recover transactions and explicitly synchronize an already-configured Git remote. Web mode does not start the background maintenance scheduler.
 
@@ -415,7 +416,7 @@ The Chinese-language UI is bundled locally with no CDN dependencies. It binds on
 
 Web requests are capped at 1 MiB, except explicit Wiki plan approval and answer filing (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
 
-Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and planning hold the cross-process vault lock so active writes settle before their results become visible. Lock waits are bounded and cancellable; long planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
+Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and synchronous planning hold the cross-process vault lock so active writes settle before their results become visible. Durable jobs instead release it during model calls and validate again before storing results. Lock waits are bounded and cancellable; long synchronous planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
 
 ## 🔌 MCP Integration
 

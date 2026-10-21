@@ -60,11 +60,18 @@ function harness(route: (request: Request) => Response | Promise<Response>, perm
   const body = new Element('body'); body.root = true;
   const app = new Element('div'), notice = new Element('div'); body.append(app, notice);
   const requests: Request[] = [];
+  const timers = new Map<number, { callback: () => unknown; milliseconds: number }>();
+  const events = new Map<string, Set<() => unknown>>(); let nextTimer = 0;
+  const document = { body, hidden: false, getElementById: (id: string) => id === 'app' ? app : notice,
+    createElement: (tag: string) => new Element(tag), createTextNode: (text: string) => { const node = new Element('#text'); node.textContent = text; return node; },
+    querySelectorAll: (selector: string) => body.querySelectorAll(selector),
+    addEventListener: (type: string, listener: () => unknown) => { if (!events.has(type)) events.set(type, new Set()); events.get(type)!.add(listener); },
+    removeEventListener: (type: string, listener: () => unknown) => { events.get(type)?.delete(listener); },
+  };
   const context = createContext({
-    document: { body, getElementById: (id: string) => id === 'app' ? app : notice,
-      createElement: (tag: string) => new Element(tag), createTextNode: (text: string) => { const node = new Element('#text'); node.textContent = text; return node; },
-      querySelectorAll: (selector: string) => body.querySelectorAll(selector) },
-    setTimeout: () => 0, clearTimeout() {}, AbortController,
+    document,
+    setTimeout: (callback: () => unknown, milliseconds: number) => { const id = ++nextTimer; timers.set(id, { callback, milliseconds }); return id; },
+    clearTimeout: (id: number) => { timers.delete(id); }, AbortController,
     confirmResult: true, confirm: () => Boolean(context.confirmResult),
     fetch: async (url: string, init: { body: string; headers: Record<string, string> }) => {
       const request = { operation: url.replace('/api/', ''), data: JSON.parse(init.body), headers: init.headers };
@@ -74,7 +81,9 @@ function harness(route: (request: Request) => Response | Promise<Response>, perm
   runInContext(webScript, context);
   context.userPermissions = permissions;
   runInContext("principal={permissions:userPermissions,scopes:['user'],maxSensitivity:'internal'}; token='fixture-token'; navigate=async()=>{};", context);
-  return { body, app, context, requests, run: (code: string) => runInContext(code, context) };
+  return { body, app, context, requests, timers, document, events,
+    visibility: (hidden: boolean) => { document.hidden = hidden; for (const listener of events.get('visibilitychange') ?? []) listener(); },
+    run: (code: string) => runInContext(code, context) };
 }
 
 function deferred<T>() {
@@ -305,4 +314,119 @@ test('review UI: a late preview from a disconnected session cannot expose an app
   ui.run('logout()'); pending.resolve(success(preview)); await request;
   assert.equal(nodes(target).some(node => node.textContent === '批准并应用此计划'), false);
   assert.equal(ui.requests.some(value => value.operation === 'apply'), false);
+});
+
+const task = { id: 'wj-' + 'a'.repeat(32), status: 'queued', stage: 'queued', attempts: 0, createdAt: '2026-10-21T00:00:00.000Z',
+  updatedAt: '2026-10-21T00:00:00.000Z', startedAt: null, finishedAt: null, cancelRequested: false, error: null };
+async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
+
+test('Web jobs UI: explicit enqueue validates evidence and never starts execution automatically', async () => {
+  let jobs: object[] = [];
+  const ui = harness(request => request.operation === 'jobs-list' ? success(jobs) : (jobs = [task], success(task)));
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  assert.match(output.textContent, /排队不会自动执行/); assert.match(output.textContent, /还没有编译任务/);
+  const submit = find(output, node => node.tagName === 'form');
+  named(output, 'evidenceIds').value = 'ev-123456789abc,ev-123456789abc';
+  await submit.fire('submit');
+  assert.match(output.textContent, /不同的证据编号/); assert.equal(ui.requests.filter(r => r.operation === 'jobs-enqueue').length, 0);
+  named(output, 'evidenceIds').value = 'ev-123456789abc'; named(output, 'maxPages').value = '20';
+  await submit.fire('submit');
+  assert.deepEqual(ui.requests.find(r => r.operation === 'jobs-enqueue')!.data, { evidenceIds: ['ev-123456789abc'], maxPages: 20, confirm: true });
+  assert.match(output.textContent, /已保存，尚未执行/);
+  assert.equal(ui.requests.some(r => ['jobs-run', 'jobs-apply', 'ingest', 'apply'].includes(r.operation)), false);
+  assert.ok(button(output, '执行一次'));
+  ui.run('pageCleanup()');
+});
+
+test('Web jobs UI: repeated start clicks send once and failure warns before any retry', async () => {
+  const pending = deferred<Response>();
+  const ui = harness(request => request.operation === 'jobs-list' ? success([task]) : pending.promise);
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  const run = button(output, '执行一次');
+  const first = run.fire('click'); await run.fire('click');
+  assert.equal(ui.requests.filter(r => r.operation === 'jobs-run').length, 1);
+  assert.deepEqual(ui.requests.find(r => r.operation === 'jobs-run')!.data, { id: task.id, confirm: true });
+  pending.resolve(failure('LOCK_TIMEOUT')); await first;
+  assert.match(ui.body.textContent, /请先刷新确认状态/);
+  assert.equal(run.disabled, false);
+  assert.equal(ui.requests.filter(r => r.operation === 'jobs-run').length, 1);
+  ui.run('pageCleanup()');
+});
+
+test('Web jobs UI: polling is non-overlapping, pauses when hidden and stops after navigation/logout', async () => {
+  let result: Response | Promise<Response> = success([task]);
+  const ui = harness(() => result);
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  assert.equal(ui.requests.length, 1);
+  const originalAction = button(output, '执行一次'); await button(output, '刷新状态').fire('click');
+  assert.equal(button(output, '执行一次'), originalAction, 'unchanged polling must preserve the focused action element');
+  const scheduled = [...ui.timers].find(([, timer]) => timer.milliseconds === 2000)!;
+  assert.ok(scheduled);
+  const pending = deferred<Response>(); result = pending.promise;
+  ui.timers.delete(scheduled[0]); scheduled[1].callback();
+  await button(output, '刷新状态').fire('click');
+  assert.equal(ui.requests.length, 3, 'a pending poll must not overlap another list request');
+  ui.visibility(true); pending.resolve(success([{ ...task, status: 'ready', stage: 'finished' }])); await settle();
+  assert.equal(ui.timers.size, 0);
+  assert.equal(nodes(output).some(node => node.tagName === 'button' && node.textContent === '查看变更与审核'), false, 'hidden late data is not rendered');
+  result = success([{ ...task, status: 'ready', stage: 'finished' }]); ui.visibility(false); await settle();
+  assert.ok(button(output, '查看变更与审核'));
+  ui.run('pageCleanup(); generation++');
+  assert.equal(ui.events.get('visibilitychange')!.size, 0);
+  assert.equal([...ui.timers.values()].some(timer => timer.milliseconds === 2000), false);
+  const before = ui.requests.length; ui.visibility(false); await settle(); assert.equal(ui.requests.length, before);
+  ui.run('logout()'); assert.equal(ui.run('token'), '');
+});
+
+test('Web jobs UI: review uses the same displayed proof, blocks blind reapproval and distinguishes applied outcome', async () => {
+  const signed = { ...plan, proof: 'b'.repeat(64) }; let allow = false;
+  const ui = harness(request => request.operation === 'jobs-list' ? success([{ ...task, status: 'ready', stage: 'finished' }])
+    : request.operation === 'jobs-review' ? success({ plan: signed, preview })
+    : allow ? success({ commit: 'abcdef123456' }) : failure('VALIDATION_FAILED'));
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  await button(output, '查看变更与审核').fire('click');
+  const dialog = find(ui.body, node => node.tagName === 'dialog');
+  assert.match(dialog.textContent, /修改前.*修改后/s); assert.equal(nodes(dialog).some(node => node.tagName === 'script'), false);
+  await button(dialog, '批准并应用此任务计划').fire('click');
+  assert.deepEqual(ui.requests.find(r => r.operation === 'jobs-apply')!.data, { id: task.id, proof: signed.proof, confirm: true });
+  assert.equal(nodes(dialog).some(node => node.textContent === '批准并应用此任务计划'), false);
+  assert.match(dialog.textContent, /未确认的结果请先检查历史/);
+  allow = true; await button(dialog, '重新预览当前计划').fire('click');
+  await button(dialog, '批准并应用此任务计划').fire('click');
+  assert.match(dialog.textContent, /本次批准已完成.*abcdef123456/s);
+  assert.equal(ui.requests.some(r => r.operation === 'apply' || r.operation === 'preview'), false, 'must not substitute a generic wider-authority vault');
+  ui.run('pageCleanup()'); assert.equal(dialog.isConnected, false);
+});
+
+test('Web jobs UI: late preview cannot expose approval after leaving, and readers have no mutation controls', async () => {
+  const pending = deferred<Response>();
+  const ui = harness(request => request.operation === 'jobs-list' ? success([{ ...task, status: 'ready', stage: 'finished' }]) : pending.promise);
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  const opening = button(output, '查看变更与审核').fire('click');
+  const old = find(ui.body, node => node.tagName === 'dialog');
+  ui.run('pageCleanup(); generation++'); pending.resolve(success({ plan, preview })); await opening;
+  assert.equal(old.isConnected, false); assert.equal(nodes(old).some(node => node.textContent === '批准并应用此任务计划'), false);
+  const reader = harness(request => request.operation === 'jobs-list' ? success([{ ...task, status: 'ready', stage: 'finished' }]) : success({ plan, preview }), ['read']);
+  const view = await reader.run('jobs()') as Element; reader.app.append(view);
+  assert.equal(nodes(view).some(node => node.tagName === 'form'), false);
+  for (const label of ['执行一次', '取消任务', '重新排队', '删除任务']) assert.equal(nodes(view).some(node => node.textContent === label), false);
+  await button(view, '查看变更与审核').fire('click');
+  assert.match(reader.body.textContent, /当前身份没有审核权限/);
+  assert.equal(nodes(reader.body).some(node => node.textContent === '批准并应用此任务计划'), false);
+  reader.run('pageCleanup()');
+});
+
+test('Web jobs UI: cancellation state, retry limits, filtering and safe list errors remain visible', async () => {
+  const ui = harness(() => success([{ ...task, status: 'failed', stage: 'finished', attempts: 3, error: { code: 'DEPENDENCY_UNAVAILABLE', reason: 'deadline' } },
+    { ...task, id: 'wj-' + 'c'.repeat(32), status: 'running', stage: 'validating', cancelRequested: true }]));
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  assert.match(output.textContent, /达到本次执行时限/); assert.match(output.textContent, /等待执行进程停止/);
+  assert.equal(nodes(output).some(node => node.tagName === 'button' && ['重新排队', '取消任务'].includes(node.textContent)), false);
+  const filter = named(output, 'job-status'); filter.value = 'ready'; await filter.fire('change');
+  assert.match(output.textContent, /没有符合此状态/);
+  ui.run('pageCleanup()');
+  const failed = harness(() => failure('ENCRYPTION_KEY_UNAVAILABLE'));
+  const target = await failed.run('jobs()') as Element; failed.app.append(target);
+  assert.match(target.textContent, /未提供解密密钥/); assert.ok(button(target, '重新读取任务'));
+  failed.run('pageCleanup()');
 });

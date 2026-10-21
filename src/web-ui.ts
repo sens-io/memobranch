@@ -66,6 +66,8 @@ summary { cursor: pointer; font-weight: 600; margin-bottom: 15px; color: #d6e3ff
 .sidebar nav button[aria-current=page]::before { content: ''; position: absolute; inset: 10px auto 10px -1px; width: 3px; border-radius: 3px; background: #83a4ff; }
 .sidebar nav button[data-page=wiki][aria-current=page] { background: #292044; border-color: #7560a8; }
 .sidebar nav button[data-page=wiki][aria-current=page]::before { background: var(--violet); }
+.sidebar nav button[data-page=jobs][aria-current=page] { background: #292044; border-color: #7560a8; }
+.sidebar nav button[data-page=jobs][aria-current=page]::before { background: var(--violet); }
 .nav-index { font: 11px var(--mono); margin-right: 18px; color: #8fa7d8; }
 .sidebar footer { margin-top: auto; padding-top: 28px; overflow-wrap: anywhere; font-size: 12px; color: #afbfdd; border-top: 1px solid #223454; }
 .sidebar footer .eyebrow { padding: 0; color: #89a0cb; margin-bottom: 5px; }
@@ -169,6 +171,23 @@ dialog .meta { font-size: 11px; color: #a9bddf; }
 .retrieval-hit dd { margin: 0; font-variant-numeric: tabular-nums; color: #d6e4ff; }
 .correction { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
 .correction h3 { margin-bottom: 8px; color: #cab6ff; }
+.job-board { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(265px, 1fr); gap: 20px; align-items: start; }
+.job-row { padding: 22px 0; border-top: 1px solid var(--line); min-width: 0; }
+.job-row h3 { margin: 0 0 8px; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.job-row .actions { margin-top: 14px; }
+.job-row .meta { font-size: 12px; color: var(--muted); }
+.job-status { display: inline-block; border-radius: 20px; border: 1px solid #536b93; padding: 3px 11px; font-size: 12px; color: #c9d8f4; }
+.job-status.running { color: #d4bfff; background: #2a204a; border-color: #8164b7; }
+.job-status.ready, .job-status.duplicate { color: #90f1d6; background: #112f32; border-color: #347a71; }
+.job-status.failed, .job-status.cancelled { color: #ffc0ca; background: #351f2e; border-color: #8b4d60; }
+.job-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 17px 0; }
+.job-stages span { border-top: 2px solid #415371; padding-top: 9px; color: var(--muted); font-size: 11px; }
+.job-stages span.current { border-color: var(--violet); color: #dccdff; }
+.job-queue-note { border-left: 3px solid var(--violet); padding: 9px 15px; background: #211b39; border-radius: 0 6px 6px 0; }
+.job-applied { color: #90f1d6; border: 1px solid #347a71; background: #112f32; padding: 16px; border-radius: 8px; overflow-wrap: anywhere; }
+.job-submit .forms { grid-template-columns: minmax(0, 1fr); }
+.job-submit .actions button { width: 100%; }
+@media (max-width: 1100px) { .job-board { grid-template-columns: minmax(0, 1fr); } }
 @keyframes pulse { 50% { opacity: .55; } }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 @media (min-width: 701px) and (max-width: 1050px) {
@@ -227,10 +246,10 @@ export const webScript = String.raw`
 'use strict';
 const app = document.getElementById('app');
 const notice = document.getElementById('notice');
-let token = '', principal = null, vaultName = '', page = 'overview', generation = 0, session = 0, toastTimer;
+let token = '', principal = null, vaultName = '', page = 'overview', generation = 0, session = 0, toastTimer, pageCleanup = () => {};
 const requests = new Set();
-const pages = [['overview','总览','Overview'],['records','记忆库','Memory library'],['review','审核队列','Review queue'],['wiki','LLM Wiki','Knowledge wiki'],['settings','配置','Configuration'],['operations','运维记录','Operations']];
-const descriptions = {overview:'让每一条记忆有据可查，让知识持续生长。',records:'保存原始证据，浏览经过审核的长期记忆。原始资料不会被覆盖。',review:'让人决定方向。检查候选内容与来源，再将其纳入正式知识。',wiki:'摄取、查询、维护各司其职。所有写回都需要单独确认。',settings:'调整知识管理策略。密钥、租户与身份仍由启动环境管理。',operations:'检查健康状态、查看 Git 历史，或明确发起维护与同步。'};
+const pages = [['overview','总览','Overview'],['records','记忆库','Memory library'],['review','审核队列','Review queue'],['wiki','LLM Wiki','Knowledge wiki'],['jobs','编译任务','Compilation jobs'],['settings','配置','Configuration'],['operations','运维记录','Operations']];
+const descriptions = {overview:'让每一条记忆有据可查，让知识持续生长。',records:'保存原始证据，浏览经过审核的长期记忆。原始资料不会被覆盖。',review:'让人决定方向。检查候选内容与来源，再将其纳入正式知识。',wiki:'摄取、查询、维护各司其职。所有写回都需要单独确认。',jobs:'编译进度加密保存在本机。执行、重试与批准，都由你明确决定。',settings:'调整知识管理策略。密钥、租户与身份仍由启动环境管理。',operations:'检查健康状态、查看 Git 历史，或明确发起维护与同步。'};
 function el(tag, cls, text){const n=document.createElement(tag);if(cls){n.className=cls;if(cls.split(' ').includes('loading'))n.setAttribute('role','status');if(cls.split(' ').includes('error'))n.setAttribute('role','alert');}if(text!==undefined)n.textContent=String(text);return n;}
 function button(label,action,cls=''){const b=el('button',cls,label);b.type='button';b.addEventListener('click',action);return b;}
 function can(permission){return principal && (principal.permissions.includes('admin')||principal.permissions.includes(permission));}
@@ -241,19 +260,20 @@ function card(title,description){const c=el('section','card');if(title)c.append(
 function tag(value){return el('span','tag '+(typeof value==='string'&&/^[a-z-]+$/.test(value)?value:''),value);}
 function stamp(value){return value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'—';}
 function split(value){return value.split(/[,\n]/).map(s=>s.trim()).filter(Boolean);}
-async function api(operation,data={}){
+async function api(operation,data={},signal){
  const controller=new AbortController(), epoch=session;requests.add(controller);
+ const abort=()=>controller.abort();if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
  try{const response=await fetch('/api/'+operation,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(data),signal:controller.signal,cache:'no-store'});
- const json=await response.json();if(epoch!==session)throw Error('会话已结束');
+ const json=await response.json();if(epoch!==session)throw Error('会话已结束');if(controller.signal.aborted)throw Error('读取已停止');
  if(!response.ok){const code=json.error?.code||'REQUEST_FAILED';const hint=code==='AUTHORIZATION_DENIED'?'权限不足，或访问令牌已失效':code==='VALIDATION_FAILED'?'输入无效或数据版本已变化，请刷新后核对':code==='OPERATION_CANCELLED'?'操作已取消；请刷新确认状态后再操作':code==='DEPENDENCY_UNAVAILABLE'?'模型服务不可用，请检查启动环境的模型配置':code==='ENCRYPTION_KEY_UNAVAILABLE'?'未提供解密密钥，请检查启动环境':json.error?.message||code;
  throw Error(hint+' ['+code+']'+(json.error?.committed?'；已完成提交：'+JSON.stringify(json.error.committed):''));}return json.result;
- }finally{requests.delete(controller);}
+ }finally{requests.delete(controller);signal?.removeEventListener('abort',abort);}
 }
-function logout(){session++;generation++;for(const c of requests)c.abort();token='';principal=null;vaultName='';notice.textContent='';document.querySelectorAll('dialog').forEach(d=>d.remove());login();}
+function logout(){session++;generation++;pageCleanup();pageCleanup=()=>{};for(const c of requests)c.abort();token='';principal=null;vaultName='';notice.textContent='';document.querySelectorAll('dialog').forEach(d=>d.remove());login();}
 function brandLogo(){const image=el('img','brand-logo');image.src='/assets/logo.png';image.alt='';image.width=40;image.height=40;return image;}
 function login(){app.replaceChildren();const box=el('main','login');const brand=el('div','brand');brand.append(brandLogo(),el('span','','MemoBranch'));const story=el('section','login-story');story.append(brand,el('div','section-number','LOCAL KNOWLEDGE WORKBENCH'),el('h1','','知识，留在你手中。'),el('p','','把对话变成有来源、可审核、可追溯的长期知识。'));const principles=el('div','login-principles');['Git 可追溯','来源可核验','本机优先'].forEach(text=>principles.append(el('span','',text)));story.append(principles);const access=el('section','login-access');access.append(el('div','section-number','SECURE LOCAL SESSION'),el('h2','','连接工作台'),el('p','','输入启动命令显示的访问令牌，连接本机记忆库。'));const form=el('form');const label=el('label','','访问令牌');const input=el('input');input.type='password';input.autocomplete='off';input.required=true;input.placeholder='粘贴终端中的 token';label.append(input);const submit=el('button','primary','连接工作台 →');submit.type='submit';const error=el('div');form.append(label,submit,error);form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;token=input.value.trim();input.value='';error.replaceChildren();try{const data=await api('session');principal=data.principal;vaultName=data.name;page='overview';shell();await navigate(page);}catch(e){token='';error.append(el('p','error',e.message));}finally{submit.disabled=false;}});access.append(form,el('small','','仅监听 127.0.0.1 · 令牌仅保存在当前页面内存 · 重启服务后失效'));box.append(story,access);app.append(box);input.focus();}
 function shell(){app.replaceChildren();const layout=el('div','layout'),side=el('aside','sidebar'),brand=el('div','brand');brand.append(brandLogo(),el('span','','MemoBranch'));side.append(brand,el('div','eyebrow','YOUR KNOWLEDGE, BRANCHED.'));const nav=el('nav');nav.setAttribute('aria-label','主导航');pages.forEach(([key,title],i)=>{const b=button('',()=>navigate(key));b.dataset.page=key;b.append(el('span','nav-index',String(i+1).padStart(2,'0')),document.createTextNode(title));nav.append(b);});side.append(nav);const foot=el('footer');foot.append(el('div','eyebrow','OPERATOR'),el('div','',principal.name),button('断开连接',logout));side.append(foot);const work=el('div','workspace'),top=el('header','topbar');top.append(el('span','',vaultName));const online=el('span','online');online.append(el('span','dot'),document.createTextNode('本机连接 · Git 原生'));top.append(online);work.append(top,el('main','content'));layout.append(side,work);app.append(layout);}
-async function navigate(key){page=key;const current=++generation;document.querySelectorAll('[data-page]').forEach(b=>{if(b.dataset.page===key)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});const main=app.querySelector('main.content');if(!main)return;main.replaceChildren(el('div','loading','正在读取授权范围内的数据…'));try{const content=await ({overview,records:()=>records('memories'),review:()=>records('candidates'),wiki,settings,operations}[key])();if(current!==generation)return;const head=el('header','page-head'),left=el('div');left.append(el('div','section-number',pages.find(p=>p[0]===key)[2].toUpperCase()),el('h1','',pages.find(p=>p[0]===key)[1]),el('p','',descriptions[key]));head.append(left);main.replaceChildren(head,content);}catch(e){if(current!==generation)return;main.replaceChildren(el('div','error',e.message),button('重新读取',()=>navigate(key)));}}
+async function navigate(key){pageCleanup();pageCleanup=()=>{};page=key;const current=++generation;document.querySelectorAll('[data-page]').forEach(b=>{if(b.dataset.page===key)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});const main=app.querySelector('main.content');if(!main)return;main.replaceChildren(el('div','loading','正在读取授权范围内的数据…'));try{const content=await ({overview,records:()=>records('memories'),review:()=>records('candidates'),wiki,jobs,settings,operations}[key])();if(current!==generation)return;const head=el('header','page-head'),left=el('div');left.append(el('div','section-number',pages.find(p=>p[0]===key)[2].toUpperCase()),el('h1','',pages.find(p=>p[0]===key)[1]),el('p','',descriptions[key]));head.append(left);main.replaceChildren(head,content);}catch(e){if(current!==generation)return;main.replaceChildren(el('div','error',e.message),button('重新读取',()=>navigate(key)));}}
 function field(name,title,type='text',value='',options){const label=el('label','',title),input=el(type==='textarea'?'textarea':options?'select':'input');input.name=name;if(options){options.forEach(o=>{const option=el('option','',Array.isArray(o)?o[1]:o);option.value=Array.isArray(o)?o[0]:o;input.append(option);});}else if(type!=='textarea')input.type=type;if(type==='checkbox')input.checked=Boolean(value);else input.value=String(value??'');if(type==='number')input.step='any';if(type!=='checkbox')input.required=true;label.append(input);return {label,input};}
 function form(fields,label,action){const wrapper=el('div'),f=el('form','forms');const inputs={};fields.forEach(spec=>{const [name,title,type='text',value='',options,optional=false]=spec;const item=field(name,title,type,value,options);if(type==='textarea')item.label.classList.add('wide');if(optional)item.input.required=false;inputs[name]=item.input;f.append(item.label);});const actions=el('div','actions wide'),submit=el('button','primary',label);submit.type='submit';actions.append(submit);const output=el('div','wide');f.append(actions);wrapper.append(f,output);f.addEventListener('submit',async e=>{e.preventDefault();e.stopPropagation();if(submit.disabled)return;const values={};for(const [key,input] of Object.entries(inputs))values[key]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;submit.disabled=true;submit.textContent='处理中…';output.replaceChildren();try{const result=await action(values,output);if(result!==undefined)output.append(pretty(result));}catch(e){output.append(el('div','error',e.message));}finally{submit.disabled=false;submit.textContent=label;}});return wrapper;}
 function classifications(){const levels=['public','internal','sensitive','secret'].slice(0,['public','internal','sensitive','secret'].indexOf(principal.maxSensitivity)+1);return [['scope','作用域','text',principal.scopes[0],principal.scopes],['sensitivity','敏感级别','text',levels.includes('internal')?'internal':'public',levels]];}
@@ -273,6 +293,92 @@ function versionPanel(label,version){const panel=el('section','version-panel');p
 function renderPlanPreview(target,data){const summary=el('div','review-summary');summary.append(el('strong','','本次涉及 '+data.pages.length+' 页'),el('p','','操作：'+({compile:'摄取资料',file:'保存查询成果',repair:'修订知识'}[data.kind]||data.kind)));target.append(summary);for(const item of data.pages){const details=el('details','plan-page');details.open=true;const operation={create:'新建',update:'更新',unchanged:'无变化'}[item.operation]||item.operation;details.append(el('summary','',operation+' · '+item.title+' · '+item.pageType),el('p','meta muted',item.key));const comparison=el('div','comparison');comparison.append(versionPanel('修改前',item.before),versionPanel('修改后',item.after));details.append(comparison);const changes=el('details');changes.append(el('summary','','正文差异 · 新增 '+item.diff.added+' 行 / 删除 '+item.diff.removed+' 行'));const diff=el('div','diff');diff.setAttribute('aria-label','正文逐行差异');for(const line of item.diff.lines){const prefix={added:'+ ',removed:'− ',context:'  ',omitted:'… '}[line.kind]||'';diff.append(el('div','diff-line '+line.kind,prefix+line.text));}changes.append(diff);if(item.diff.truncated)changes.append(el('p','muted','差异较长，部分行已省略；上方保留修改前后全文。'));details.append(changes);target.append(details);}const affected=el('details');affected.open=true;affected.append(el('summary','','受影响页面（'+data.affectedPageKeys.length+'）'),textList(data.affectedPageKeys,'没有受影响页面'));target.append(affected);}
 async function showPlan(container,result){if(!result?.plan){container.append(pretty(result));return;}const plan=JSON.parse(JSON.stringify(result.plan)),epoch=session,preview=card('待审核变更计划','尚未写入正式知识。请逐页检查来源、内容与影响；版本变化后需要重新生成。'),content=el('div'),approval=el('div','actions');const raw=el('details');raw.append(el('summary','','完整签名计划'),pretty(plan));preview.append(content,raw,approval);container.append(preview);async function load(){content.replaceChildren(el('div','loading inline-loading','正在校验签名、权限与页面版本，并读取修改前后内容…'));content.setAttribute('aria-busy','true');approval.replaceChildren();try{const data=await api('preview',{plan});if(epoch!==session)return;content.replaceChildren();renderPlanPreview(content,data);if(can('review'))approval.append(actionButton('批准并应用此计划','apply',{plan},()=>{const dialog=preview.closest('dialog');if(dialog)dialog.close();}));else approval.append(el('p','','当前身份没有审核权限，不能应用计划。'));}catch(e){if(epoch!==session)return;content.replaceChildren(el('div','error',e.message),el('p','muted','预览校验未通过，暂时不能应用。页面可能已经变化，请核对后重新生成计划。'),button('重新校验此计划',load));}finally{content.removeAttribute('aria-busy');}}await load();}
 function retrievalSearch(){const section=card('检索与匹配说明','搜索正式记忆和 Wiki 页面，查看系统实际使用的匹配分数。点击结果可查看当前版本与来源。');section.append(form([['query','要查找的内容','textarea']],'检索并查看说明',async(values,output)=>{const epoch=session;output.append(el('div','loading inline-loading','正在检索授权范围内的内容…'));let result;try{result=await api('explain',{query:values.query});}catch(e){if(epoch===session)output.replaceChildren(el('div','error',e.message));return;}if(epoch!==session)return;output.replaceChildren();const explanation=result.explanation,note=el('div','retrieval-note'),semanticLabel={disabled:'未启用',ready:'可用',degraded:'暂不可用，使用词法匹配'}[result.semanticStatus]||result.semanticStatus;note.append(el('strong','',explanation.strategy==='hybrid'?'词法与语义混合检索':'词法检索'),el('p','','语义检索状态：'+semanticLabel+' · '+(result.indexRebuilt?'本次已重建检索索引':'使用现有检索索引')));if(explanation.notes.length)note.append(textList(explanation.notes,''));output.append(note);if(!result.hits.length){output.append(empty('没有匹配结果。可换用页面标题、关键词或更具体的内容。'));return;}for(const hit of result.hits){const row=el('section','retrieval-hit');row.append(recordButton(hit),el('p','meta muted',hit.path));const signal=explanation.signals.find(value=>value.id===hit.id&&value.path===hit.path),scores=el('dl');[['综合分数',signal?signal.score:hit.score],['词法分数',signal?.lexicalScore],['语义分数',signal?.semanticScore]].forEach(([label,value])=>{const pair=el('div');pair.append(el('dt','',label),el('dd','',typeof value==='number'&&Number.isFinite(value)?String(value):'未参与'));scores.append(pair);});row.append(scores);output.append(row);}}));return section;}
+
+const jobLabels={queued:'等待执行',running:'正在编译',ready:'计划待审核',duplicate:'已摄取，无需重编',failed:'执行失败',cancelled:'已取消'};
+const jobReasons={'worker-interrupted':'执行进程已退出；需要明确重试','context-erased':'相关资料已删除，旧计划不可再用',deadline:'达到本次执行时限',cancelled:'已取消本次任务','compilation-failed':'编译或结果校验失败'};
+async function jobs(){
+ const epoch=session,current=generation,out=el('div'),lifetime=new AbortController(),dialogs=new Set();
+ let closed=false,timer,inFlight=false,refreshAgain=false,rows=[],rendered='';
+ const valid=()=>!closed&&epoch===session&&current===generation;
+ const visible=()=>valid()&&!document.hidden;
+ const stats=el('div','stats'),board=el('div','job-board'),list=card('本机编译记录','这里只显示当前身份可见的任务；编译完成不代表已批准。'),listing=el('div'),feedback=el('p','meta muted');
+ feedback.setAttribute('role','status');
+ const filter=field('job-status','任务状态','text','all',[['all','全部任务'],...Object.entries(jobLabels)]).input;
+ filter.setAttribute('aria-label','筛选任务状态');
+ const refreshButton=button('刷新状态',()=>refresh()),toolbar=el('div','toolbar');toolbar.append(filter,refreshButton);list.append(toolbar,feedback,listing);
+ function close(){if(closed)return;closed=true;clearTimeout(timer);lifetime.abort();document.removeEventListener('visibilitychange',visibility);for(const dialog of dialogs)dialog.remove();dialogs.clear();}
+ pageCleanup=close;
+ function visibility(){clearTimeout(timer);if(visible())void refresh();}
+ document.addEventListener('visibilitychange',visibility);
+ function action(label,operation,job,message){
+  const control=button(label,async()=>{if(control.disabled||!valid()||!confirm(message))return;control.disabled=true;
+   try{const result=await api(operation,{id:job.id,confirm:true});if(!valid())return;
+    toast(operation==='jobs-run'?'执行请求已接收；以任务状态为准':operation==='jobs-retry'?'已重新排队；点击执行才会调用模型':'任务操作已保存');await refresh();return result;
+   }catch(e){if(valid())toast(e.message+'；请先刷新确认状态，再决定是否重试。');}
+   finally{control.disabled=false;}
+  },operation==='jobs-remove'?'danger':'');return control;
+ }
+ function render(){
+  stats.replaceChildren();[['等待执行',rows.filter(r=>r.status==='queued').length],['正在执行',rows.filter(r=>r.status==='running').length],['计划待审核',rows.filter(r=>r.status==='ready').length],['失败 / 取消',rows.filter(r=>r.status==='failed'||r.status==='cancelled').length]].forEach(([label,count])=>{const item=el('div','stat');item.append(el('span','muted',label),el('strong','',count),el('small','','当前身份可见'));stats.append(item);});
+  const selected=[...rows].reverse().filter(job=>filter.value==='all'||job.status===filter.value),fingerprint=JSON.stringify([filter.value,selected]);
+  if(fingerprint===rendered)return;rendered=fingerprint;listing.replaceChildren();
+  if(!selected.length)listing.append(empty(rows.length?'没有符合此状态的任务。':'还没有编译任务。提交已有证据编号后，再明确执行。'));
+  for(const job of selected){
+   const row=el('article','job-row'),head=el('div','row-head');head.append(el('h3','',job.id),el('span','job-status '+job.status,jobLabels[job.status]||job.status));row.append(head);
+   row.append(el('p','meta','尝试 '+job.attempts+' / 3 · 创建 '+stamp(job.createdAt)+' · 更新 '+stamp(job.updatedAt)));
+   const stages=el('div','job-stages');stages.setAttribute('aria-label','真实编译阶段');
+   const active=job.status==='ready'?3:job.status==='queued'?0:job.stage==='compiling'?1:job.stage==='validating'?2:-1;
+   ['等待执行','模型编译','结果校验','等待审核'].forEach((label,index)=>stages.append(el('span',index===active?'current':'',label)));row.append(stages);
+   if(job.cancelRequested&&job.status==='running')row.append(el('p','muted','取消请求已保存，等待执行进程停止…'));
+   if(job.error)row.append(el('p','error',(jobReasons[job.error.reason]||'任务未完成')+' · '+job.error.code));
+   const actions=el('div','actions');
+   if(can('write')){
+    if(job.status==='queued')actions.append(action('执行一次','jobs-run',job,'确认调用模型编译这个任务？关闭网页不会停止已接收的执行；不会自动批准知识。'));
+    if(['queued','running','ready'].includes(job.status)&&!job.cancelRequested)actions.append(action('取消任务','jobs-cancel',job,'确认取消这个任务并使其保留计划不可再用？已单独授权的应用操作不由此撤回。'));
+    if(['failed','cancelled'].includes(job.status)&&job.attempts<3)actions.append(action('重新排队','jobs-retry',job,'确认重新排队？不会自动执行；再次执行可能重复产生模型费用。'));
+    if(job.status!=='running')actions.append(action('删除任务','jobs-remove',job,'确认永久删除这个任务及计划密钥？正式 Wiki 页面和原始证据不受影响。'));
+   }
+   if(job.status==='ready')actions.append(button('查看变更与审核',()=>review(job.id),'primary'));
+   row.append(actions);listing.append(row);
+  }
+ }
+ async function refresh(){
+  if(!visible())return;if(inFlight){refreshAgain=true;return;}clearTimeout(timer);inFlight=true;refreshButton.disabled=true;feedback.textContent='正在读取已保存状态…';
+  try{const result=await api('jobs-list',{},lifetime.signal);if(!visible())return;rows=result;render();feedback.textContent='状态已更新 · '+rows.length+' / 100 个保留任务';}
+  catch(e){if(visible()){rendered='';feedback.textContent='状态读取失败';listing.replaceChildren(el('div','error',e.message),button('重新读取任务',()=>refresh()));}}
+  finally{inFlight=false;refreshButton.disabled=false;if(visible()){timer=setTimeout(()=>{if(out.isConnected)void refresh();else close();},refreshAgain?1000:2000);refreshAgain=false;}}
+ }
+ async function review(id){
+  if(!valid())return;const dialog=el('dialog'),head=el('div','dialog-head'),content=el('div'),approval=el('div','actions'),controller=new AbortController();
+  dialog.setAttribute('aria-label','审核编译任务');head.append(el('h2','','审核编译任务'),button('关闭',()=>dialog.close()));dialog.append(head,el('p','meta muted',id),content,approval);document.body.append(dialog);dialogs.add(dialog);
+  dialog.addEventListener('close',()=>{controller.abort();dialogs.delete(dialog);dialog.remove();});dialog.showModal();
+  const live=()=>valid()&&dialog.isConnected;
+  async function load(){
+   approval.replaceChildren();content.replaceChildren(el('div','loading inline-loading','正在重新校验任务计划、来源和页面版本…'));
+   try{const data=await api('jobs-review',{id},controller.signal);if(!live())return;content.replaceChildren();renderPlanPreview(content,data.preview);
+    const raw=el('details');raw.append(el('summary','','完整签名计划'),pretty(data.plan));content.append(raw);
+    if(!can('review')){approval.append(el('p','','当前身份没有审核权限，不能应用计划。'));return;}
+    const apply=button('批准并应用此任务计划',async()=>{
+     if(apply.disabled||!live()||!confirm('确认应用刚才预览的这个签名计划？将写入正式 Wiki 和 Git 历史。'))return;apply.disabled=true;
+     try{const result=await api('jobs-apply',{id,proof:data.plan.proof,confirm:true},controller.signal);if(!live())return;
+      content.replaceChildren(el('p','job-applied','本次批准已完成 · 提交 '+(result.commit||'无内容变化')));approval.replaceChildren();toast('已明确批准并应用计划');await refresh();
+     }catch(e){if(live())approval.replaceChildren(el('p','error',e.message+'；未确认的结果请先检查历史，勿重复批准。'),button('重新预览当前计划',load));}
+    },'primary');approval.append(apply);
+   }catch(e){if(live()){content.replaceChildren(el('div','error',e.message),el('p','muted','预览无效或任务已变化。请重新核对状态，不能直接批准。'));approval.append(button('重新预览当前计划',load));}}
+  }
+  await load();
+ }
+ filter.addEventListener('change',render);board.append(list);
+ if(can('write')){const submit=card('提交编译任务','选择已有证据；这里不会抓取新网址、自动执行或批准知识。');submit.classList.add('job-submit');
+  submit.append(form([['evidenceIds','证据编号（1–40 个，逗号或换行分隔）','textarea'],['maxPages','最多读取页面（1–40）','number',20]],'保存为待执行任务',async(values,output)=>{
+   if(!valid()||!confirm('确认加密保存这个编译任务？保存后仍需点击执行。'))return;
+   const ids=split(values.evidenceIds);if(!ids.length||ids.length>40||new Set(ids).size!==ids.length||ids.some(id=>!/^ev-[a-f0-9]{12,64}$/.test(id))||!Number.isInteger(values.maxPages)||values.maxPages<1||values.maxPages>40)throw Error('请填写 1–40 个不同的证据编号，页面上限为 1–40 的整数。');
+   let result;try{result=await api('jobs-enqueue',{evidenceIds:ids,maxPages:values.maxPages,confirm:true});}catch(e){if(valid())output.append(el('p','muted','保存结果未确认；请刷新任务列表后再决定是否重复提交。'));throw e;}
+   if(!valid())return;output.append(el('p','', '已保存，尚未执行 · '+result.id));toast('任务已保存；尚未调用模型');await refresh();
+  }));submit.append(el('p','muted','需要启动环境中的 AMEM_MASTER_KEY 和模型配置。重试最多三次，不保证模型费用只产生一次。'));board.append(submit);
+ }else board.append(card('只读任务视图','可查看当前身份的任务和计划；执行、取消、重试和删除需要 write 权限，批准需要 review 权限。'));
+ out.append(el('p','job-queue-note','排队不会自动执行。点击“执行一次”，或另行启动终端 worker；离开此页只停止刷新，不停止已接收的执行。'),stats,board);await refresh();return out;
+}
 async function wiki(){const catalog=await api('catalog'),out=el('div'),list=card('知识目录','页面保留来源、版本、关联与不确定性；点击打开原文。');if(!catalog.length)list.append(empty('知识目录为空。添加资料后，从下方生成摄取计划。'));catalog.forEach(row=>list.append(recordButton({...row,snippet:row.summary})));out.append(list);const grid=el('div','grid'),query=card('Query · 只读问答','使用实际读取的页面作答；不会自动保存答案。');query.append(form([['question','你的问题','textarea']],'查询 Wiki',async(values,output)=>{const result=await api('query',values);output.append(el('pre','',result.answer));const citations=el('div','actions');result.citations.forEach(c=>citations.append(button(c.key+' · v'+c.revision,()=>openDocument(c.id))));output.append(citations);if(result.uncertainty.length)output.append(el('p','','不确定性：'+result.uncertainty.join('；')));if(can('write')){const filing=el('details');filing.append(el('summary','','将此答案纳入知识（先生成计划）'),form([['title','保存标题'],['pageType','页面类型','text','query',['query','comparison']]],'生成保存计划',async(values,target)=>showPlan(target,await api('file',{...values,result}))));output.append(filing);}}));grid.append(query);if(can('write')){const ingest=card('Ingest · 摄取资料','输入证据 ID，编译为有来源的页面。需要配置 LLM 服务。');ingest.append(form([['evidenceIds','证据 ID（逗号分隔）','textarea']],'生成摄取计划',async(values,output)=>showPlan(output,await api('ingest',{evidenceIds:split(values.evidenceIds)}))));grid.append(ingest);}out.append(grid);if(can('maintain')){const lint=card('Lint · 检查与维护','结构检查不依赖模型。语义检查的建议不会自动生效。');lint.append(form([['semantic','同时执行语义检查（需模型）','checkbox',false]],'运行检查',async(values,output)=>{const result=await api('lint',values);output.append(pretty({...result,plans:undefined}));result.plans.forEach(plan=>showPlan(output,{plan}));}));out.append(lint);}return out;}
 async function settings(){const [current,rules]=await Promise.all([api('settings'),api('rules')]),out=el('div'),general=card('运行策略','保存会写入 Git。若配置已被其他窗口修改，本次保存会被拒绝。维护调度参数供 maintenance / serve 使用；web 本身不会启动后台维护。');const values=current.values;
  const fields=[['name','Vault 名称','text',values.name],['residentBudget','常驻记忆条数（1–500）','number',values.residentBudget],['minimumConfidence','最低置信度（0–1）','number',values.minimumConfidence],['minimumProcedureEvidence','流程所需证据数（1–100）','number',values.minimumProcedureEvidence]];

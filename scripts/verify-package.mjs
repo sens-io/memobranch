@@ -151,7 +151,8 @@ try {
       const job: WikiJobStatus = await vault.wikiEnqueue(input);
       const options: WikiJobRunOptions = { id: job.id, signal: new AbortController().signal, timeoutMs: 1000 };
       return { run: await vault.wikiRunJob(options), state: await vault.wikiJob(job.id), jobs: await vault.wikiJobs(),
-        plan: await vault.wikiJobPlan(job.id), preview: await vault.wikiPreviewJob(job.id), applied: await vault.wikiApplyJob(job.id), cancelled: await vault.wikiCancelJob(job.id),
+        plan: await vault.wikiJobPlan(job.id), preview: await vault.wikiPreviewJob(job.id), review: await vault.wikiReviewJob(job.id),
+        applied: await vault.wikiApplyJob(job.id, (await vault.wikiReviewJob(job.id)).plan.proof), cancelled: await vault.wikiCancelJob(job.id),
         retried: await vault.wikiRetryJob(job.id), removed: await vault.wikiRemoveJob(job.id) };
     }
   `);
