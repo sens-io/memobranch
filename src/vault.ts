@@ -15,7 +15,7 @@ import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityCo
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
-import { recordCommit, throwIfCancelled, withoutCancellation } from './operation.js';
+import { combineSignals, operationSignal, recordCommit, throwIfCancelled, withOperation, withoutCancellation } from './operation.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
 import { publicSettings, settingsRevision, settingsSchema } from './settings.js';
@@ -41,6 +41,8 @@ import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInpu
 import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
 import { WikiProof } from './wiki-proof.js';
 import type { WikiPageMeta } from './wiki-types.js';
+import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions } from './wiki-snapshot.js';
+import { builtinWikiRuleId } from './wiki-schema.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -128,6 +130,88 @@ export class MemoryVault {
   }
 
   async wikiCatalog() { return this.wikiEngine().catalog(); }
+  async wikiSnapshot(options: WikiSnapshotOptions): Promise<WikiSnapshot> {
+    authorize(this.principal, 'read');
+    const input = snapshotOptions(options);
+    const action = () => this.settledRead<WikiSnapshot>(async () => {
+      const config = await this.config();
+      const erasures = join(this.root, '.amem', 'erasures');
+      if (existsSync(erasures)) {
+        const state = await lstat(erasures);
+        if (!state.isDirectory() || state.isSymbolicLink() || (await readdir(erasures)).some(name => name.endsWith('.json'))) {
+          throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending erasure before reading a Wiki snapshot');
+        }
+      }
+      const reader = await snapshotReader(this.git, input.commit, config);
+      const selection = { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true };
+      const available = (await this.wikiEngine().referencePages(selection)).filter(page => page.meta.type !== 'memory' || factEffectiveAt(page.meta));
+      const keyOf = (page: MarkdownDocument<MemoryMeta | WikiPageMeta>) => page.meta.type === 'memory' ? `legacy:${page.meta.id}` : page.meta.key;
+      const current = new Map(available.map(page => [keyOf(page), page]));
+      const documents = new Map<string, MarkdownDocument<Record<string, unknown>>>();
+      const unavailable = () => new AgentMemoryError('NOT_FOUND', 'Wiki snapshot or a required dependency is unavailable');
+      const read = async (path: string) => {
+        if (documents.has(path)) return documents.get(path)!;
+        assertSnapshotPath(path);
+        // Authorize the current envelope before reading/decrypting its old blob.
+        const projection = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, path), 'utf8'));
+        authorize(this.principal, 'read', { scope: scopeOf(projection.meta), sensitivity: sensitivityOf(projection.meta), tenantId: config.tenantId });
+        if (projection.meta.sensitivity === 'sensitive' && !selection.includeSensitive || projection.meta.sensitivity === 'secret' && !selection.includeSecret) throw unavailable();
+        const live = await this.readDocument<Record<string, unknown>>(path);
+        const parsed = parseMarkdown<Record<string, unknown>>(await reader.read(path));
+        authorize(this.principal, 'read', { scope: scopeOf(parsed.meta), sensitivity: sensitivityOf(parsed.meta), tenantId: config.tenantId });
+        for (const meta of [live.meta, parsed.meta]) {
+          if (meta.sensitivity === 'sensitive' && input.includeSensitive !== true || meta.sensitivity === 'secret' && input.includeSecret !== true) throw unavailable();
+        }
+        const old = await this.materializeDocument<Record<string, unknown>>(path, parsed, { config });
+        authorize(this.principal, 'read', { scope: scopeOf(old.meta), sensitivity: sensitivityOf(old.meta), tenantId: config.tenantId });
+        if (old.meta.id !== live.meta.id || old.meta.type !== live.meta.type) throw unavailable();
+        if (old.meta.type === 'evidence' && (old.meta.sha256 !== live.meta.sha256 || old.body !== live.body)) throw unavailable();
+        documents.set(path, old);
+        return old;
+      };
+      const pending = [...input.pageKeys], visited = new Set<string>();
+      while (pending.length) {
+        throwIfCancelled();
+        const key = pending.shift()!;
+        if (visited.has(key)) continue;
+        if (visited.size >= 50) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Wiki snapshot exceeds 50 dependent pages');
+        visited.add(key);
+        const live = current.get(key);
+        if (!live) throw unavailable();
+        const page = await read(live.path);
+        if (keyOf(page as unknown as MarkdownDocument<MemoryMeta | WikiPageMeta>) !== key) throw unavailable();
+        const meta = page.meta as unknown as MemoryMeta | WikiPageMeta;
+        if (meta.type === 'memory' && !factEffectiveAt(meta)) throw unavailable();
+        for (const path of meta.evidence) await read(path);
+        if (meta.type === 'wiki-page') {
+          pending.push(...meta.links, ...Object.keys(meta.dependencies));
+          for (const id of Object.keys(meta.rules)) if (id !== builtinWikiRuleId) await read(`wiki/.meta/${id}.md`);
+        }
+      }
+      const forbidden = async (): Promise<never> => { throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Wiki revision views are read-only'); };
+      const historic = new WikiEngine({ principal: this.principal, llm: this.llm, config: async () => config,
+        readSnapshot: (_permission, action) => action(),
+        read: async directory => [...documents.values()].filter(document => document.path.startsWith(`${directory}/`)),
+        scan: forbidden, catalogMatches: async () => true, sign: forbidden, verify: forbidden, write: forbidden, log: forbidden, mutate: forbidden });
+      const pages = await historic.referencePages(selection);
+      if (pages.length !== visited.size || pages.some(page => !visited.has(keyOf(page)))) throw unavailable();
+      await reader.finish();
+      const now = Date.now();
+      for (const page of [...pages, ...[...visited].map(key => current.get(key)!)]) {
+        if ((page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= now) || (page.meta.type === 'memory' && !factEffectiveAt(page.meta, now))) throw unavailable();
+      }
+      return { version: 1, kind: 'wiki-revision-view', commit: input.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
+        pages: pages.sort((a, b) => a.path.localeCompare(b.path)).map(page => ({ ...page, currentRevision: current.get(keyOf(page))!.meta.revision })),
+        sources: [...documents.values()].filter(document => document.meta.type === 'evidence').map(document => ({ id: String(document.meta.id), path: document.path, sha256: String(document.meta.sha256) })).sort((a, b) => a.path.localeCompare(b.path)),
+        rules: [...documents.values()].filter(document => document.meta.type === 'wiki-rules').map(document => ({ id: String(document.meta.id), revision: Number(document.meta.revision) }))
+          .concat(pages.some(page => page.meta.type === 'wiki-page' && page.meta.rules[builtinWikiRuleId] === 1) ? [{ id: builtinWikiRuleId, revision: 1 }] : []).sort((a, b) => a.id.localeCompare(b.id)),
+        warnings: ['Historical committed content, not current advice or fact-effective history. Current access and lifecycle checks apply on every read.',
+          'This result is a local read-only view, not a share token, revocable offline export, backup or approval. Previously copied content cannot be recalled.'] };
+    });
+    if (!input.signal) return action();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, action); } finally { combined.dispose(); }
+  }
   async wikiRules() { return this.wikiEngine().rules(); }
   async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }
   async wikiMigrate() { return this.wikiEngine().migrate(); }
