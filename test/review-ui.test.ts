@@ -443,13 +443,17 @@ test('Web jobs UI: late preview cannot expose approval after leaving, and reader
 });
 
 test('Web jobs UI: cancellation state, retry limits, filtering and safe list errors remain visible', async () => {
-  const ui = harness(() => success([{ ...task, status: 'failed', stage: 'finished', attempts: 3, error: { code: 'DEPENDENCY_UNAVAILABLE', reason: 'deadline' } },
-    { ...task, id: 'wj-' + 'c'.repeat(32), status: 'running', stage: 'validating', cancelRequested: true }]));
+  let rows = [{ ...task, status: 'failed', stage: 'finished', attempts: 3, error: { code: 'DEPENDENCY_UNAVAILABLE', reason: 'deadline' } },
+    { ...task, id: 'wj-' + 'c'.repeat(32), status: 'running', stage: 'validating', cancelRequested: true }];
+  const ui = harness(() => success(rows));
   const output = await ui.run('jobs()') as Element; ui.app.append(output);
   assert.match(output.textContent, /达到本次执行时限/); assert.match(output.textContent, /等待执行进程停止/);
   assert.equal(nodes(output).some(node => node.tagName === 'button' && ['重新排队', '取消任务'].includes(node.textContent)), false);
   const filter = named(output, 'job-status'); filter.value = 'ready'; await filter.fire('change');
   assert.match(output.textContent, /没有符合此状态/);
+  rows = []; await button(output, '刷新状态').fire('click'); assert.match(output.textContent, /还没有编译任务/);
+  rows = [task]; await button(output, '刷新状态').fire('click');
+  assert.match(output.textContent, /没有符合此状态/); assert.doesNotMatch(output.textContent, /还没有编译任务/);
   ui.run('pageCleanup()');
   const failed = harness(() => failure('ENCRYPTION_KEY_UNAVAILABLE'));
   const target = await failed.run('jobs()') as Element; failed.app.append(target);

@@ -320,7 +320,7 @@ async function jobs(){
  }
  function render(){
   stats.replaceChildren();[['等待执行',rows.filter(r=>r.status==='queued').length],['正在执行',rows.filter(r=>r.status==='running').length],['计划待审核',rows.filter(r=>r.status==='ready').length],['失败 / 取消',rows.filter(r=>r.status==='failed'||r.status==='cancelled').length]].forEach(([label,count])=>{const item=el('div','stat');item.append(el('span','muted',label),el('strong','',count),el('small','','当前身份可见'));stats.append(item);});
-  const selected=[...rows].reverse().filter(job=>filter.value==='all'||job.status===filter.value),fingerprint=JSON.stringify([filter.value,selected]);
+  const selected=[...rows].reverse().filter(job=>filter.value==='all'||job.status===filter.value),fingerprint=JSON.stringify([filter.value,rows.length,selected]);
   if(fingerprint===rendered)return;rendered=fingerprint;
   const ids=new Set(selected.map(job=>job.id));for(const [id,cached]of rowCache){if(!ids.has(id)){cached.row.remove();rowCache.delete(id);}}
   if(!selected.length){listing.replaceChildren(empty(rows.length?'没有符合此状态的任务。':'还没有编译任务。提交已有证据编号后，再明确执行。'));return;}
