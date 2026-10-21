@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
 import { z } from 'zod';
@@ -100,12 +101,14 @@ export class MemoryVault {
   private activeTransaction: VaultTransaction | null = null;
   private activePermission: Permission | null = null;
   private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
+  private readonly readSnapshots = new AsyncLocalStorage<{ active: boolean }>();
 
   private wikiEngine(): WikiEngine {
     return new WikiEngine({
       principal: this.principal,
       llm: this.llm,
       config: () => this.config(),
+      readSnapshot: (permission, action) => this.settledRead(action, permission),
       read: (directory, permission, selection) => this.readDirectory<Record<string, unknown>>(directory, permission, selection),
       scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
       catalogMatches: () => this.wikiCatalogMatches(),
@@ -920,18 +923,28 @@ export class MemoryVault {
     const packed = packContext(blocks, { ...options, maxCharacters: Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters) });
     const documents = new Map([...residentMemories, ...recalled.map(item => item.document)].map(document => [document.meta.id, document]));
     const expected = packed.selected.map(({ id }) => documents.get(id)!);
-    const validate = () => this.settledRead(async () => {
-      const pages = new Map((await this.wikiEngine().recallPages(expected.filter(page => page.meta.type === 'wiki-page').map(page => page.meta.id), options))
-        .map(page => [page.meta.id, page]));
-      for (const before of expected) {
-        const current = before.meta.type === 'memory' ? await this.readDocument<MemoryMeta>(before.path) : pages.get(before.meta.id);
-        if (!current || current.meta.status !== 'active' || (current.meta.expiresAt && Date.parse(current.meta.expiresAt) <= Date.now())
-            || (current.meta.type === 'memory' && !factEffectiveAt(current.meta))
-            || sha256(JSON.stringify({ meta: current.meta, body: current.body })) !== sha256(JSON.stringify({ meta: before.meta, body: before.body }))) {
-          throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context changed or is no longer currently effective; ask again');
-        }
+    const assertCurrentTime = () => {
+      if (expected.some(page => (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now())
+          || (page.meta.type === 'memory' && !factEffectiveAt(page.meta)))) {
+        throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context is no longer currently effective; ask again');
       }
-    });
+    };
+    const validate = async () => {
+      await this.settledRead(async () => {
+        const pages = new Map((await this.wikiEngine().recallPages(expected.filter(page => page.meta.type === 'wiki-page').map(page => page.meta.id), options))
+          .map(page => [page.meta.id, page]));
+        for (const before of expected) {
+          const current = before.meta.type === 'memory' ? await this.readDocument<MemoryMeta>(before.path) : pages.get(before.meta.id);
+          if (!current || current.meta.status !== 'active' || (current.meta.expiresAt && Date.parse(current.meta.expiresAt) <= Date.now())
+              || (current.meta.type === 'memory' && !factEffectiveAt(current.meta))
+              || sha256(JSON.stringify({ meta: current.meta, body: current.body })) !== sha256(JSON.stringify({ meta: before.meta, body: before.body }))) {
+            throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context changed or is no longer currently effective; ask again');
+          }
+        }
+        assertCurrentTime();
+      });
+      assertCurrentTime();
+    };
     return { result: { text: packed.text, budget: packed.budget, truncated: packed.truncated,
       records: packed.selected.map(({ id, section }) => ({ id, section })) }, validate };
     });
@@ -1220,7 +1233,8 @@ export class MemoryVault {
       tenantId: config.tenantId,
     });
     if (this.cachedSearchIndex?.signature === signature) return this.cachedSearchIndex.value;
-    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path),
+      (permission, action) => this.settledRead(action, permission));
     this.cachedSearchIndex = { signature, value };
     return value;
   }
@@ -1694,15 +1708,27 @@ export class MemoryVault {
     return documents;
   }
 
-  private async settledRead<T>(action: () => Promise<T>): Promise<T> {
-    authorize(this.principal, 'read');
+  private async settledRead<T>(action: () => Promise<T>, permission: Permission = 'read'): Promise<T> {
+    authorize(this.principal, permission);
     await this.config(); // Reject absent vaults and foreign tenants before creating a lock.
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+    const checked = async () => {
+      throwIfCancelled();
       await this.config();
       if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
         throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
       }
       return action();
+    };
+    const existing = this.readSnapshots.getStore();
+    if (existing?.active) {
+      const result = await checked();
+      if (!existing.active) throw new AgentMemoryError('VALIDATION_FAILED', 'The enclosing read snapshot ended; retry the operation');
+      return result;
+    }
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const lease = { active: true };
+      try { return await this.readSnapshots.run(lease, checked); }
+      finally { lease.active = false; }
     });
   }
 

@@ -10,7 +10,8 @@ import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.j
 import { operationSignal, throwIfCancelled } from './operation.js';
 import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
-import { resolveInside, sha256, unique, writeText } from './utils.js';
+import { pendingTransactionCount } from './transaction.js';
+import { resolveInside, sha256, unique, withFileLock, writeText } from './utils.js';
 
 const INDEX_VERSION = 6 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
@@ -100,6 +101,7 @@ export class PersistentSearchIndex {
     readonly config: VaultConfig,
     readonly llm?: LlmClient,
     readonly secureReader?: SecureDocumentReader,
+    private readonly readSnapshot?: <T>(permission: Permission, action: () => Promise<T>) => Promise<T>,
   ) {
     this.indexPath = join(root, '.amem', 'search-index.json');
     this.embeddingPath = join(root, '.amem', 'embeddings.json');
@@ -414,32 +416,37 @@ export class PersistentSearchIndex {
       const batch = missing.slice(offset, offset + 32).filter(isActive);
       if (!batch.length) continue;
       const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel, async () => {
-        for (const document of batch) {
-          throwIfCancelled();
-          const path = resolveInside(this.root, document.path);
-          let component = this.root;
-          const parts = document.path.split('/');
-          for (let index = 0; index < parts.length; index += 1) {
-            component = join(component, parts[index]!);
-            const entry = await lstat(component);
-            if (entry.isSymbolicLink() || (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())) {
-              throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer a regular managed file');
+        await this.embeddingSnapshot(permission, async () => {
+          for (const document of batch) {
+            throwIfCancelled();
+            const path = resolveInside(this.root, document.path);
+            let component = this.root;
+            const parts = document.path.split('/');
+            for (let index = 0; index < parts.length; index += 1) {
+              component = join(component, parts[index]!);
+              const entry = await lstat(component);
+              if (entry.isSymbolicLink() || (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())) {
+                throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer a regular managed file');
+              }
+            }
+            // All embedding inputs are unencrypted canonical records. Reading
+            // plaintext directly preserves maintain-only reindex authorization;
+            // using the read-bound secureReader here would require extra grants.
+            const raw = await readFile(path, { encoding: 'utf8', signal: operationSignal() });
+            const parsed = parseMarkdown<Record<string, unknown>>(raw);
+            if (isEncryptedEnvelope(parsed.meta)) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer available');
+            const source = await stat(path);
+            const current = indexDocument(document.path, raw, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
+            authorize(principal, permission, { scope: current.scope, sensitivity: current.sensitivity, tenantId: this.config.tenantId });
+            if (!isActive(current) || this.config.policy.requireEncryptionFor.includes(current.sensitivity)
+                || current.contentHash !== document.contentHash || current.sourceIdentity !== document.sourceIdentity) {
+              throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context changed or is no longer currently effective');
             }
           }
-          // All embedding inputs are unencrypted canonical records. Reading
-          // plaintext directly preserves maintain-only reindex authorization;
-          // using the read-bound secureReader here would require extra grants.
-          const raw = await readFile(path, { encoding: 'utf8', signal: operationSignal() });
-          const parsed = parseMarkdown<Record<string, unknown>>(raw);
-          if (isEncryptedEnvelope(parsed.meta)) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer available');
-          const source = await stat(path);
-          const current = indexDocument(document.path, raw, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
-          authorize(principal, permission, { scope: current.scope, sensitivity: current.sensitivity, tenantId: this.config.tenantId });
-          if (!isActive(current) || this.config.policy.requireEncryptionFor.includes(current.sensitivity)
-              || current.contentHash !== document.contentHash || current.sourceIdentity !== document.sourceIdentity) {
-            throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context changed or is no longer currently effective');
-          }
-        }
+          if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
+        });
+        // Releasing the file lock is asynchronous too; no I/O follows this check.
+        if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
       });
       if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
           || vector.length !== results[0]?.length)) {
@@ -460,6 +467,17 @@ export class PersistentSearchIndex {
     }
     throwIfCancelled();
     await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: this.config.index.embeddingModel, vectors })}\n`);
+  }
+
+  private async embeddingSnapshot<T>(permission: Permission, action: () => Promise<T>): Promise<T> {
+    if (this.readSnapshot) return this.readSnapshot(permission, action);
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      throwIfCancelled();
+      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before checking embedding context');
+      }
+      return action();
+    });
   }
 
   private async semanticScores(query: string, documents: IndexedDocument[], excludedPaths: ReadonlySet<string>, principal: Principal): Promise<Map<string, number>> {

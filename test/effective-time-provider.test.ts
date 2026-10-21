@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
@@ -44,6 +45,17 @@ async function fixture(t: TestContext, count: number, endedCount = count) {
 }
 function embeddings(input: string[], vector: (text: string) => number[] = () => [1, 0]): Response {
   return new Response(JSON.stringify({ data: input.map((text, index) => ({ index, embedding: vector(text) })) }), { status: 200 });
+}
+
+function observeReads(t: TestContext, action: (path: string) => void | Promise<void>) {
+  const original = fs.readFile;
+  const mock = t.mock.method(fs, 'readFile', (async (...args: Parameters<typeof fs.readFile>) => {
+    const result = await original(...args);
+    await action(String(args[0]));
+    return result;
+  }) as typeof fs.readFile);
+  syncBuiltinESMExports();
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
 }
 
 test('effective provider: 33 documents cannot send a later batch after its interval ends', async t => {
@@ -179,4 +191,154 @@ test('effective provider: concurrent review cannot send an old embedding after c
   const result = await concurrent.searchDetailed('shared fact', { semantic: true });
   assert.equal(annotated, true); assert.equal(result.semanticStatus, 'degraded');
   assert.deepEqual(result.hits, []); assert.equal(requests.length, 0);
+});
+
+test('effective provider: reading a later batch member cannot hide an earlier interval ending', async t => {
+  const { vault, root, advance, intercept, requests } = await fixture(t, 2, 1);
+  let checking = false, advanced = false;
+  class ObservedClient extends LlmClient {
+    override async embed(inputs: string[], model = this.embeddingModel, check?: () => void | Promise<void>) {
+      return super.embed(inputs, model, check && (async () => {
+        checking = true;
+        try { await check(); } finally { checking = false; }
+      }));
+    }
+  }
+  observeReads(t, path => {
+    if (checking && path.endsWith('/time-01.md')) { advanced = true; advance(); }
+  });
+  const client = new ObservedClient({ apiKey: 'fixture', embeddingModel: 'time-vector', baseUrl: 'https://effective-fixture.invalid/v1' });
+  intercept(body => embeddings(body.input!));
+  const result = await new PersistentSearchIndex(root, await vault.config(), client).refresh({ semantic: true });
+  assert.equal(advanced, true); assert.equal(result.semanticStatus, 'degraded');
+  assert.equal(requests.length, 0);
+});
+
+test('effective provider: the clock is checked again after the batch snapshot releases', async t => {
+  const { vault, root, llm, advance, intercept, requests } = await fixture(t, 1);
+  intercept(body => embeddings(body.input!));
+  let checked = false;
+  const index = new PersistentSearchIndex(root, await vault.config(), llm, undefined, async (_permission, action) => {
+    const result = await action(); checked = true; advance(); return result;
+  });
+  assert.equal((await index.refresh({ semantic: true })).semanticStatus, 'degraded');
+  assert.equal(checked, true); assert.equal(requests.length, 0);
+});
+
+test('effective provider: answer validation rechecks the first record after reading the last', async t => {
+  const { root, advance, intercept, requests } = await fixture(t, 2, 1);
+  let checking = false, firstRead = false, advanced = false;
+  class ObservedClient extends LlmClient {
+    override async answer(question: string, context: string, check?: () => void | Promise<void>) {
+      return super.answer(question, context, check && (async () => {
+        checking = true;
+        try { await check(); } finally { checking = false; }
+      }));
+    }
+  }
+  observeReads(t, path => {
+    if (checking && path.endsWith('/time-00.md')) firstRead = true;
+    if (checking && firstRead && path.endsWith('/time-01.md')) { advanced = true; advance(); }
+  });
+  intercept(() => new Response(JSON.stringify({ choices: [{ message: { content: 'STALE_ANSWER' } }] })));
+  const llm = new ObservedClient({ apiKey: 'fixture', model: 'time-fixture', baseUrl: 'https://effective-fixture.invalid/v1' });
+  await assert.rejects(new MemoryVault(root, { llm }).answer('shared fact'), { code: 'VALIDATION_FAILED' });
+  assert.equal(advanced, true); assert.equal(requests.length, 0);
+});
+
+test('effective provider: a canonical writer waits until all batch members are checked', { timeout: 10000 }, async t => {
+  const { vault, root, intercept, requests } = await fixture(t, 2, 0);
+  let checking = false, paused = false, entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  class ObservedClient extends LlmClient {
+    override async embed(inputs: string[], model = this.embeddingModel, check?: () => void | Promise<void>) {
+      return super.embed(inputs, model, check && (async () => {
+        checking = true;
+        try { await check(); } finally { checking = false; }
+      }));
+    }
+  }
+  observeReads(t, async path => {
+    if (checking && !paused && path.endsWith('/time-01.md')) { paused = true; entered(); await gate; }
+  });
+  intercept(body => embeddings(body.input!));
+  const client = new ObservedClient({ apiKey: 'fixture', embeddingModel: 'time-vector', baseUrl: 'https://effective-fixture.invalid/v1' });
+  const pending = new PersistentSearchIndex(root, await vault.config(), client).refresh({ semantic: true });
+  await ready;
+  let finished = false;
+  const writer = new MemoryVault(root).setMemoryValidity('mem-000000000000', {
+    validFrom: '2999-01-01T00:00:00Z', validUntil: null, expectedRevision: 1,
+  }).finally(() => { finished = true; });
+  try {
+    await delay(40); assert.equal(finished, false);
+    release();
+    assert.equal((await pending).semanticStatus, 'ready');
+    await writer; assert.equal(finished, true);
+    assert.equal(requests.length, 1);
+    assert.equal((await vault.get('mem-000000000000')).meta.revision, 2);
+  } finally { release(); await Promise.allSettled([pending, writer]); }
+});
+
+test('effective provider: nested semantic context reuses only its own active read snapshot', { timeout: 10000 }, async t => {
+  const { vault, intercept } = await fixture(t, 1);
+  let entered!: () => void, release!: () => void, paused = false;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  intercept(async body => {
+    if (!paused) { paused = true; entered(); await gate; }
+    return embeddings(body.input!);
+  });
+  const context = vault.context('shared fact', { semantic: true });
+  await ready;
+  let finished = false;
+  const concurrentRead = vault.memoriesAt('2030-02-01T00:00:00Z').finally(() => { finished = true; });
+  try {
+    await delay(40); assert.equal(finished, false);
+    release(); assert.match(await context, /ENDING_CANARY/);
+    await concurrentRead; assert.equal(finished, true);
+  } finally { release(); await Promise.allSettled([context, concurrentRead]); }
+});
+
+test('effective provider: Wiki request validation reads memory and evidence in one snapshot', { timeout: 10000 }, async t => {
+  const { vault, root, intercept, requests } = await fixture(t, 0);
+  const source = await vault.capture({ content: 'ENDING_CANARY source', scope: 'public', sensitivity: 'public' });
+  const candidate = await vault.propose({ key: 'shared fact', statement: 'ENDING_CANARY source', kind: 'fact', scope: 'public', sensitivity: 'public',
+    confidence: 1, explicit: true, conditions: [], tags: [] }, [source.evidencePath]);
+  const memory = await vault.approve(candidate.id), memoryPath = (await vault.get(memory.memoryId)).path;
+  let checking = false, firstRead = false, paused = false, entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  class ObservedClient extends LlmClient {
+    override async wiki<T = unknown>(operation: Parameters<LlmClient['wiki']>[0], input: object, check?: () => void | Promise<void>): Promise<T> {
+      return super.wiki<T>(operation, input, check && (async () => {
+        checking = true;
+        try { await check(); } finally { checking = false; }
+      }));
+    }
+  }
+  observeReads(t, async path => {
+    if (checking && path.endsWith(`/${memoryPath}`)) firstRead = true;
+    if (checking && firstRead && !paused && path.endsWith(`/${source.evidencePath}`)) {
+      paused = true; entered(); await gate;
+    }
+  });
+  let writer: Promise<unknown> | undefined, finished = false;
+  intercept(async () => {
+    assert.equal(finished, false);
+    await writer;
+    return new Response('retry later', { status: 503 });
+  });
+  const llm = new ObservedClient({ apiKey: 'fixture', model: 'time-fixture', baseUrl: 'https://effective-fixture.invalid/v1', maxRetries: 1 });
+  const pending = new MemoryVault(root, { llm }).wikiQuery('shared fact');
+  const rejected = assert.rejects(pending, { code: 'VALIDATION_FAILED' });
+  await ready;
+  writer = new MemoryVault(root).setMemoryValidity(memory.memoryId, {
+    validFrom: '2999-01-01T00:00:00Z', validUntil: null, expectedRevision: 1,
+  }).finally(() => { finished = true; });
+  try {
+    await delay(40); assert.equal(finished, false);
+    release(); await rejected; await writer;
+    assert.equal(requests.length, 1); assert.match(requests[0]!.raw, /ENDING_CANARY/);
+  } finally { release(); await Promise.allSettled([pending, writer, rejected]); }
 });

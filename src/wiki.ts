@@ -22,6 +22,7 @@ export interface WikiPort {
   principal: Principal;
   llm: LlmClient;
   config(): Promise<VaultConfig>;
+  readSnapshot<T>(permission: Permission, action: () => Promise<T>): Promise<T>;
   read(directory: 'wiki' | 'evidence', permission: Permission, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<Document[]>;
   scan(directory: 'wiki' | 'evidence', permission: Permission): Promise<{ documents: Document[]; errors: string[] }>;
   catalogMatches(): Promise<boolean>;
@@ -537,11 +538,25 @@ export class WikiEngine {
   }
 
   private async revalidate(state: State): Promise<void> {
-    const current = await this.load(state.permission);
-    current.sourceIds = state.sourceIds;
-    this.assertConfig(current, sha256(stable(state.config)));
-    this.assertSnapshot(current, this.snapshot(state));
-    if (stable([...current.eligible.keys()].sort()) !== stable([...state.eligible.keys()].sort())) fail('Wiki support lifecycle changed; regenerate the plan or answer');
+    const assertCurrentTime = (current: State) => {
+      for (const page of current.eligible.values()) {
+        const document = current.documents.get(page.path);
+        if ((page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now())
+            || (document?.meta.type === 'memory' && !factEffectiveAt(document.meta as unknown as MemoryMeta))) {
+          fail('Wiki support lifecycle changed; regenerate the plan or answer');
+        }
+      }
+    };
+    const current = await this.port.readSnapshot(state.permission, async () => {
+      const current = await this.load(state.permission);
+      current.sourceIds = state.sourceIds;
+      this.assertConfig(current, sha256(stable(state.config)));
+      this.assertSnapshot(current, this.snapshot(state));
+      if (stable([...current.eligible.keys()].sort()) !== stable([...state.eligible.keys()].sort())) fail('Wiki support lifecycle changed; regenerate the plan or answer');
+      assertCurrentTime(current);
+      return current;
+    });
+    assertCurrentTime(current);
   }
 
   private async sealWithState<T extends object>(state: State, payload: T, domain: string): Promise<T & { proof: string }> {
