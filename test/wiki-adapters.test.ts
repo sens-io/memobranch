@@ -20,7 +20,7 @@ const exec = promisify(execFile);
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const mcp = fileURLToPath(new URL('../dist/mcp.js', import.meta.url));
 const wikiCategories = {
-  read: ['memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules'],
+  read: ['memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules', 'memory_wiki_snapshot'],
   write: ['memory_wiki_file', 'memory_wiki_ingest'],
   review: ['memory_wiki_apply', 'memory_wiki_revoke'],
   maintain: ['memory_wiki_lint', 'memory_wiki_migrate', 'memory_wiki_set_rules'],
@@ -126,11 +126,11 @@ test('G03/G04 real MCP Wiki tools have truthful annotations and preserve service
     try {
       await client.connect(transport);
       const listed = (await client.listTools()).tools;
-      assert.deepEqual(listed.map((tool) => tool.name).filter((name) => name.startsWith('memory_wiki_')).sort(), [...Object.values(wikiCategories).flat(), 'memory_wiki_correct'].sort());
-      for (const name of ['catalog', 'rules', 'query', 'lint', 'preview']) {
+      assert.deepEqual(listed.map((tool) => tool.name).filter((name) => name.startsWith('memory_wiki_')).sort(), [...Object.values(wikiCategories).flat(), 'memory_wiki_correct', 'memory_wiki_merge_prepare'].sort());
+      for (const name of ['catalog', 'rules', 'query', 'lint', 'preview', 'snapshot']) {
         assert.equal(listed.find((tool) => tool.name === `memory_wiki_${name}`)?.annotations?.readOnlyHint, true);
       }
-      for (const name of ['ingest', 'file', 'apply', 'migrate', 'set_rules', 'revoke', 'correct']) {
+      for (const name of ['ingest', 'file', 'apply', 'migrate', 'set_rules', 'revoke', 'correct', 'merge_prepare']) {
         assert.equal(listed.find((tool) => tool.name === `memory_wiki_${name}`)?.annotations?.readOnlyHint, false);
       }
       assert.equal(listed.find((tool) => tool.name === 'memory_wiki_revoke')?.annotations?.destructiveHint, true);

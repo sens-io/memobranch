@@ -10,6 +10,7 @@ import { combineSignals, throwIfCancelled, withOperation } from './operation.js'
 import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
+import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
 import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
@@ -103,6 +104,20 @@ export function apply(ctx: Context, config: Config): void {
 function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
   if (granted(principal, 'read')) {
     ctx.tools.register(defineTool({
+      name: 'memory_wiki_snapshot',
+      description: 'Read 1–25 complete Wiki pages and historical dependencies at a full local ancestor commit. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model, import or historical-truth claim. Complete escaped review is limited to 16 MiB.',
+      parameters: {
+        commit: { type: 'string', required: true, description: 'Full lowercase 40/64-character local ancestor commit hash; no symbolic refs or fetching.' },
+        pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
+        includeSensitive: { type: 'boolean', description: 'Explicitly select sensitive content; current authority is still required.' },
+        includeSecret: { type: 'boolean', description: 'Explicitly select secret content; current authority and keys are still required.' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        return runJson(vault, exec.signal, async () => wikiToolResult(await vault.wikiSnapshot(wikiToolInput(wikiSnapshotToolSchema, args))));
+      },
+    }));
+    ctx.tools.register(defineTool({
       name: 'memory_wiki_preview',
       description: 'Read an authorized before/after comparison of a proposed Wiki plan; validate permissions and source revisions without applying it.',
       parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete proposed Wiki plan.' } },
@@ -149,6 +164,27 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     }));
   }
   if (granted(principal, 'write')) {
+    if (granted(principal, 'read')) ctx.tools.register(defineTool({
+      name: 'memory_wiki_merge_prepare',
+      description: 'With read/write authority, prepare a signed same-vault historical/current merge from manually authored text. No model call, approval or apply flag. Inspect all comparison/preview text, then separately approve with memory_wiki_apply and review authority. No branch/shared-vault import. Complete escaped review and approval envelope must fit 16 MiB.',
+      parameters: {
+        fromCommit: { type: 'string', required: true, description: 'Full lowercase 40/64-character local ancestor commit hash.' },
+        pageKey: { type: 'string', required: true, description: 'Existing compiled Wiki key, at most 200 characters; not an ordinary memory.' },
+        expectedRevision: { type: 'integer', required: true, description: 'Positive safe integer revision actually read by the caller.' },
+        body: { type: 'string', required: true, description: 'Complete manually authored Markdown, 1–100000 characters, without the generated-links marker.' },
+        summary: { type: 'string', required: true, description: 'Manually authored summary, 1–2000 characters.' },
+        title: { type: 'string', description: 'Optional manually authored title, 1–300 characters.' },
+        includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive content.' },
+        includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret content; keys remain required.' },
+      },
+      output: jsonOutput,
+      async execute(args, exec) {
+        return runJson(vault, exec.signal, async () => {
+          const prepared = await vault.wikiMergePrepare(wikiToolInput(wikiMergeToolSchema, args));
+          return wikiToolResult(prepared, prepared.plan);
+        });
+      },
+    }));
     if (granted(principal, 'read')) ctx.tools.register(defineTool({
       name: 'memory_wiki_correct',
       description: 'Capture a natural-language correction as immutable evidence and prepare a pending Wiki plan. Never approves or applies it.',
@@ -213,7 +249,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   if (granted(principal, 'review')) {
     ctx.tools.register(defineTool({
       name: 'memory_wiki_apply',
-      description: 'Validate and atomically apply an explicit Wiki ingest, filing, or repair plan. Requires review permission.',
+      description: 'Validate and atomically apply an explicit Wiki ingest, filing, repair or human-authored merge plan. Requires review permission. Call only after explicit approval of the complete reviewed plan.',
       parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete untrusted Wiki plan; paths, citations, authorization, and revisions are revalidated.' } },
       output: jsonOutput,
       async execute(args, exec) {

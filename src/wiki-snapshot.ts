@@ -28,12 +28,14 @@ export interface WikiSnapshot {
   warnings: string[];
 }
 
-export function snapshotOptions(value: unknown): WikiSnapshotOptions {
-  const parsed = z.object({ commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+export const snapshotOptionsSchema = z.object({ commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
     pageKeys: z.array(z.string().min(1).max(200)).min(1).max(25),
     includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
     signal: z.instanceof(AbortSignal).optional(),
-  }).strict().safeParse(value);
+  }).strict();
+
+export function snapshotOptions(value: unknown): WikiSnapshotOptions {
+  const parsed = snapshotOptionsSchema.safeParse(value);
   if (!parsed.success || new Set(parsed.data.pageKeys).size !== parsed.data.pageKeys.length) {
     throw new AgentMemoryError('VALIDATION_FAILED', 'Use a full commit hash and 1–25 distinct page keys');
   }

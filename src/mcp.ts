@@ -10,6 +10,7 @@ import { throwIfCancelled, withOperation } from './operation.js';
 import { authorize, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault } from './vault.js';
+import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolResult } from './wiki-tool.js';
 
 import { VERSION } from './version.js';
 const vaultRoot = resolve(process.argv[2] ?? process.env.AMEM_VAULT ?? process.cwd());
@@ -128,6 +129,23 @@ function createServer(): McpServer {
       includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false) }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async ({ at, ...options }, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.memoriesAt(at, options)));
+
+  server.registerTool('memory_wiki_snapshot', {
+    title: 'Read a committed Wiki revision',
+    description: 'Read 1–25 complete Wiki pages and historical dependencies from a full local ancestor commit. Current authority, withdrawal, expiry and explicit confidential selection still apply. No checkout, model call, import or historical-truth claim. Complete escaped review is limited to 16 MiB.',
+    inputSchema: wikiSnapshotToolSchema,
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => wikiToolResult(await vault.wikiSnapshot(input))));
+
+  server.registerTool('memory_wiki_merge_prepare', {
+    title: 'Prepare a human-authored Wiki merge',
+    description: 'With read and write permission, prepare a signed historical/current same-vault merge from manually authored body and summary. Calls no model and does not approve. Inspect the complete comparison and memory_wiki_preview before a separate memory_wiki_apply with review authority. No apply flag or branch/shared-vault import. Complete escaped review and approval envelope must fit 16 MiB.',
+    inputSchema: wikiMergeToolSchema,
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => {
+    const prepared = await vault.wikiMergePrepare(input);
+    return wikiToolResult(prepared, prepared.plan);
+  }));
 
   server.registerTool('memory_wiki_preview', {
     title: 'Review a signed Wiki plan',
@@ -320,7 +338,7 @@ function createServer(): McpServer {
 
   server.registerTool('memory_wiki_apply', {
     title: 'Apply an approved Wiki plan',
-    description: 'Validate and atomically apply an explicit ingest, filing, or repair plan with review permission. Plans remain untrusted input.',
+    description: 'Validate and atomically apply an explicit ingest, filing, repair or human-authored merge plan with review permission. Plans remain untrusted input. Call only after explicit approval of the complete reviewed plan.',
     inputSchema: z.strictObject({ plan: z.record(z.string(), z.unknown()) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiApply(input.plan)));
