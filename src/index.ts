@@ -27,3 +27,4 @@ export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';
 export type { WikiJobInput, WikiJobRunOptions, WikiJobStatus } from './wiki-jobs.js';
 export type { WikiSnapshot, WikiSnapshotOptions } from './wiki-snapshot.js';
+export type { WikiMergeOptions, WikiMergeOrigin } from './wiki-merge.js';

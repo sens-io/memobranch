@@ -43,6 +43,8 @@ import { WikiProof } from './wiki-proof.js';
 import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions } from './wiki-snapshot.js';
 import { builtinWikiRuleId } from './wiki-schema.js';
+import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
+import { reviewDiff } from './review-diff.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -125,7 +127,8 @@ export class MemoryVault {
         // Opaque identities only: this globally visible journal must not expose logical keys.
         await this.appendManaged('log.md', `\n<!-- wiki-event ${JSON.stringify({ version: 1, at: nowIso(), operation, actor: safeLogToken(this.principal.id), pageIds, parentCommit })} -->\n`);
       },
-      mutate: (permission, operation, action) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action),
+      mutate: (permission, operation, action, validateBeforeCommit) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action,
+        undefined, validateBeforeCommit ? { validateBeforeCommit } : {}),
     });
   }
 
@@ -225,6 +228,29 @@ export class MemoryVault {
     try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
   }
   async wikiRules() { return this.wikiEngine().rules(); }
+  async wikiMergePrepare(options: WikiMergeOptions) {
+    authorize(this.principal, 'read'); authorize(this.principal, 'write');
+    const parsed = mergeOptionsSchema.safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded manual Wiki merge input');
+    const input = parsed.data;
+    const action = () => this.settledRead(async () => {
+      const base = await this.wikiSnapshot({ commit: input.fromCommit, pageKeys: [input.pageKey],
+        includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true });
+      const current = await this.wikiEngine().pageByKey(input.pageKey, { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true });
+      const plan = await this.wikiEngine().manualMerge(input, base);
+      const preview = await this.wikiEngine().preview(plan);
+      const original = base.pages.find(page => page.meta.type === 'wiki-page' && page.meta.key === input.pageKey)!;
+      return { plan, preview, comparison: { base, current, diff: reviewDiff(original.body, current.body) } };
+    });
+    const finish = async () => {
+      const result = await action();
+      throwIfCancelled(); assertMergeTime(result.plan.merge!);
+      return result;
+    };
+    if (!input.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
   async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
@@ -1283,7 +1309,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; validateBeforeCommit?: () => void } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -1311,6 +1337,7 @@ export class MemoryVault {
         await this.installRuntimeIgnore();
         const value = await action();
         await this.rebuildGenerated(await this.config());
+        options.validateBeforeCommit?.();
         throwIfCancelled();
         ready = true;
         const commit = await withoutCancellation(() => transaction.commit());

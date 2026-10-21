@@ -12,6 +12,8 @@ import { scopes, sensitivities, type EvidenceMeta, type MarkdownDocument, type M
 import { nowIso, sha256, unique } from './utils.js';
 import { assertWikiDocument, builtinWikiRuleId, wikiPageDraftSchema, wikiPlanSchema, wikiQueryResultSchema, wikiPageId, wikiPagePath, wikiReceiptId, wikiRulesId } from './wiki-schema.js';
 import type { WikiCatalogEntry, WikiCitation, WikiLintIssue, WikiLintResult, WikiPageDraft, WikiPageMeta, WikiPlan, WikiPreview, WikiQueryResult, WikiReceiptMeta, WikiReviewVersion, WikiRulesMeta } from './wiki-types.js';
+import { assertMergeTime, type WikiMergeOptions, type WikiMergeOrigin } from './wiki-merge.js';
+import type { WikiSnapshot } from './wiki-snapshot.js';
 
 type Document = MarkdownDocument<Record<string, unknown>>;
 type Page = MarkdownDocument<WikiPageMeta>;
@@ -31,10 +33,11 @@ export interface WikiPort {
   verify(value: object, proof: string): Promise<void>;
   write(document: MarkdownDocument<object>): Promise<void>;
   log(operation: string, pageIds: string[]): Promise<void>;
-  mutate<T>(permission: Permission, operation: string, action: () => Promise<T>): Promise<{ value: T; commit: string | null }>;
+  mutate<T>(permission: Permission, operation: string, action: () => Promise<T>, validateBeforeCommit?: () => void): Promise<{ value: T; commit: string | null }>;
 }
 
 interface State {
+  selection?: { includeSensitive?: boolean; includeSecret?: boolean };
   sourceIds: string[];
   permission: Permission;
   config: VaultConfig;
@@ -157,12 +160,16 @@ export class WikiEngine {
     authorize(this.port.principal, 'review', { tenantId: config.tenantId });
     await this.verify(plan, 'plan');
     const result = await this.port.mutate('review', 'wiki-apply', async () => {
-      const state = await this.load('review');
+      const state = await this.load('review', false, plan.merge?.selection);
       state.sourceIds = plan.sourceIds;
       if (state.config.vaultId !== plan.vaultId) fail('Wiki plan belongs to another vault');
       // Successful replay is checked against current canonical state, not a runtime cache.
       if (plan.receiptId && await this.completed(state, plan.receiptId, this.signature(state, plan.sourceIds), sha256(stable(plan)))) return [];
       if (plan.query && state.eligible.get(plan.query.key)?.meta.originHash === plan.query.hash) return [];
+      if (plan.merge) {
+        this.assertMergeSupport(state, plan.merge, 'review');
+        if (state.eligible.get(plan.merge.key)?.meta.originHash === sha256(stable(plan))) return [];
+      }
       this.assertConfig(state, plan.configHash);
       this.assertSnapshot(state, plan.snapshot);
       const pages = this.prepare(state, plan, 'review');
@@ -188,15 +195,15 @@ export class WikiEngine {
         assertWikiDocument(asDocument(receipt));
         await this.port.write(receipt);
       }
-      if (changed.length) await this.port.log(`wiki-${plan.kind}`, changed.map((page) => page.meta.id));
+      if (changed.length) await this.port.log(plan.merge ? `wiki-merge:${plan.merge.fromCommit}` : `wiki-${plan.kind}`, changed.map((page) => page.meta.id));
       return changed.map((page) => page.meta.id);
-    });
+    }, plan.merge ? () => assertMergeTime(plan.merge!) : undefined);
     return { pageIds: result.value, commit: result.commit };
   }
 
   async preview(value: unknown): Promise<WikiPreview> {
     const plan = checked(wikiPlanSchema, value);
-    const state = await this.load('read');
+    const state = await this.load('read', false, plan.merge?.selection);
     state.sourceIds = plan.sourceIds;
     await this.verify(plan, 'plan');
     this.assertConfig(state, plan.configHash);
@@ -218,9 +225,43 @@ export class WikiEngine {
     return { kind: plan.kind, pages, affectedPageKeys: pages.filter(page => page.operation !== 'unchanged').map(page => page.key) };
   }
 
-  async pageByKey(key: string): Promise<Page> {
-    const state = await this.load('read');
+  async pageByKey(key: string, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<Page> {
+    const state = await this.load('read', false, selection);
     return required(state.eligible.get(key), 'Wiki page is unavailable');
+  }
+
+  /** Human-authored derived knowledge; the old graph is not new evidence. */
+  async manualMerge(input: WikiMergeOptions, base: WikiSnapshot): Promise<WikiPlan> {
+    authorize(this.port.principal, 'read'); authorize(this.port.principal, 'write');
+    const selection = { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true };
+    const state = await this.load('write', false, selection);
+    const old = required(base.pages.find(page => page.meta.type === 'wiki-page' && page.meta.key === input.pageKey), 'Historical compiled page is unavailable') as Page;
+    const current = required(state.eligible.get(input.pageKey), 'Current compiled page is unavailable');
+    if (input.pageKey.startsWith('legacy:') || current.meta.revision !== input.expectedRevision) fail('Target revision changed or is not a compiled Wiki page; read it again');
+    if (base.commit !== input.fromCommit || old.meta.pageType !== current.meta.pageType) fail('Merge base does not match the target');
+    const keyOf = (page: WikiSnapshot['pages'][number]) => page.meta.type === 'memory' ? `legacy:${page.meta.id}` : page.meta.key;
+    const supports = unique(base.pages.map(keyOf));
+    if (supports.some(key => !state.eligible.has(key))) fail('Historical merge support is unavailable');
+    const timePages = [...base.pages, ...[...state.eligible.values()].map(page => required(state.documents.get(page.path), 'Current merge support is unavailable') as unknown as MarkdownDocument<MemoryMeta | WikiPageMeta>)];
+    const from = timePages.flatMap(page => page.meta.type === 'memory' && page.meta.validFrom ? [page.meta.validFrom] : []).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+    const until = timePages.flatMap(page => [page.meta.expiresAt, ...(page.meta.type === 'memory' ? [page.meta.validUntil] : [])])
+      .filter((value): value is string => Boolean(value)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+    const boundary = restrictions(base.pages.map(page => page.meta));
+    const origin: WikiMergeOrigin = { fromCommit: base.commit, key: input.pageKey, baseRevision: old.meta.revision,
+      baseHash: sha256(stable({ path: old.path, meta: old.meta, body: old.body })), supportKeys: supports, selection, ...boundary,
+      conditions: unique(base.pages.flatMap(page => [...page.meta.conditions, ...(page.meta.type === 'memory' ? factValidityConditions(page.meta) : [])])),
+      uncertainty: unique(base.pages.flatMap(page => page.meta.type === 'wiki-page' ? page.meta.uncertainty : page.meta.status === 'conflicted' ? ['Historical ordinary memory has unresolved conflict.'] : [])),
+      conflicted: base.pages.some(page => page.meta.status === 'conflicted'), ...(from ? { validFrom: from } : {}), ...(until ? { expiresAt: until } : {}) };
+    this.assertMergeSupport(state, origin, 'write');
+    state.sourceIds = base.sources.map(source => source.id);
+    const draft: WikiPageDraft = { key: input.pageKey, pageType: current.meta.pageType, title: input.title ?? current.meta.title,
+      summary: input.summary, body: input.body, evidenceIds: [...state.sourceIds], links: unique([...old.meta.links, ...current.meta.links]),
+      status: origin.conflicted || current.meta.status === 'conflicted' ? 'conflicted' : 'active', conditions: origin.conditions, uncertainty: origin.uncertainty,
+      ...(origin.expiresAt ? { expiresAt: origin.expiresAt } : {}) };
+    const plan = await this.makePlan(state, 'merge', [draft], supports, state.sourceIds, undefined, undefined, origin);
+    this.prepare(state, plan, 'write');
+    assertMergeTime(origin);
+    return plan;
   }
 
   async recallPages(ids: string[], options: { includeSensitive?: boolean; includeSecret?: boolean } = {}): Promise<Page[]> {
@@ -419,6 +460,7 @@ export class WikiEngine {
     const scans = tolerant ? await Promise.all([this.port.scan('wiki', permission), this.port.scan('evidence', permission)]) : [];
     const documents = tolerant ? scans.flatMap((scan) => scan.documents) : [...await this.port.read('wiki', permission, selection), ...await this.port.read('evidence', permission, selection)];
     const state: State = { sourceIds: [], permission, config, documents: new Map(), pages: new Map(), rules: [], evidence: new Map(), receipts: [], eligible: new Map(), issues: scans.flatMap((scan) => scan.errors.map(() => ({ kind: 'invalid-document', message: 'An authorized managed document failed schema or integrity validation; inspect doctor diagnostics.', pageKeys: [], evidenceIds: [], pageVersions: {} }))) };
+    if (selection) state.selection = selection;
     for (const document of documents) {
       state.documents.set(document.path, document);
       const type = document.meta.type;
@@ -549,7 +591,7 @@ export class WikiEngine {
       }
     };
     const current = await this.port.readSnapshot(state.permission, async () => {
-      const current = await this.load(state.permission);
+      const current = await this.load(state.permission, false, state.selection);
       current.sourceIds = state.sourceIds;
       this.assertConfig(current, sha256(stable(state.config)));
       this.assertSnapshot(current, this.snapshot(state));
@@ -575,12 +617,12 @@ export class WikiEngine {
     return sha256(stable({ sourceIds: [...sourceIds].sort(), snapshot: this.snapshot(state, sourceIds), config: state.config, compiler: this.port.llm.model, rules: ruleVersions(state) }));
   }
 
-  private async makePlan(state: State, kind: WikiPlan['kind'], pages: WikiPageDraft[], contextKeys: string[], sourceIds: string[], receiptId?: string, query?: WikiPlan['query']): Promise<WikiPlan> {
+  private async makePlan(state: State, kind: WikiPlan['kind'], pages: WikiPageDraft[], contextKeys: string[], sourceIds: string[], receiptId?: string, query?: WikiPlan['query'], merge?: WikiPlan['merge']): Promise<WikiPlan> {
     // Navigation titles and summaries are information too: their restrictions
     // travel with the result, even when the model did not request the full body.
     const observedKeys = unique([...contextKeys, ...state.eligible.keys()]);
     const expanded = this.expandDependentDrafts(state, pages);
-    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ...this.planManifest(state, expanded, observedKeys, sourceIds), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}) };
+    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ...this.planManifest(state, expanded, observedKeys, sourceIds), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}), ...(merge ? { merge } : {}) };
     return checked(wikiPlanSchema, await this.sealWithState(state, payload, 'plan'));
   }
 
@@ -638,6 +680,7 @@ export class WikiEngine {
   }
 
   private prepare(state: State, plan: WikiPlan, permission: Permission): Page[] {
+    if (plan.merge) this.assertMergeSupport(state, plan.merge, permission);
     if (plan.vaultId !== state.config.vaultId) fail('Wiki plan belongs to another vault');
     if (unique(plan.pages.map((page) => page.key)).length !== plan.pages.length) fail('Duplicate Wiki target');
     if (this.expandDependentDrafts(state, plan.pages).length !== plan.pages.length) fail('Wiki plan omitted required dependent-page updates');
@@ -664,22 +707,23 @@ export class WikiEngine {
       // Conservatively retain every source and restriction observed by this model invocation.
       const evidencePaths = unique([...declared.map((item) => item.path), ...sources.map((item) => item.path), ...context.flatMap((item) => item.meta.evidence)]).sort();
       const evidence = evidencePaths.map((path) => required(state.documents.get(path), 'Wiki evidence is unavailable'));
-      const labels = restrictions([...evidence.map((item) => item.meta as unknown as EvidenceMeta), ...context.map((item) => item.meta), ...state.rules.map((item) => item.meta)]);
+      const labels = restrictions([...evidence.map((item) => item.meta as unknown as EvidenceMeta), ...context.map((item) => item.meta), ...state.rules.map((item) => item.meta), ...(plan.merge ? [plan.merge] : [])]);
       authorize(this.port.principal, permission, { ...labels, tenantId: state.config.tenantId });
       if (draft.pageType === 'source' && (!draft.key.startsWith('source:') || !draft.evidenceIds.includes(draft.key.slice(7)))) fail('Source page identity must name its immutable input');
-      const expires = [draft.expiresAt, ...context.map((item) => item.meta.expiresAt)].filter((value): value is string => Boolean(value)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+      const expires = [draft.expiresAt, plan.merge?.expiresAt, ...context.map((item) => item.meta.expiresAt)].filter((value): value is string => Boolean(value)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       const dependencies = Object.fromEntries(context.filter((item) => item.meta.key !== draft.key).map((item) => [item.meta.key, item.meta.revision]));
       const rules = ruleVersions(state);
-      const conditions = unique([...draft.conditions, ...context.flatMap((item) => item.meta.conditions)]);
-      const uncertainty = unique([...draft.uncertainty, ...context.flatMap((item) => item.meta.uncertainty)]);
+      const conditions = unique([...draft.conditions, ...context.flatMap((item) => item.meta.conditions), ...(plan.merge?.conditions ?? [])]);
+      const uncertainty = unique([...draft.uncertainty, ...context.flatMap((item) => item.meta.uncertainty), ...(plan.merge?.uncertainty ?? [])]);
       const path = wikiPagePath(draft.key);
       const body = renderPage(draft, path, evidencePaths, state, plan.pages);
       const page: Page = { path, body, meta: {
         id: wikiPageId(draft.key), type: 'wiki-page', key: draft.key, pageType: draft.pageType, title: draft.title, summary: draft.summary,
         ...labels, revision: (old?.meta.revision ?? 0) + 1, createdAt: old?.meta.createdAt ?? timestamp, updatedAt: timestamp,
-        status: draft.status === 'conflicted' || context.some((item) => item.meta.status === 'conflicted' && !resolved.has(item.meta.key)) ? 'conflicted' : 'active',
+        status: draft.status === 'conflicted' || plan.merge?.conflicted || context.some((item) => item.meta.status === 'conflicted' && !resolved.has(item.meta.key)) ? 'conflicted' : 'active',
         evidence: evidencePaths, links: unique([...draft.links, ...(old?.meta.links ?? [])]).filter((key) => key !== draft.key), dependencies, rules, conditions, uncertainty, ...(expires ? { expiresAt: expires } : {}),
         ...(plan.query?.key === draft.key ? { originHash: plan.query.hash } : {}),
+        ...(plan.merge?.key === draft.key ? { originHash: sha256(stable(plan)) } : {}),
       } };
       return page;
     });
@@ -718,6 +762,13 @@ export class WikiEngine {
     }
     for (const page of pages) for (const key of Object.keys(page.meta.dependencies)) page.meta.dependencies[key] = (proposed.get(key) ?? state.pages.get(key))!.meta.revision;
     return pages;
+  }
+
+  private assertMergeSupport(state: State, origin: WikiMergeOrigin, permission: Permission): void {
+    assertMergeTime(origin);
+    authorize(this.port.principal, permission, { ...origin, tenantId: state.config.tenantId });
+    if (origin.supportKeys.some(key => !state.eligible.has(key))) fail('Historical merge support is no longer available');
+    if (origin.sensitivity === 'secret' && !origin.selection.includeSecret || origin.sensitivity === 'sensitive' && !origin.selection.includeSensitive) fail('Historical merge requires explicit confidential selection');
   }
 }
 

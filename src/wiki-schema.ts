@@ -3,6 +3,7 @@ import { AgentMemoryError } from './errors.js';
 import { sha256 } from './utils.js';
 import { scopes, sensitivities, type MarkdownDocument } from './types.js';
 import { pageTypes } from './wiki-types.js';
+import { mergeOriginSchema } from './wiki-merge.js';
 
 const clean = (maximum: number) => z.string().trim().min(1).max(maximum).regex(/^[^\u0000-\u001f\u007f]+$/u);
 const key = clean(200).refine((value) => !['__proto__', 'constructor', 'prototype'].includes(value));
@@ -42,12 +43,14 @@ export const wikiRulesMetaSchema = z.object({ ...common, id: rulesId, type: z.li
 export const wikiReceiptMetaSchema = z.object({ ...common, id: receiptId, type: z.literal('wiki-receipt'), signature: digest, proof: digest, planHash: digest, sourceIds: uniqueArray(evidenceId).min(1), pageKeys: uniqueArray(key).min(1) }).strict();
 
 export const wikiPlanSchema = z.object({
-  version: z.literal(1), vaultId: clean(200), kind: z.enum(['compile', 'file', 'repair']), sourceIds: uniqueArray(evidenceId),
+  version: z.literal(1), vaultId: clean(200), kind: z.enum(['compile', 'file', 'repair', 'merge']), sourceIds: uniqueArray(evidenceId),
   snapshot, configHash: digest, contextKeys: uniqueArray(key), ruleIds: uniqueArray(effectiveRuleId), pages: z.array(wikiPageDraftSchema).min(1).max(40), receiptId: receiptId.optional(), proof: digest,
   expectedRevisions: record(key, z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), 40),
   relevantPageVersions: record(key, revision, 100), ruleVersions: record(effectiveRuleId, revision, 100), sourceHashes: record(evidenceId, digest, 100),
   query: z.object({ key, hash: digest, generation }).strict().optional(),
-}).strict();
+  merge: mergeOriginSchema.optional(),
+}).strict().refine(plan => (plan.kind === 'merge') === Boolean(plan.merge)
+  && (!plan.merge || !plan.receiptId && !plan.query && plan.pages.some(page => page.key === plan.merge!.key)), 'Invalid merge plan envelope');
 
 export const wikiQueryResultSchema = z.object({
   answer: body, question: z.string().trim().min(1).max(100_000), uncertainty: uniqueArray(clean(4000)), snapshot, configHash: digest, ruleIds: uniqueArray(effectiveRuleId), ruleVersions: record(effectiveRuleId, revision, 100), generation, proof: digest,
