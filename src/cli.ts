@@ -14,6 +14,7 @@ import { runIntegrationSetup } from './integration-cli.js';
 import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, serializeDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
 import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
+import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan } from './pdf-import.js';
 
 interface ParsedArgs {
   command: string;
@@ -87,7 +88,14 @@ async function main(): Promise<void> {
             });
             print(result);
             if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
-          } else throw new Error('Import action must be preview, apply, web-preview or web-apply');
+          } else if (action === 'pdf-preview') {
+            process.stdout.write(serializePdfImportPlan(await previewPdfImport(requiredPositional(parsed, 1, 'PDF file'), { timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000) })));
+          } else if (action === 'pdf-apply') {
+            print(await applyPdfImport(vault, await readPdfImportPlan(requiredFlag(parsed, 'plan')), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000), scope: enumFlag(parsed, 'scope', scopes, 'project'),
+              sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+            }));
+          } else throw new Error('Import action must be preview, apply, web-preview, web-apply, pdf-preview or pdf-apply');
         });
       } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
@@ -543,6 +551,8 @@ Usage:
   amem import apply --plan import-plan.json [--scope project] [--sensitivity internal] [--progress]
   amem import web-preview <https-url...> [--timeout-ms 10000] > web-plan.json
   amem import web-apply --plan web-plan.json [--scope project] [--sensitivity internal] [--progress]
+  amem import pdf-preview <file.pdf> [--timeout-ms 10000] > pdf-plan.json
+  amem import pdf-apply --plan pdf-plan.json [--scope project] [--sensitivity internal] [--timeout-ms 10000]
   amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
   amem memory at <ISO> [--key KEY] [--include-unknown] [--offset N] [--limit N]
   amem memory validity <memory-id> --from ISO|unknown --until ISO|unknown --expected-revision N --confirm

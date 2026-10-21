@@ -80,6 +80,7 @@
     "@deepseek-ai/schemastery": "^3.18.2",
     "@modelcontextprotocol/server": "^2.3.0",
     "commonmark": "^0.31.2",
+    "unpdf": "1.7.0",
     "yaml": "^2.8.1",
     "zod": "^4.1.5"
   },

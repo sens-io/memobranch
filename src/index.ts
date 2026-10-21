@@ -20,6 +20,8 @@ export type { SourceTimelineOptions } from './source-timeline.js';
 export type { FactValidity, MemoriesAtOptions, MemoryValidityUpdate } from './effective-time.js';
 export { previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
 export type { WebImportPlan, WebImportOptions, WebImportProgress, WebPreviewOptions } from './web-import.js';
+export { previewPdfImport, applyPdfImport, readPdfImportPlan, serializePdfImportPlan, readPdfOriginal } from './pdf-import.js';
+export type { PdfImportPlan, PdfImportOptions, PdfPreviewOptions } from './pdf-import.js';
 export { startWebServer } from './web.js';
 export type { WebHandle } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';
