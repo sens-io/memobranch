@@ -40,6 +40,7 @@ try {
     'docs/web-effective-time.md',
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
+    'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -120,7 +121,13 @@ try {
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
       type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
       previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
-      type WikiSnapshot, type WikiSnapshotOptions } from 'memobranch';
+      type WikiSnapshot, type WikiSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin } from 'memobranch';
+    export async function publicManualMerge(vault: MemoryVault, options: WikiMergeOptions) {
+      const prepared = await vault.wikiMergePrepare(options);
+      const origin: WikiMergeOrigin | undefined = prepared.plan.merge;
+      const preview = await vault.wikiPreview(prepared.plan);
+      return { prepared, origin, preview };
+    }
     export async function publicRevisionView(vault: MemoryVault, commit: string) {
       const options: WikiSnapshotOptions = { commit, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
       const result: WikiSnapshot = await vault.wikiSnapshot(options);
@@ -223,6 +230,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(snapshot.stdout);
+  await writeFile(join(consumer, 'verify-installed-merge.mjs'), await readFile(join(root, 'scripts/verify-installed-merge.mjs')));
+  const merge = await exec(process.execPath, ['verify-installed-merge.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(merge.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

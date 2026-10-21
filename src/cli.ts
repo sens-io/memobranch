@@ -11,10 +11,11 @@ import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
-import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, serializeDirectoryImportPlan } from './directory-import.js';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, readImportPreview, serializeDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
 import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
 import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan } from './pdf-import.js';
+import { mergeOptionsSchema } from './wiki-merge.js';
 
 interface ParsedArgs {
   command: string;
@@ -278,6 +279,24 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
         commit: requiredFlag(args, 'commit'), pageKeys: input.positionals,
         includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
       }))); } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
+    case 'merge-prepare': {
+      authorize(vault.principal, 'read'); authorize(vault.principal, 'write'); await vault.config();
+      if (args.flags.has('apply')) throw new Error('Manual merges never auto-apply; inspect the proposal and use wiki apply explicitly');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Manual merge input requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file);
+          if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('A manual merge object is required');
+          const input = mergeOptionsSchema.safeParse({ ...document, includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') });
+          if (!input.success) throw new Error('Invalid bounded manual Wiki merge input');
+          print(await vault.wikiMergePrepare(input.data));
+        });
+      } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
     }
     case 'rules': print(await vault.wikiRules()); return;
@@ -570,6 +589,7 @@ Usage:
   amem remote status | remote sync [--push] | remote remove
   amem wiki catalog | rules | migrate
   amem wiki snapshot <page-key...> --commit FULL_HASH [--include-sensitive] [--include-secret]
+  amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
   amem wiki jobs enqueue <evidence-id...> [--max-pages N]
