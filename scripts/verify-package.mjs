@@ -39,6 +39,7 @@ try {
     'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
     'docs/web-effective-time.md',
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
+    'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -118,7 +119,13 @@ try {
       previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
       type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
-      previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal } from 'memobranch';
+      previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
+      type WikiSnapshot, type WikiSnapshotOptions } from 'memobranch';
+    export async function publicRevisionView(vault: MemoryVault, commit: string) {
+      const options: WikiSnapshotOptions = { commit, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
+      const result: WikiSnapshot = await vault.wikiSnapshot(options);
+      return result;
+    }
     export async function publicPdfWorkflow(vault: MemoryVault, path: string) {
       const plan: PdfImportPlan = await previewPdfImport(path);
       const options: PdfImportOptions = { scope: 'project', signal: new AbortController().signal };
@@ -211,6 +218,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(pdf.stdout);
+  await writeFile(join(consumer, 'verify-installed-snapshot.mjs'), await readFile(join(root, 'scripts/verify-installed-snapshot.mjs')));
+  const snapshot = await exec(process.execPath, ['verify-installed-snapshot.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(snapshot.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

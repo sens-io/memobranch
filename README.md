@@ -114,6 +114,8 @@ flowchart LR
 
 > **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
 
+> **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Read-only local API/CLI, not cross-account sharing or historical truth. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

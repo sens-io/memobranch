@@ -271,6 +271,15 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'snapshot': {
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => print(await vault.wikiSnapshot({
+        commit: requiredFlag(args, 'commit'), pageKeys: input.positionals,
+        includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
+      }))); } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
     case 'rules': print(await vault.wikiRules()); return;
     case 'migrate': print(await vault.wikiMigrate()); return;
     case 'set-rules': {
@@ -560,6 +569,7 @@ Usage:
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove
   amem wiki catalog | rules | migrate
+  amem wiki snapshot <page-key...> --commit FULL_HASH [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
   amem wiki jobs enqueue <evidence-id...> [--max-pages N]
