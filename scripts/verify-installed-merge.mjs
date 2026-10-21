@@ -4,7 +4,13 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { Context } from '@deepseek-ai/cordis';
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
+import { ToolRuntime } from '@deepseek-ai/dsh-tools';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { LlmClient, MemoryVault, startWebServer } from 'memobranch';
+import * as plugin from 'memobranch/deepseek-harness';
 
 const exec = promisify(execFile), cli = join(process.cwd(), 'node_modules/memobranch/dist/cli.js'), key = '82'.repeat(32);
 async function fixture(name, sensitivity = 'internal') {
@@ -111,3 +117,73 @@ try {
   assert.equal(webCase.calls(), webCount);
   console.log('Installed package: authenticated historical/current Web reads, complete signed merge preview, separate confirmed approval, both source bytes and exact retry passed (HTTP and assets, not browser interaction).');
 } finally { await web.stop(); }
+
+for (const adapter of ['MCP', 'Harness']) {
+  const example = await fixture(`manual-${adapter.toLowerCase()}-merge-vault`);
+  const baseline = await example.vault.git.run(['rev-parse', 'HEAD']);
+  const originals = await Promise.all([example.first, example.second].map(source => readFile(join(example.vault.root, source.evidencePath))));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('AMEM_') && name !== 'OPENAI_API_KEY'));
+  Object.assign(env, { AMEM_PERMISSIONS: 'read,write,review', AMEM_ALLOWED_SCOPES: 'user,project', AMEM_MAX_SENSITIVITY: 'secret',
+    AMEM_TENANT_ID: (await example.vault.config()).tenantId, AMEM_MASTER_KEY: key });
+  await agent(adapter, example.vault.root, env, async invoke => {
+    const historical = await invoke('snapshot', { commit: example.input.fromCommit, pageKeys: [example.input.pageKey] });
+    assert.equal(historical.pages.find(page => page.meta.key === example.input.pageKey).body, example.historicalBody);
+    assert.equal(historical.authorityHead, baseline);
+    const prepared = await invoke('merge_prepare', example.input);
+    assert.equal(prepared.comparison.current.body, example.currentBody);
+    assert.equal(prepared.comparison.base.pages.find(page => page.meta.key === example.input.pageKey).body, example.historicalBody);
+    assert.deepEqual(await invoke('preview', { plan: prepared.plan }), prepared.preview);
+    await assert.rejects(invoke('merge_prepare', { ...example.input, apply: true }));
+    await assert.rejects(invoke('snapshot', { commit: 'HEAD', pageKeys: [example.input.pageKey] }));
+    assert.equal(await example.vault.git.run(['rev-parse', 'HEAD']), baseline);
+    const forged = structuredClone(prepared.plan); forged.pages[0].body = 'Unsigned installed edit';
+    await assert.rejects(invoke('apply', { plan: forged }));
+    const approved = await invoke('apply', { plan: prepared.plan }); assert.ok(approved.commit);
+    const target = prepared.preview.pages.find(page => page.key === example.input.pageKey);
+    const id = (await example.vault.wikiCatalog()).find(page => page.key === example.input.pageKey).id;
+    assert.equal((await example.vault.get(id)).body, target.after.body); assert.ok(target.after.body.includes('中文 🧠📚'));
+    assert.deepEqual(await invoke('apply', { plan: prepared.plan }), { pageIds: [], commit: null });
+    for (const [i, source] of [example.first, example.second].entries()) assert.deepEqual(await readFile(join(example.vault.root, source.evidencePath)), originals[i]);
+  });
+  await agent(adapter, example.vault.root, { ...env, AMEM_PERMISSIONS: 'read' }, async (invoke, names) => {
+    assert.ok(names.includes('memory_wiki_snapshot'));
+    if (adapter === 'Harness') assert.ok(!names.includes('memory_wiki_merge_prepare'));
+    await assert.rejects(invoke('merge_prepare', { ...example.input, expectedRevision: 3 }));
+  });
+  console.log(`Installed ${adapter}: complete pinned Wiki read, manual signed merge, separate approval, authority refusal, both source bytes and exact retry passed (same vault; no external model or full host-conversation quality claim).`);
+}
+
+async function agent(adapter, root, env, action) {
+  if (adapter === 'MCP') {
+    const client = new Client({ name: 'installed-merge', version: '1' });
+    try {
+      await client.connect(new StdioClientTransport({ command: process.execPath,
+        args: [join(process.cwd(), 'node_modules/memobranch/dist/mcp.js'), root], env, stderr: 'pipe' }));
+      await action(async (operation, input) => {
+        const result = await client.callTool({ name: `memory_wiki_${operation}`, arguments: input });
+        const content = result.content[0]; assert.equal(content.type, 'text');
+        if (result.isError) throw new Error(content.text);
+        return JSON.parse(content.text);
+      }, (await client.listTools()).tools.map(tool => tool.name));
+    } finally { await client.close(); }
+    return;
+  }
+  const saved = { ...process.env }, ctx = new Context();
+  try {
+    for (const name of Object.keys(process.env)) if (name.startsWith('AMEM_') || name === 'OPENAI_API_KEY') delete process.env[name];
+    Object.assign(process.env, env);
+    await ctx.plugin(SystemPrompt, {}); await ctx.plugin(ToolRuntime, {});
+    await ctx.plugin(plugin, { vaultRoot: root });
+    let callId = 0;
+    await action(async (operation, input) => {
+      const result = await ctx.tools.execute({ name: `memory_wiki_${operation}`, arguments: input,
+        callId: `installed-merge-${callId++}`, signal: new AbortController().signal });
+      if (result.isError) throw new Error(JSON.stringify(result.error));
+      return result.value;
+    }, ctx.tools.schemas().map(tool => tool.name));
+  } finally {
+    await ctx.fiber.dispose();
+    for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name];
+    Object.assign(process.env, saved);
+  }
+}

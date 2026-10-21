@@ -114,11 +114,13 @@ flowchart LR
 
 > **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
 
-> **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Read-only local API/CLI, not cross-account sharing or historical truth. Not yet published to npm.
+> **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Local read-only views, not cross-account sharing or historical truth. Not yet published to npm.
 
 > **Manual Wiki merge review (development source):** [Combine a retained revision with the current page through a signed, explicit review](docs/manual-wiki-merge.md). Keeps sources, conditions, conflicts and stricter access limits; no model call, automatic approval or Git branch merge. Not yet published to npm.
 
 > **Web merge workbench (development source):** [Compare history, edit a draft and approve separately in the local console](docs/web-manual-merge.md). Draft edits invalidate old approvals; uncertain saves can explicitly retry the original signed plan. Not yet published to npm.
+
+> **Agent revision/merge tools (development source):** [Use the same bounded reader and manual merge preparation through MCP or DeepSeek Harness](docs/agent-manual-merge.md). Host-owned authority, explicit confidential selection and separate signed-plan approval remain required. No automatic merge; not yet published to npm.
 
 ### Requirements
 

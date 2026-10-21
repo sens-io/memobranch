@@ -41,7 +41,7 @@ try {
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
-    'docs/web-manual-merge.md',
+    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
