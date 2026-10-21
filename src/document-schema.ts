@@ -1,5 +1,6 @@
 import { AgentMemoryError } from './errors.js';
 import { assertEvidenceDocument } from './evidence.js';
+import { assertFactValidity } from './effective-time.js';
 import { memoryKinds, scopes, sensitivities, type MarkdownDocument } from './types.js';
 import { assertWikiDocument } from './wiki-schema.js';
 
@@ -65,6 +66,7 @@ function assertMemoryDocument(document: MarkdownDocument<Record<string, unknown>
   stringArray(meta, 'conditions', path);
   stringArray(meta, 'tags', path);
   positiveInteger(meta, 'revision', path);
+  assertFactValidity(meta);
   optionalIsoDate(meta, 'expiresAt', path);
   optionalStringArray(meta, 'supersedes', path);
   optionalString(meta, 'supersededBy', path);

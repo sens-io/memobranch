@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
+import { z } from 'zod';
 import { OperationsTelemetry } from './audit.js';
 import { packContext, type ContextBlock, type ContextBudgetOptions, type ContextBudgetReport } from './context-budget.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
@@ -8,6 +9,7 @@ import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
 import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion } from './evidence.js';
+import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityConditions, factValidityFields, type MemoriesAtOptions, type MemoryValidityUpdate } from './effective-time.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
@@ -71,7 +73,7 @@ export interface ConsolidationResult {
 export interface RecallResult {
   text: string;
   memories: SearchHit[];
-  wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[] }>;
+  wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[]; validFrom?: string; validUntil?: string }>;
   truncated: boolean;
   budget?: ContextBudgetReport;
 }
@@ -786,7 +788,7 @@ export class MemoryVault {
       const pages = new Map((await this.wikiEngine().recallPages(hits.filter(hit => hit.path.startsWith('wiki/pages/')).map(hit => hit.id), options)).map(page => [page.meta.id, page]));
       const memories = new Map((await Promise.all(hits.filter(hit => !hit.path.startsWith('wiki/pages/')).map(hit => this.readDocument<MemoryMeta>(hit.path))))
         .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
-          && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()))
+          && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()) && factEffectiveAt(page.meta))
         .map(page => [page.meta.id, page]));
       const records: Array<{ hit: SearchHit; ordinary: boolean; record: RecallResult['wikiPages'][number] }> = [];
       for (const hit of hits) {
@@ -795,7 +797,9 @@ export class MemoryVault {
         if (!page) continue;
         const ordinary = page.meta.type === 'memory';
         const record = { key: page.meta.key, id: page.meta.id, path: page.path, revision: page.meta.revision,
-          body: page.body, conditions: [...page.meta.conditions], uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence] };
+          body: page.body, conditions: [...page.meta.conditions, ...(ordinary ? factValidityConditions(page.meta as MemoryMeta) : [])],
+          uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence],
+          ...(ordinary ? factValidityFields(page.meta as MemoryMeta) : {}) };
         // Keep an entire record, including conditions and citations, or omit it.
         // JSON encoding also separates source text from the surrounding prompt.
         records.push({ hit, ordinary, record });
@@ -811,6 +815,73 @@ export class MemoryVault {
     return this.settledRead(async () => sourceTimeline(sourceUri,
       await this.readDirectory<EvidenceMeta>('evidence', 'read', options),
       await this.wikiEngine().referencePages(options), options));
+  }
+
+  async setMemoryValidity(id: string, options: MemoryValidityUpdate) {
+    const parsed = z.object({ validFrom: z.string().nullable(), validUntil: z.string().nullable(),
+      expectedRevision: z.number().int().min(1) }).strict().safeParse(options);
+    if (!parsed.success || typeof id !== 'string' || !/^mem-[a-f0-9]{12}$/.test(id)) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'A memory ID, both nullable time bounds and expectedRevision are required');
+    }
+    const bounds = { ...(parsed.data.validFrom === null ? {} : { validFrom: effectiveTimestamp(parsed.data.validFrom) }),
+      ...(parsed.data.validUntil === null ? {} : { validUntil: effectiveTimestamp(parsed.data.validUntil) }) };
+    assertFactValidity(bounds);
+    const changed = await this.withMutation('review', this.principal, 'memory-validity', 'memory: annotate effective interval', async () => {
+      const memory = await this.findOneMemory(id, 'review');
+      if (memory.meta.status === 'revoked') throw new AgentMemoryError('VALIDATION_FAILED', 'Revoked memories cannot be reactivated by time annotation');
+      if (memory.meta.revision !== parsed.data.expectedRevision) throw new AgentMemoryError('VALIDATION_FAILED', 'Memory revision changed; inspect it again before annotating');
+      await this.assertEvidenceReferences(memory.meta.evidence, 'review');
+      if (memory.meta.validFrom === bounds.validFrom && memory.meta.validUntil === bounds.validUntil) return memory.meta.revision;
+      delete memory.meta.validFrom;
+      delete memory.meta.validUntil;
+      Object.assign(memory.meta, bounds);
+      memory.meta.updatedAt = nowIso();
+      memory.meta.revision += 1;
+      await this.writeDocument(memory);
+      await this.appendLog('memory-validity', this.principal, memory.meta.id);
+      return memory.meta.revision;
+    });
+    return { memoryId: id, revision: changed.value, ...bounds, commit: changed.commit };
+  }
+
+  async memoriesAt(at: string, options: MemoriesAtOptions = {}) {
+    const instant = effectiveTimestamp(at);
+    const parsed = z.object({ key: z.string().trim().min(1).max(512).optional(), includeUnknown: z.boolean().default(false),
+      includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
+      offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30) }).strict().safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid dated memory view options');
+    return this.settledRead(async () => {
+      const config = await this.config(), now = Date.now(), requested = Date.parse(instant);
+      const eligible: Array<MarkdownDocument<MemoryMeta>> = [];
+      for (const memory of await this.readDirectory<MemoryMeta>('wiki', 'read', parsed.data)) {
+        if (memory.meta.type !== 'memory' || !['active', 'conflicted', 'superseded'].includes(memory.meta.status)
+            || (memory.meta.expiresAt && Date.parse(memory.meta.expiresAt) <= now)) continue;
+        if (parsed.data.key !== undefined && normalizeKey(memory.meta.key) !== normalizeKey(parsed.data.key)) continue;
+        if (!parsed.data.includeUnknown && memory.meta.validFrom === undefined && memory.meta.validUntil === undefined) continue;
+        if (!factEffectiveAt(memory.meta, requested)) continue;
+        try { await this.assertEvidenceReferences(memory.meta.evidence, 'read'); }
+        catch { throwIfCancelled(); continue; }
+        eligible.push(memory);
+      }
+      eligible.sort((a, b) => (b.meta.validFrom === undefined ? -Infinity : Date.parse(b.meta.validFrom))
+        - (a.meta.validFrom === undefined ? -Infinity : Date.parse(a.meta.validFrom)) || a.path.localeCompare(b.path));
+      const limit = Math.min(parsed.data.limit, config.limits.maxResults);
+      const items = eligible.slice(parsed.data.offset, parsed.data.offset + limit).map(memory => ({
+        id: memory.meta.id, path: memory.path, key: memory.meta.key, kind: memory.meta.kind, revision: memory.meta.revision,
+        recordedAt: memory.meta.createdAt, updatedAt: memory.meta.updatedAt, validatedAt: memory.meta.validatedAt,
+        validFrom: memory.meta.validFrom ?? null, validUntil: memory.meta.validUntil ?? null,
+        scope: memory.meta.scope, sensitivity: memory.meta.sensitivity, status: memory.meta.status, body: memory.body,
+        evidence: [...memory.meta.evidence], conditions: [...memory.meta.conditions, ...factValidityConditions(memory.meta)],
+        uncertainty: [ ...(memory.meta.validFrom === undefined ? ['Effective start is unknown.'] : []),
+          ...(memory.meta.validUntil === undefined ? ['Effective end is unknown.'] : []),
+          ...(memory.meta.status === 'conflicted' ? ['Current record has unresolved conflicts.'] : []),
+          ...(memory.meta.status === 'superseded' ? ['Current record is superseded; this is retained context, not an active assertion.'] : []) ],
+      }));
+      return { at: instant, timeBasis: 'explicit-effective-interval' as const, reconstruction: false as const,
+        offset: parsed.data.offset, limit, total: eligible.length, items,
+        notes: ['Latest retained revisions and reviewer annotations, not what was known at the requested time.',
+          'Current authority, evidence access, expiry, revocation and erasure apply. This is not historical Wiki answering.'] };
+    });
   }
 
   private async refreshSearchIndex(semantic: boolean, permission: Permission): Promise<ReindexResult> {
@@ -831,6 +902,7 @@ export class MemoryVault {
     const residentMemories = (await this.readDirectory<MemoryMeta>('wiki', 'read', options))
       .filter((memory) => memory.meta.type === 'memory' && memory.meta.status === 'active')
       .filter((memory) => !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now())
+      .filter((memory) => factEffectiveAt(memory.meta))
       .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
       .filter((memory) => memory.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
       .filter((memory) => memory.meta.sensitivity !== 'secret' || options.includeSecret === true)
@@ -838,7 +910,8 @@ export class MemoryVault {
       .slice(0, config.residentBudget);
     const blocks: ContextBlock[] = residentMemories.map(memory => ({ id: memory.meta.id, section: 'resident',
       text: JSON.stringify({ key: memory.meta.key, id: memory.meta.id, path: memory.path, revision: memory.meta.revision,
-        body: memory.body, conditions: memory.meta.conditions, uncertainty: [], evidence: memory.meta.evidence }) }));
+        body: memory.body, conditions: [...memory.meta.conditions, ...factValidityConditions(memory.meta)], uncertainty: [],
+        evidence: memory.meta.evidence, ...factValidityFields(memory.meta) }) }));
     for (const { record } of recalled) blocks.push({ id: record.id, section: 'retrieved', text: JSON.stringify(record) });
     const packed = packContext(blocks, { ...options, maxCharacters: Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters) });
     return { text: packed.text, budget: packed.budget, truncated: packed.truncated,
@@ -1417,12 +1490,12 @@ export class MemoryVault {
     const now = Date.now();
     const safeMemories = memories.filter((memory) =>
       !isEncryptedEnvelope(memory.meta) && !config.policy.requireEncryptionFor.includes(memory.meta.sensitivity));
-    const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now));
+    const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now) && factEffectiveAt(memory.meta, now));
     const resident = active
       .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
       .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
       .slice(0, config.residentBudget);
-    const memoryLines = resident.map((memory) => `- [${memory.meta.key}](./${memory.path}): ${candidateStatement(memory.body)}`);
+    const memoryLines = resident.map((memory) => `- [${memory.meta.key}](./${memory.path}): ${candidateStatement(memory.body)}${factValidityConditions(memory.meta).length ? ` — ${factValidityConditions(memory.meta).join(' ')}` : ''}`);
     await this.writeManaged('MEMORY.md', ['# Resident memory', '', '> Auto-generated. Stable, frequently useful facts only; confidential entries are excluded.', '', ...(memoryLines.length ? memoryLines : ['_No approved resident memories yet._']), ''].join('\n'));
 
     const rows = safeMemories

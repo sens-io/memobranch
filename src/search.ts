@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { assertManagedDocument } from './document-schema.js';
+import { factEffectiveAt, factValidityFields } from './effective-time.js';
 import { isEncryptedEnvelope } from './encryption.js';
 import { isEmbeddingVector, type LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
@@ -10,7 +11,7 @@ import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permissio
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
 import { sha256, unique, writeText } from './utils.js';
 
-const INDEX_VERSION = 5 as const;
+const INDEX_VERSION = 6 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
 
 export interface IndexedDocument {
@@ -25,6 +26,8 @@ export interface IndexedDocument {
   links: string[];
   status?: string;
   expiresAt?: string;
+  validFrom?: string;
+  validUntil?: string;
   contentHash: string;
   sourceSize: number;
   sourceMtimeMs: number;
@@ -246,7 +249,8 @@ export class PersistentSearchIndex {
         const sensitivity = sensitivityOf(meta);
         const status = typeof meta.status === 'string' ? meta.status : undefined;
         const expiresAt = typeof meta.expiresAt === 'string' ? meta.expiresAt : undefined;
-        if (!isActive({ ...document, scope, sensitivity, ...(status ? { status } : {}), ...(expiresAt ? { expiresAt } : {}) })) return null;
+        if (!isActive({ ...document, scope, sensitivity, ...(status ? { status } : {}), ...(expiresAt ? { expiresAt } : {}),
+          ...factValidityFields(meta) })) return null;
         if (!canAccess(principal, scope, sensitivity)) return null;
         const links = extractMarkdownLinks(canonical.body)
           .map((target) => resolveLink(document.path, target))
@@ -259,6 +263,7 @@ export class PersistentSearchIndex {
           scope,
           sensitivity,
           ...(status ? { status } : {}),
+          ...factValidityFields(meta),
           score: Number(score.toFixed(4)),
           lexicalScore: Number(lexicalScore.toFixed(4)),
           semanticScore: Number(semanticScore.toFixed(4)),
@@ -504,6 +509,7 @@ function indexParts(relativePath: string, meta: Record<string, unknown>, body: s
     links,
     ...(typeof meta.status === 'string' ? { status: meta.status } : {}),
     ...(typeof meta.expiresAt === 'string' ? { expiresAt: meta.expiresAt } : {}),
+    ...factValidityFields(meta),
     contentHash,
     sourceSize,
     sourceMtimeMs,
@@ -651,7 +657,7 @@ function sensitivityOf(meta: Record<string, unknown>): Sensitivity {
 
 function isActive(document: IndexedDocument): boolean {
   if (['revoked', 'superseded', 'rejected', 'conflicted', 'promoted'].includes(document.status ?? '')) return false;
-  return !document.expiresAt || Date.parse(document.expiresAt) > Date.now();
+  return (!document.expiresAt || Date.parse(document.expiresAt) > Date.now()) && factEffectiveAt(document);
 }
 
 function selectedArea(path: string, options: SearchOptions): boolean {

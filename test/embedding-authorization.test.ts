@@ -13,7 +13,7 @@ import { MemoryVault } from '../src/vault.js';
 const roots: string[] = [];
 const masterKey = '72'.repeat(32);
 const allowed = 'ALLOWED_EMBEDDING_BODY';
-const forbidden = /OUTSIDE_SCOPE_BODY|OUTSIDE_SENSITIVITY_BODY|ENCRYPTED_BODY|EXPIRED_BODY|REVOKED_BODY|CONFLICTED_BODY|SUPERSEDED_BODY/;
+const forbidden = /OUTSIDE_SCOPE_BODY|OUTSIDE_SENSITIVITY_BODY|ENCRYPTED_BODY|EXPIRED_BODY|REVOKED_BODY|CONFLICTED_BODY|SUPERSEDED_BODY|FUTURE_BODY|ENDED_BODY/;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -49,6 +49,8 @@ async function fixture(llm: LlmClient) {
     { id: 'scope', body: 'OUTSIDE_SCOPE_BODY', scope: 'project' },
     { id: 'sensitivity', body: 'OUTSIDE_SENSITIVITY_BODY', sensitivity: 'internal' },
     { id: 'expired', body: 'EXPIRED_BODY', expiresAt: '2000-01-01T00:00:00.000Z' },
+    { id: 'future', body: 'FUTURE_BODY', validFrom: '2999-01-01T00:00:00.000Z' },
+    { id: 'ended', body: 'ENDED_BODY', validUntil: '2000-01-01T00:00:00.000Z' },
     { id: 'revoked', body: 'REVOKED_BODY', status: 'revoked', revokedAt: timestamp, revocationReason: 'Retired' },
     { id: 'conflicted', body: 'CONFLICTED_BODY', status: 'conflicted' },
     { id: 'superseded', body: 'SUPERSEDED_BODY', status: 'superseded', supersededBy: 'allowed' },

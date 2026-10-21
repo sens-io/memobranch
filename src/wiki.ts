@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError } from './errors.js';
+import { factEffectiveAt, factValidityConditions } from './effective-time.js';
 import type { LlmClient } from './llm.js';
 import { wikiLocalLinks } from './wiki-links.js';
 import { throwIfCancelled } from './operation.js';
@@ -755,10 +756,13 @@ function contentIdentity(page: Page): string {
 
 function legacyPage(document: MarkdownDocument<MemoryMeta>): Page {
   const meta = document.meta;
+  const ends = [meta.expiresAt, meta.validUntil].filter((value): value is string => value !== undefined).sort((a, b) => Date.parse(a) - Date.parse(b));
   return { path: document.path, body: document.body, meta: {
     id: meta.id, type: 'wiki-page', key: `legacy:${meta.id}`, pageType: 'concept', title: meta.key, summary: document.body.replace(/\s+/g, ' ').slice(0, 500),
     scope: meta.scope, sensitivity: meta.sensitivity, revision: meta.revision, createdAt: meta.createdAt, updatedAt: meta.updatedAt,
-    status: meta.status === 'active' || meta.status === 'conflicted' ? meta.status : 'revoked', evidence: meta.evidence, links: [], dependencies: {}, rules: {}, conditions: meta.conditions, uncertainty: meta.status === 'conflicted' ? ['Legacy memory has unresolved conflict.'] : [], ...(meta.expiresAt ? { expiresAt: meta.expiresAt } : {}),
+    status: factEffectiveAt(meta) && (meta.status === 'active' || meta.status === 'conflicted') ? meta.status : 'revoked',
+    evidence: meta.evidence, links: [], dependencies: {}, rules: {}, conditions: [...meta.conditions, ...factValidityConditions(meta)],
+    uncertainty: meta.status === 'conflicted' ? ['Legacy memory has unresolved conflict.'] : [], ...(ends[0] ? { expiresAt: ends[0] } : {}),
   } };
 }
 

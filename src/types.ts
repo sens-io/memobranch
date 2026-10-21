@@ -115,6 +115,8 @@ export interface MemoryMeta {
   conditions: string[];
   tags: string[];
   expiresAt?: string;
+  validFrom?: string;
+  validUntil?: string;
   revision: number;
   supersedes?: string[];
   supersededBy?: string;
@@ -144,6 +146,8 @@ export interface SearchHit {
   semanticScore?: number;
   /** True only when this record actually participated in semantic scoring. */
   semanticApplied?: boolean;
+  validFrom?: string;
+  validUntil?: string;
 }
 
 export interface DoctorReport {
