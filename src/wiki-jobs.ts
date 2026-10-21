@@ -116,20 +116,26 @@ export class WikiJobs {
   }
 
   async preview(id: string): Promise<WikiPreview> {
+    return (await this.review(id)).preview;
+  }
+
+  async review(id: string): Promise<{ plan: WikiPlan; preview: WikiPreview }> {
     await this.authorize(false);
     return this.port.locked(async () => {
       const job = await this.owned(id);
       if (job.status !== 'ready' || !job.plan) throw invalid();
-      return this.port.preview(job.plan, job.ceiling);
+      return { plan: job.plan, preview: await this.port.preview(job.plan, job.ceiling) };
     });
   }
 
-  async apply(id: string): Promise<{ pageIds: string[]; commit: string | null }> {
+  async apply(id: string, expectedProof?: string): Promise<{ pageIds: string[]; commit: string | null }> {
     await this.authorize(false);
     authorize(this.port.principal, 'review');
+    if (expectedProof !== undefined && (typeof expectedProof !== 'string' || !/^[a-f0-9]{64}$/.test(expectedProof))) throw invalid();
     const selected = await this.port.locked(async () => {
       const job = await this.owned(id);
       if (job.status !== 'ready' || !job.plan) throw invalid();
+      if (expectedProof !== undefined && expectedProof !== job.plan.proof) throw invalid();
       await this.port.preview(job.plan, job.ceiling);
       return { plan: job.plan, ceiling: job.ceiling };
     });

@@ -22,6 +22,8 @@ const empty = z.object({}).strict();
 const classified = { scope: z.enum(scopes), sensitivity: z.enum(sensitivities) };
 const confirmed = { confirm: z.literal(true) };
 const reason = { id, reason: text, ...confirmed };
+const jobId = z.string().regex(/^wj-[a-f0-9]{32}$/);
+const jobReference = z.object({ id: jobId }).strict();
 const smallRequestBytes = 1_048_576;
 const reviewRequestBytes = 16 * smallRequestBytes;
 
@@ -53,6 +55,17 @@ const routes: Record<string, Route> = {
   'settings-save': route('admin', z.object({ values: settingsSchema, revision: z.string().regex(/^[a-f0-9]{64}$/), ...confirmed }).strict(),
     (vault, data) => vault.updateSettings(data.values, data.revision)),
   catalog: route('read', empty, vault => vault.wikiCatalog()),
+  'jobs-list': route('read', empty, vault => vault.wikiJobs()),
+  'jobs-show': route('read', jobReference, (vault, data) => vault.wikiJob(data.id)),
+  'jobs-enqueue': route('write', z.object({ evidenceIds: z.array(z.string().regex(/^ev-[a-f0-9]{12,64}$/)).min(1).max(40),
+    maxPages: z.number().int().min(1).max(40).optional(), ...confirmed }).strict(),
+    (vault, data) => vault.wikiEnqueue({ evidenceIds: data.evidenceIds, ...(data.maxPages === undefined ? {} : { maxPages: data.maxPages }) })),
+  'jobs-cancel': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiCancelJob(data.id)),
+  'jobs-retry': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiRetryJob(data.id)),
+  'jobs-remove': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiRemoveJob(data.id)),
+  'jobs-review': route('read', jobReference, (vault, data) => vault.wikiReviewJob(data.id)),
+  'jobs-apply': route('review', z.object({ id: jobId, proof: z.string().regex(/^[a-f0-9]{64}$/), ...confirmed }).strict(),
+    (vault, data) => vault.wikiApplyJob(data.id, data.proof)),
   rules: route('read', empty, vault => vault.wikiRules()),
   'rules-save': route('maintain', z.object({ purpose: text, instructions: text, ...classified,
     expectedRevision: z.number().int().min(0), ...confirmed }).strict(),
@@ -109,6 +122,30 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
   const tokenBytes = Buffer.from(`Bearer ${token}`);
   const active = new Set<AbortController>();
   const pending = new Set<Promise<void>>();
+  const workers = new Set<AbortController>();
+  const operations: Record<string, Route> = { ...routes,
+    'jobs-run': route('write', z.object({ id: jobId, ...confirmed }).strict(), async (vault, data) => {
+      if (stopping || workers.size) throw new AgentMemoryError('LOCK_TIMEOUT', 'A Web attempt is active or stopping');
+      // Reserve before awaiting, including preflight, so simultaneous requests
+      // cannot start unbounded background work. The core still owns the claim.
+      const controller = new AbortController();
+      workers.add(controller);
+      let launched = false;
+      try {
+        const state = await vault.wikiJob(data.id);
+        if (state.status !== 'queued') throw new AgentMemoryError('VALIDATION_FAILED', 'Only queued Wiki jobs can be started');
+        if (stopping || controller.signal.aborted) throw new AgentMemoryError('OPERATION_CANCELLED', 'Web server is stopping');
+        // A fresh context deliberately does not inherit the HTTP disconnect
+        // signal. Persisted status, not this acknowledgement, is authoritative.
+        const task = withOperation(controller.signal, () => vault.wikiRunJob({ id: data.id, signal: controller.signal }))
+          .then(() => {}, () => {})
+          .finally(() => { workers.delete(controller); pending.delete(task); });
+        pending.add(task);
+        launched = true;
+        return { id: data.id, accepted: true };
+      } finally { if (!launched) workers.delete(controller); }
+    }),
+  };
   let authority = '';
   let stopping = false;
   const server = createServer((req, res) => {
@@ -147,7 +184,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     }
     if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') return send(res, 415, { error: { code: 'VALIDATION_FAILED', message: 'JSON required' } });
     const name = path.slice(5);
-    const operation = Object.hasOwn(routes, name) ? routes[name] : undefined;
+    const operation = Object.hasOwn(operations, name) ? operations[name] : undefined;
     if (!operation) return send(res, 404, { error: { code: 'NOT_FOUND', message: 'Route not found' } });
     if (active.size >= 8) return send(res, 429, { error: { code: 'BUSY', message: 'Too many active operations' } });
     const controller = new AbortController();
@@ -185,6 +222,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
         }
       }
       if (name === 'preview') assertReviewBytes(result);
+      if (name === 'jobs-review') assertReviewBytes(result);
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       send(res, 200, { result });
     } catch (error) {
@@ -217,6 +255,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     stopped ??= (async () => {
       stopping = true;
       for (const controller of active) controller.abort();
+      for (const controller of workers) controller.abort();
       const closed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       // Close unfinished request bodies too, then await safe vault transaction cleanup.
       server.closeAllConnections();

@@ -165,7 +165,8 @@ export class MemoryVault {
   async wikiRetryJob(id: string) { return this.wikiJobsEngine().retry(id); }
   async wikiJobPlan(id: string) { return this.wikiJobsEngine().plan(id); }
   async wikiPreviewJob(id: string) { return this.wikiJobsEngine().preview(id); }
-  async wikiApplyJob(id: string) { return this.wikiJobsEngine().apply(id); }
+  async wikiReviewJob(id: string) { return this.wikiJobsEngine().review(id); }
+  async wikiApplyJob(id: string, expectedProof?: string) { return this.wikiJobsEngine().apply(id, expectedProof); }
   async wikiRemoveJob(id: string) { return this.wikiJobsEngine().remove(id); }
   async wikiCorrect(key: string, instruction: string, options: { expectedRevision?: number } = {}) {
     authorize(this.principal, 'read');
