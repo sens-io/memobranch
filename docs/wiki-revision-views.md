@@ -18,6 +18,8 @@ Sources are listed only by identity, path and evidence hash. Rule identities/rev
 
 Reading uses Git objects directly and reuses the Wiki's source/link/rule validation. It does not checkout, reset, merge, change refs/index, make a second worktree, recreate keys, call a model, approve changes or alter canonical files. It uses the existing temporary writer lock so a concurrent writer waits for the settled read. Pending transactions, synchronization or erasure require explicit recovery first. Dirty managed configuration, Wiki or evidence must be committed/recovered before reading; an external HEAD or managed-file change detected before return also rejects the result. Normal runtime lock files are not a snapshot store.
 
+Other programs must not edit the vault concurrently: the lock coordinates MemoBranch writers, not arbitrary Git or filesystem writers. Head/status checks reject changes they observe; they are not an operating-system lease preventing outside edits.
+
 ## Current access still applies
 
 Every requested page and every **historical** dependency must remain currently accessible. Checks include current tenant, operation permission, scope/sensitivity, transitive provenance, status, expiration and ordinary-memory effective dates. A dependency that is no longer linked by today's root page is still checked if the historical page uses it. Historical records also have to pass validation, authorization and current encryption requirements; a historical expired/withdrawn page does not become valid because its current revision was extended or reactivated.
@@ -27,6 +29,8 @@ For ordinary memories, both the historical and current intervals must permit use
 Sensitive/secret material requires both sufficient principal permission and explicit `includeSensitive` / `includeSecret` (CLI `--include-sensitive` / `--include-secret`). Opting out avoids decrypting those records. Missing or destroyed keys are not recovered from Git. Current withdrawal, erasure or inaccessible sources cannot be bypassed by an old revision.
 
 These guarantees apply to each live read. Once a caller copies the returned text, later withdrawal cannot recall that copy. The JSON is not an authorization token and there is no import/apply endpoint for it. Do not share a private repository, key store or returned confidential text under the assumption that this API creates team permissions.
+
+The selected commit must already have vault configuration schema v2 and records accepted by the current canonical validators. Historical schema migration is not performed, even if an older representation has since been migrated in the current vault.
 
 ## Bounds and remaining work
 
