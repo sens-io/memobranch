@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Authenticated task management preserves authority
-The local console MUST manage only jobs accessible to the current startup identity, tenant and current scope/sensitivity authority. Read operations MUST NOT start compilation or approve knowledge. Credentials and caller-controlled identities MUST NOT be accepted.
+The local console MUST preserve the current startup identity, tenant and operation authority. Inspection, execution and review MUST require coverage of the job's original scope/sensitivity ceiling. Cancel/remove MUST require current tenant/read/write authority and the original owner, but MAY clean up that owner's job after its context scope narrows without disclosing the old context. Read operations MUST NOT start compilation or approve knowledge. Credentials and caller-controlled identities MUST NOT be accepted.
 
 #### Scenario: A reader or foreign identity tries to mutate a task
 - **WHEN** an authenticated request lacks the operation's current authority or names a foreign job

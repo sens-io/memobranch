@@ -298,7 +298,7 @@ const jobLabels={queued:'等待执行',running:'正在编译',ready:'计划待�
 const jobReasons={'worker-interrupted':'执行进程已退出；需要明确重试','context-erased':'相关资料已删除，旧计划不可再用',deadline:'达到本次执行时限',cancelled:'已取消本次任务','compilation-failed':'编译或结果校验失败'};
 async function jobs(){
  const epoch=session,current=generation,out=el('div'),lifetime=new AbortController(),dialogs=new Set();
- let closed=false,timer,inFlight=false,refreshAgain=false,rows=[],rendered='';
+ let closed=false,timer,inFlight=false,refreshAgain=false,rows=[],rendered='';const rowCache=new Map();
  const valid=()=>!closed&&epoch===session&&current===generation;
  const visible=()=>valid()&&!document.hidden;
  const stats=el('div','stats'),board=el('div','job-board'),list=card('本机编译记录','这里只显示当前身份可见的任务；编译完成不代表已批准。'),listing=el('div'),feedback=el('p','meta muted');
@@ -321,9 +321,13 @@ async function jobs(){
  function render(){
   stats.replaceChildren();[['等待执行',rows.filter(r=>r.status==='queued').length],['正在执行',rows.filter(r=>r.status==='running').length],['计划待审核',rows.filter(r=>r.status==='ready').length],['失败 / 取消',rows.filter(r=>r.status==='failed'||r.status==='cancelled').length]].forEach(([label,count])=>{const item=el('div','stat');item.append(el('span','muted',label),el('strong','',count),el('small','','当前身份可见'));stats.append(item);});
   const selected=[...rows].reverse().filter(job=>filter.value==='all'||job.status===filter.value),fingerprint=JSON.stringify([filter.value,selected]);
-  if(fingerprint===rendered)return;rendered=fingerprint;listing.replaceChildren();
-  if(!selected.length)listing.append(empty(rows.length?'没有符合此状态的任务。':'还没有编译任务。提交已有证据编号后，再明确执行。'));
-  for(const job of selected){
+  if(fingerprint===rendered)return;rendered=fingerprint;
+  const ids=new Set(selected.map(job=>job.id));for(const [id,cached]of rowCache){if(!ids.has(id)){cached.row.remove();rowCache.delete(id);}}
+  if(!selected.length){listing.replaceChildren(empty(rows.length?'没有符合此状态的任务。':'还没有编译任务。提交已有证据编号后，再明确执行。'));return;}
+  for(const child of [...listing.children])if(!child.classList.contains('job-row'))child.remove();
+  for(const [index,job]of selected.entries()){
+   const fingerprint=JSON.stringify(job),cached=rowCache.get(job.id);
+   if(cached?.fingerprint===fingerprint){if(listing.children[index]!==cached.row)listing.insertBefore(cached.row,listing.children[index]||null);continue;}
    const row=el('article','job-row'),head=el('div','row-head');head.append(el('h3','',job.id),el('span','job-status '+job.status,jobLabels[job.status]||job.status));row.append(head);
    row.append(el('p','meta','尝试 '+job.attempts+' / 3 · 创建 '+stamp(job.createdAt)+' · 更新 '+stamp(job.updatedAt)));
    const stages=el('div','job-stages');stages.setAttribute('aria-label','真实编译阶段');
@@ -339,7 +343,7 @@ async function jobs(){
     if(job.status!=='running')actions.append(action('删除任务','jobs-remove',job,'确认永久删除这个任务及计划密钥？正式 Wiki 页面和原始证据不受影响。'));
    }
    if(job.status==='ready')actions.append(button('查看变更与审核',()=>review(job.id),'primary'));
-   row.append(actions);listing.append(row);
+   row.append(actions);if(cached)cached.row.remove();listing.insertBefore(row,listing.children[index]||null);rowCache.set(job.id,{fingerprint,row});
   }
  }
  async function refresh(){

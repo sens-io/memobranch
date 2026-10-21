@@ -158,6 +158,8 @@ test('Web jobs: strict schemas, confirmation, owner and current scope checks run
   const narrow = await start({ ...vault.principal, scopes: ['public'], maxSensitivity: 'public' });
   assert.deepEqual((await call(narrow, 'jobs-list')).body.result, []);
   assert.equal((await call(narrow, 'jobs-run', { id: job.id, confirm: true })).status, 403);
+  assert.equal((await call(narrow, 'jobs-cancel', { id: job.id, confirm: true })).status, 200, 'owner can stop work after its context scope narrows');
+  assert.equal((await call(narrow, 'jobs-remove', { id: job.id, confirm: true })).status, 200, 'owner can clean up without disclosing old context');
   assert.equal(llm.calls, 0); assert.equal((await vault.wikiCatalog()).length, 0);
 });
 

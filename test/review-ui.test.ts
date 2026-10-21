@@ -22,12 +22,20 @@ class Element {
   root = false;
   ownText = '';
   dataset: Record<string, string> = {};
-  classList = { add: (...names: string[]) => { this.className = [this.className, ...names].filter(Boolean).join(' '); } };
+  classList = { add: (...names: string[]) => { this.className = [this.className, ...names].filter(Boolean).join(' '); },
+    contains: (name: string) => this.className.split(' ').includes(name) };
   constructor(readonly tagName: string) {}
   get textContent(): string { return this.ownText + this.children.map(child => child.textContent).join(''); }
   set textContent(value: string) { this.ownText = String(value); this.children.forEach(child => { child.parent = null; }); this.children = []; }
   get isConnected(): boolean { return this.root || Boolean(this.parent?.isConnected); }
   append(...children: Element[]) { for (const child of children) { child.remove(); child.parent = this; this.children.push(child); } }
+  insertBefore(child: Element, reference: Element | null) {
+    if (child === reference) return child;
+    if (reference && reference.parent !== this) throw new Error('Invalid DOM reference');
+    child.remove(); child.parent = this;
+    if (reference) this.children.splice(this.children.indexOf(reference), 0, child); else this.children.push(child);
+    return child;
+  }
   replaceChildren(...children: Element[]) { this.textContent = ''; this.append(...children); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
   setAttribute(key: string, value: string) { this.attributes.set(key, value); }
@@ -396,6 +404,24 @@ test('Web jobs UI: review uses the same displayed proof, blocks blind reapproval
   assert.match(dialog.textContent, /本次批准已完成.*abcdef123456/s);
   assert.equal(ui.requests.some(r => r.operation === 'apply' || r.operation === 'preview'), false, 'must not substitute a generic wider-authority vault');
   ui.run('pageCleanup()'); assert.equal(dialog.isConnected, false);
+});
+
+test('Web jobs UI: another task changing stage preserves unrelated action nodes and updates only that row', async () => {
+  const other = { ...task, id: 'wj-' + 'c'.repeat(32), status: 'running', stage: 'compiling' };
+  let rows = [task, other];
+  const ui = harness(() => success(rows));
+  const output = await ui.run('jobs()') as Element; ui.app.append(output);
+  const action = button(output, '执行一次'), before = find(output, node => node.className === 'job-row' && node.textContent.includes(other.id));
+  rows = [task, { ...other, stage: 'validating', updatedAt: '2026-10-21T01:00:00.000Z' }];
+  await button(output, '刷新状态').fire('click');
+  assert.equal(button(output, '执行一次'), action); assert.equal(action.isConnected, true);
+  const after = find(output, node => node.className === 'job-row' && node.textContent.includes(other.id));
+  assert.notEqual(after, before); assert.equal(before.isConnected, false);
+  assert.equal(find(after, node => node.className === 'current').textContent, '结果校验');
+  rows = [{ ...task, id: 'wj-' + 'd'.repeat(32) }, task, rows[1]!];
+  await button(output, '刷新状态').fire('click');
+  assert.equal(action.isConnected, true, 'inserting another task must not detach existing rows');
+  ui.run('pageCleanup()');
 });
 
 test('Web jobs UI: late preview cannot expose approval after leaving, and readers have no mutation controls', async () => {
