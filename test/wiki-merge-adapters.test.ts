@@ -194,7 +194,9 @@ for (const adapter of ['MCP', 'Harness'] as const) {
           await acquired;
           const pending = invoke(operation, operation === 'snapshot' ? snapshot : input, controller.signal).then(() => null, error => error);
           await waitFor(async () => (await readdir(`${lock}.queue`)).length === 2);
-          controller.abort(); assert.ok(await pending, 'cancelled invocation must fail');
+          controller.abort();
+          const failure = await pending; assert.ok(failure, 'cancelled invocation must fail');
+          assert.match(String(failure), adapter === 'Harness' ? /OPERATION_CANCELLED/ : /cancel|abort/i);
           await waitFor(async () => (await readdir(`${lock}.queue`)).length === 1);
           assert.equal(existsSync(lock), true); assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
         } finally { controller.abort(); release(); await owner; }
@@ -208,7 +210,7 @@ for (const adapter of ['MCP', 'Harness'] as const) {
 test('Wiki tool bounds account for escaping and a separately resubmittable complete plan', () => {
   const small = { body: '中文 🧠📚\n"quoted"' }; assert.equal(wikiToolResult(small), small);
   const escaped = '\0'.repeat(2_500_000);
-  assert.ok(Buffer.byteLength(escaped) < 16 * 1_048_576);
+  assert.ok(Buffer.byteLength(escaped) < 9 * 1_048_576);
   assert.throws(() => wikiToolResult({ body: escaped }), { code: 'CONTENT_TOO_LARGE' });
   assert.throws(() => wikiToolResult(small, { body: escaped }), { code: 'CONTENT_TOO_LARGE' });
   assert.throws(() => wikiToolInput(wikiSnapshotToolSchema, { commit: 'a'.repeat(40), pageKeys: ['one', 'one'] }), { code: 'VALIDATION_FAILED' });
@@ -237,10 +239,42 @@ test('Harness merge: disposal cancels and waits for an active lock waiter before
       await acquired;
       const pending = invoke('merge_prepare', input).then(() => null, error => error);
       await waitFor(async () => (await readdir(`${lock}.queue`)).length === 2);
-      await dispose(); assert.ok(await pending);
+      await dispose(); assert.match(String(await pending), /OPERATION_CANCELLED/);
       assert.equal((await readdir(`${lock}.queue`)).length, 1); assert.equal(existsSync(lock), true);
     } finally { release(); await owner; }
   });
+});
+
+test('real MCP stdio returns bounded errors above its default buffer and complete text below the tool limit', { timeout: 20_000 }, async () => {
+  // Inject only oversized data in memory, then execute the real compiled adapter and SDK.
+  // This isolates the transport allowance; core history/access are covered separately.
+  const child = `
+    import { MemoryVault } from './dist/vault.js';
+    MemoryVault.prototype.wikiSnapshot = async input => ({ body: 'x'.repeat((input.pageKeys[0] === 'small' ? 9 * 1048576 - 4096 : 11 * 1048576)) });
+    MemoryVault.prototype.wikiMergePrepare = async () => ({ plan: {}, comparison: { body: 'x'.repeat(11 * 1048576) } });
+    await import('./dist/mcp.js');
+  `;
+  const client = new Client({ name: 'merge-transport-budget', version: '1' });
+  const errors: Error[] = [], controller = new AbortController();
+  client.onerror = error => { errors.push(error); controller.abort(error); };
+  const timer = setTimeout(() => controller.abort(new Error('Protocol budget regression timed out')), 15_000);
+  try {
+    await client.connect(new StdioClientTransport({ command: process.execPath,
+      args: ['--input-type=module', '-e', child], stderr: 'pipe',
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY')) as Record<string, string> }));
+    for (const [operation, input] of [
+      ['snapshot', { commit: 'a'.repeat(40), pageKeys: ['large'] }],
+      ['merge_prepare', { fromCommit: 'a'.repeat(40), pageKey: 'entity:large', expectedRevision: 1, body: 'Human draft', summary: 'Review' }],
+    ] as const) {
+      const result = await client.callTool({ name: `memory_wiki_${operation}`, arguments: input }, { signal: controller.signal });
+      assert.equal(result.isError, true); assert.match(JSON.stringify(result.content), /CONTENT_TOO_LARGE/);
+    }
+    const small = await client.callTool({ name: 'memory_wiki_snapshot', arguments: { commit: 'a'.repeat(40), pageKeys: ['small'] } }, { signal: controller.signal });
+    assert.equal(small.isError, undefined);
+    const content = small.content[0]; assert.equal(content?.type, 'text');
+    if (content?.type === 'text') assert.equal(JSON.parse(content.text).body.length, 9 * 1_048_576 - 4096);
+    assert.deepEqual(errors, []);
+  } finally { clearTimeout(timer); controller.abort(); await client.close(); }
 });
 
 async function waitFor(predicate: () => Promise<boolean>) {

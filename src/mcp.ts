@@ -132,14 +132,14 @@ function createServer(): McpServer {
 
   server.registerTool('memory_wiki_snapshot', {
     title: 'Read a committed Wiki revision',
-    description: 'Read 1–25 complete Wiki pages and historical dependencies from a full local ancestor commit. Current authority, withdrawal, expiry and explicit confidential selection still apply. No checkout, model call, import or historical-truth claim. Complete escaped review is limited to 16 MiB.',
+    description: 'Read 1–25 complete Wiki pages and historical dependencies from a full local ancestor commit. Current authority, withdrawal, expiry and explicit confidential selection still apply. No checkout, model call, import or historical-truth claim. Complete escaped review is limited to 9 MiB.',
     inputSchema: wikiSnapshotToolSchema,
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => wikiToolResult(await vault.wikiSnapshot(input))));
 
   server.registerTool('memory_wiki_merge_prepare', {
     title: 'Prepare a human-authored Wiki merge',
-    description: 'With read and write permission, prepare a signed historical/current same-vault merge from manually authored body and summary. Calls no model and does not approve. Inspect the complete comparison and memory_wiki_preview before a separate memory_wiki_apply with review authority. No apply flag or branch/shared-vault import. Complete escaped review and approval envelope must fit 16 MiB.',
+    description: 'With read and write permission, prepare a signed historical/current same-vault merge from manually authored body and summary. Calls no model and does not approve. Inspect the complete comparison and memory_wiki_preview before a separate memory_wiki_apply with review authority. No apply flag or branch/shared-vault import. Complete escaped review and approval envelope must fit 9 MiB.',
     inputSchema: wikiMergeToolSchema,
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => {

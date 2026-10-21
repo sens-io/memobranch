@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { Context } from '@deepseek-ai/cordis';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
@@ -152,6 +153,33 @@ for (const adapter of ['MCP', 'Harness']) {
   });
   console.log(`Installed ${adapter}: complete pinned Wiki read, manual signed merge, separate approval, authority refusal, both source bytes and exact retry passed (same vault; no external model or full host-conversation quality claim).`);
 }
+
+// Exercise the installed adapter and both default stdio buffers, not only a helper.
+const budgetClient = new Client({ name: 'installed-review-budget', version: '1' });
+const budgetController = new AbortController(), protocolErrors = [];
+budgetClient.onerror = error => { protocolErrors.push(error); budgetController.abort(error); };
+const budgetTimer = setTimeout(() => budgetController.abort(new Error('Installed stdio budget timed out')), 15000);
+try {
+  const child = `
+    import { MemoryVault } from 'memobranch';
+    MemoryVault.prototype.wikiSnapshot = async input => ({ body: 'x'.repeat(input.pageKeys[0] === 'small' ? 9 * 1048576 - 4096 : 11 * 1048576) });
+    MemoryVault.prototype.wikiMergePrepare = async () => ({ plan: {}, comparison: { body: 'x'.repeat(11 * 1048576) } });
+    await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'node_modules/memobranch/dist/mcp.js')).href)});
+  `;
+  await budgetClient.connect(new StdioClientTransport({ command: process.execPath, args: ['--input-type=module', '-e', child], stderr: 'pipe',
+    env: Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('AMEM_') && name !== 'OPENAI_API_KEY')) }));
+  for (const [operation, input] of [
+    ['snapshot', { commit: 'a'.repeat(40), pageKeys: ['large'] }],
+    ['merge_prepare', { fromCommit: 'a'.repeat(40), pageKey: 'entity:large', expectedRevision: 1, body: 'Human draft', summary: 'Review' }],
+  ]) {
+    const result = await budgetClient.callTool({ name: `memory_wiki_${operation}`, arguments: input }, { signal: budgetController.signal });
+    assert.equal(result.isError, true); assert.match(JSON.stringify(result.content), /CONTENT_TOO_LARGE/);
+  }
+  const result = await budgetClient.callTool({ name: 'memory_wiki_snapshot', arguments: { commit: 'a'.repeat(40), pageKeys: ['small'] } }, { signal: budgetController.signal });
+  assert.equal(result.isError, undefined); assert.equal(result.content[0].type, 'text');
+  assert.equal(JSON.parse(result.content[0].text).body.length, 9 * 1048576 - 4096); assert.deepEqual(protocolErrors, []);
+  console.log('Installed MCP: default stdio carries complete below-limit review and bounded oversized errors (in-memory oversized data injection; actual installed adapter/SDK, not historical-graph quality).');
+} finally { clearTimeout(budgetTimer); budgetController.abort(); await budgetClient.close(); }
 
 async function agent(adapter, root, env, action) {
   if (adapter === 'MCP') {

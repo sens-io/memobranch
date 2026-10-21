@@ -14,12 +14,12 @@ export function wikiToolInput<T>(schema: z.ZodType<T>, value: unknown): T {
   return parsed.data;
 }
 
-/** Bound complete text, including JSON escaping; never return a partial review. */
+/** Leave 1 MiB below the MCP SDK's default 10 MiB stdio buffer for protocol overhead. */
 export function wikiToolResult<T>(value: T, plan?: unknown): T {
   const check = (input: unknown) => {
     const text = JSON.stringify(input, null, 2);
-    if (Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text }] }), 'utf8') > 16 * 1_048_576) {
-      throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete Wiki tool review exceeds 16 MiB');
+    if (Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text }] }), 'utf8') > 9 * 1_048_576) {
+      throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete Wiki tool review exceeds 9 MiB');
     }
   };
   check(value);

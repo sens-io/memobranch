@@ -105,7 +105,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   if (granted(principal, 'read')) {
     ctx.tools.register(defineTool({
       name: 'memory_wiki_snapshot',
-      description: 'Read 1–25 complete Wiki pages and historical dependencies at a full local ancestor commit. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model, import or historical-truth claim. Complete escaped review is limited to 16 MiB.',
+      description: 'Read 1–25 complete Wiki pages and historical dependencies at a full local ancestor commit. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model, import or historical-truth claim. Complete escaped review is limited to 9 MiB.',
       parameters: {
         commit: { type: 'string', required: true, description: 'Full lowercase 40/64-character local ancestor commit hash; no symbolic refs or fetching.' },
         pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
@@ -166,7 +166,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   if (granted(principal, 'write')) {
     if (granted(principal, 'read')) ctx.tools.register(defineTool({
       name: 'memory_wiki_merge_prepare',
-      description: 'With read/write authority, prepare a signed same-vault historical/current merge from manually authored text. No model call, approval or apply flag. Inspect all comparison/preview text, then separately approve with memory_wiki_apply and review authority. No branch/shared-vault import. Complete escaped review and approval envelope must fit 16 MiB.',
+      description: 'With read/write authority, prepare a signed same-vault historical/current merge from manually authored text. No model call, approval or apply flag. Inspect all comparison/preview text, then separately approve with memory_wiki_apply and review authority. No branch/shared-vault import. Complete escaped review and approval envelope must fit 9 MiB.',
       parameters: {
         fromCommit: { type: 'string', required: true, description: 'Full lowercase 40/64-character local ancestor commit hash.' },
         pageKey: { type: 'string', required: true, description: 'Existing compiled Wiki key, at most 200 characters; not an ordinary memory.' },

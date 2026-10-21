@@ -25,5 +25,6 @@ The system SHALL refuse oversized complete reviews rather than truncate them, an
 - **AND** a later authorized invocation still succeeds
 
 #### Scenario: Full review exceeds transport allowance
-- **WHEN** the escaped complete result or original-plan approval envelope exceeds 16 MiB
+- **WHEN** the escaped complete result or original-plan approval envelope exceeds 9 MiB
 - **THEN** the tool returns a content-too-large error and no partial plan
+- **AND** the default MCP transport remains usable without a client buffer increase
