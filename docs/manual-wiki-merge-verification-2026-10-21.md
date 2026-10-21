@@ -25,7 +25,7 @@
 | Git 默认分支 `master` | 同上，718 项通过；失败、取消、跳过均为 0 |
 | Node22.17.0，Git 默认分支 `main` | 实际安装消费者通过，312 个包条目 |
 | 精确 Node20.0.0，Git 默认分支 `master` | 同一包实际安装消费者通过，312 个包条目 |
-| 固定 OpenSpec 1.0.2 严格检查 | 22/22 通过；任务完成标记后另行复查 |
+| 固定 OpenSpec 1.0.2 严格检查 | 22/22 通过；任务完成标记后的复查同为 22/22 |
 | 生产依赖审计 | 0 个已知漏洞；没有依赖或锁文件变更 |
 | 独立审查 | 18 个不同文件全部覆盖、0 跳过；两项确定问题修复后独立复验关闭，无新增确定问题 |
 
@@ -35,7 +35,7 @@
 
 本地验收包：`.scratch/merge-package.neOfeN/memobranch-1.1.0.tgz`，312 个条目，SHA-256：`6e7198094f011d63f059ab7cf6ff4e100838bcf19f93a8ef134ac2f78f3c2627`。两次执行前后摘要一致。该包对应上述运行提交，不含之后补写的本报告及任务完成标记。它只是本地开发包，不是已发布 npm 1.1.0 增加了这些功能；正式发布必须另定版本并重新打包验收。
 
-安装消费者只从自身安装的 `memobranch` 读取编译产物，命令行指向安装目录，公开类型通过消费者 TypeScript 编译。新增检查保存实际历史和当前完整正文，对照 API 的历史/当前比较、前后预览，以及真实命令行的比较与预览；另直接断言人工正文、中文和 emoji、最终保存正文、两边来源未改变、没有额外模型调用。还覆盖显式批准、精确重试、篡改拒绝、调用前取消、机密选择、加密保存及密钥销毁后的拒绝。运行中和锁清理期间的竞态由运行测试与独立重放覆盖，不混称为安装脚本已重放这些时间点。既有 Web、MCP、Harness、导入、队列、PDF 等消费者检查继续保留。
+安装消费者只从自身安装的 `memobranch` 读取编译产物，命令行指向安装目录，公开类型通过消费者 TypeScript 编译。新增检查保存实际历史和当前完整正文，对照 API 的历史/当前比较、前后预览，以及真实命令行的比较与预览；另直接断言人工正文、中文和 emoji、最终保存正文、历史来源原文件未改变、两边来源引用均保留、没有额外模型调用。还覆盖显式批准、精确重试、篡改拒绝、调用前取消、机密选择、加密保存及密钥销毁后的拒绝。运行中和锁清理期间的竞态由运行测试与独立重放覆盖，不混称为安装脚本已重放这些时间点。既有 Web、MCP、Harness、导入、队列、PDF 等消费者检查继续保留。
 
 ## 失败、权限与并发检查
 
@@ -65,7 +65,7 @@ R1/R2 的新增五个用例先在未修复的 `213091ff` 上运行，5/5 均失�
 
 OCR 仅用于本地清单及规则，不调用外部模型。最终清单 18 个文件，默认可审查 9 个、排除 9 个；默认排除的文档、规格及测试也全部人工审查。工具提示 Git 2.39.3 低于建议版本，但清单和规则生成成功，没有升级用户工具。
 
-主要证据保留在忽略目录 `.scratch/`：`merge-targeted-9.log`、`merge-unicode-before-fix.log`、`merge-cancel-before-fix.log`、`merge-review-races-before-fix.log`、`merge-final-check-main.log`、`merge-final-check-master.log`、`merge-package-node22.log`、`merge-package-node20.log`、`merge-final-package.json`、`merge-package-sha-before.txt`、`merge-package-sha-after.txt`、`merge-specs-final.log`、`merge-audit-final.json`、`merge-final-review-preview.json`、`merge-review-rules.json`。早期构建或样例错误日志继续保留，没有通过放宽校验或删除拒绝断言取得通过。
+主要证据保留在忽略目录 `.scratch/`：`merge-targeted-9.log`、`merge-unicode-before-fix.log`、`merge-cancel-before-fix.log`、`merge-review-races-before-fix.log`、`merge-final-check-main.log`、`merge-final-check-master.log`、`merge-package-node22.log`、`merge-package-node20.log`、`merge-final-package.json`、`merge-package-sha-before.txt`、`merge-package-sha-after.txt`、`merge-specs-final.log`、`merge-specs-acceptance.log`、`merge-audit-final.json`、`merge-final-review-preview.json`、`merge-review-rules.json`。早期构建或样例错误日志继续保留，没有通过放宽校验或删除拒绝断言取得通过。
 
 ## 限制和交付状态
 
