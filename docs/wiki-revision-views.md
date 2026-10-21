@@ -8,7 +8,7 @@ memobranch history --root ./vault
 memobranch wiki snapshot entity:atlas --commit FULL_COMMIT_HASH --root ./vault
 ```
 
-The local library exposes `vault.wikiSnapshot({ commit, pageKeys, includeSensitive?, includeSecret?, signal? })`, with public `WikiSnapshotOptions` and `WikiSnapshot` types. Select 1–25 distinct keys, including ordinary memories as `legacy:<memory-id>`. Use a full lowercase 40/64-character hash for a local commit in current HEAD ancestry; symbolic refs, tags as names, abbreviations, tree/blob objects, unreachable and foreign-vault/tenant commits are rejected. It does not fetch missing history.
+The local library exposes `vault.wikiSnapshot({ commit, pageKeys, includeSensitive?, includeSecret?, signal? })`, with public `WikiSnapshotOptions` and `WikiSnapshot` types. Select 1–25 distinct keys, including ordinary memories as `legacy:<memory-id>`. Use a full lowercase 40/64-character hash for a local commit in current HEAD ancestry; symbolic refs, tags as names, abbreviations, tree/blob objects, unreachable and foreign-vault/tenant commits are rejected. Git replacement objects are ignored; grafts (including `GIT_GRAFT_FILE`) and partial-clone/promisor configurations are refused. It does not fetch missing history.
 
 ## What a result means
 

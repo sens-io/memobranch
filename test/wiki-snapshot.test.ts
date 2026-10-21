@@ -157,6 +157,7 @@ test('Wiki snapshot: writer waits for the read; owned cancellation releases the 
   const gate = new Promise<void>(resolve => { release = resolve; }), entered = new Promise<void>(resolve => { started = resolve; });
   let pause = true;
   vault.git.run = async (args, options) => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
     if (pause && args[0] === 'cat-file' && args[1] === 'blob') { pause = false; started(); await gate; }
     return run(args, options);
   };
@@ -169,6 +170,7 @@ test('Wiki snapshot: writer waits for the read; owned cancellation releases the 
   assert.equal(snapshot.authorityHead, commit); assert.equal(await run(['rev-parse', 'HEAD']), saved.commit);
   const controller = new AbortController(); let cancel = true;
   vault.git.run = async (args, options) => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
     const result = await run(args, options);
     if (cancel && args[0] === 'ls-tree') { cancel = false; controller.abort(); }
     return result;
@@ -182,6 +184,7 @@ test('Wiki snapshot: writer waits for the read; owned cancellation releases the 
 test('Wiki snapshot: detects external authority movement and pending recovery without changing canonical data', async t => {
   const { vault, commit } = await fixture(t), run = vault.git.run.bind(vault.git); let reads = 0;
   vault.git.run = async (args, options) => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
     if (args[0] === 'rev-parse' && ++reads === 2) return '0'.repeat(40);
     return run(args, options);
   };
@@ -213,6 +216,8 @@ test('Wiki snapshot: blob/document budgets and unsafe paths fail before unbounde
   let blobSize = 1, blobReads = 0, mode = '100644';
   const git = new GitStore('unused-synthetic-root');
   git.run = async args => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
+    if (args[0] === 'config') return '';
     if (args[0] === 'rev-parse') return hash;
     if (args.includes('status') || args[0] === 'merge-base') return '';
     if (args[0] === 'ls-tree') return `${mode} blob ${hash} ${blobSize}\t${args.at(-1)!.slice(':(literal)'.length)}\0`;
@@ -279,6 +284,7 @@ test('Wiki snapshot: expiration crossing during final authority checks rejects t
   page.meta.expiresAt = new Date(timestamp + 60_000).toISOString();
   const commit = await save(vault, page), run = vault.git.run.bind(vault.git); let reads = 0;
   vault.git.run = async (args, options) => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
     if (args[0] === 'rev-parse' && ++reads === 2) Date.now = () => timestamp + 120_000;
     return run(args, options);
   };
@@ -304,4 +310,22 @@ test('Wiki snapshot: compiled CLI returns a versioned local view and rejects sym
   const result = await exec(process.execPath, args, { env });
   assert.equal(JSON.parse(result.stdout).commit, commit);
   await assert.rejects(exec(process.execPath, args.map(value => value === commit ? 'HEAD' : value), { env }));
+});
+
+test('Wiki snapshot: replace refs cannot substitute pinned content; graft and partial-clone settings are rejected without fetch', async t => {
+  const { vault, commit } = await fixture(t);
+  const page = await vault.get(wikiPageId('entity:atlas')); page.body = 'Synthetic replacement body, not original.';
+  await save(vault, page);
+  const replacement = await vault.git.run(['rev-parse', 'HEAD']);
+  await vault.git.run(['replace', commit, replacement]);
+  const result = await vault.wikiSnapshot({ commit, pageKeys: ['entity:atlas'] });
+  assert.match(result.pages.find(record => record.meta.id === page.meta.id)!.body, /snapshot-original-v1/);
+  assert.doesNotMatch(result.pages.find(record => record.meta.id === page.meta.id)!.body, /Synthetic replacement body/);
+  await vault.git.run(['replace', '-d', commit]);
+  await vault.git.run(['config', 'remote.synthetic.promisor', 'true']);
+  await assert.rejects(vault.wikiSnapshot({ commit, pageKeys: ['entity:atlas'] }), /local full history/);
+  await vault.git.run(['config', '--unset', 'remote.synthetic.promisor']);
+  await mkdir(join(vault.git.gitDir, 'info'), { recursive: true });
+  await writeFile(join(vault.git.gitDir, 'info', 'grafts'), '');
+  await assert.rejects(vault.wikiSnapshot({ commit, pageKeys: ['entity:atlas'] }), /local full history/);
 });
