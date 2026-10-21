@@ -297,6 +297,27 @@ function wikiPageBudget(value: number | undefined): { maxPages?: number } {
 
 function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
   ctx.tools.register(defineTool({
+    name: 'memory_at',
+    description: 'Inspect current retained ordinary memory by explicit effective time; current authority applies, unknown dates are excluded unless requested, and superseded/conflicted records carry warnings. Not historical Wiki or as-known-then reconstruction.',
+    parameters: {
+      at: { type: 'string', required: true, description: 'ISO timestamp with timezone, at most millisecond precision.' },
+      key: { type: 'string', description: 'Optional exact normalized memory key.' },
+      includeUnknown: { type: 'boolean', description: 'Include records with no explicit interval, marked unknown.' },
+      offset: { type: 'integer', description: 'Nonnegative record offset.' },
+      limit: { type: 'integer', description: 'Maximum records (1-100, capped by vault policy).' },
+    },
+    output: jsonOutput,
+    async execute(args, exec) {
+      wikiArguments(args, ['at', 'key', 'includeUnknown', 'offset', 'limit']);
+      if (args.includeUnknown !== undefined && typeof args.includeUnknown !== 'boolean') failValidation('includeUnknown must be boolean');
+      return runJson(vault, exec.signal, () => vault.memoriesAt(boundedString(args.at, 'at', 64), {
+        ...(args.key === undefined ? {} : { key: boundedString(args.key, 'key', 512) }),
+        includeUnknown: args.includeUnknown ?? false, offset: boundedInteger(args.offset ?? 0, 'offset', 0, Number.MAX_SAFE_INTEGER),
+        limit: boundedInteger(args.limit ?? 30, 'limit', 1, 100), includeSensitive: false, includeSecret: false,
+      }));
+    },
+  }));
+  ctx.tools.register(defineTool({
     name: 'memory_source_timeline',
     description: 'Inspect authorized source versions by recorded time and current references. Does not reconstruct fact-effective history or restore erased data.',
     parameters: {

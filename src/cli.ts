@@ -37,6 +37,25 @@ async function main(): Promise<void> {
   const vault = new MemoryVault(root, { principal });
 
   switch (parsed.command) {
+    case 'memory': {
+      const action = requiredPositional(parsed, 0, 'at or validity');
+      if (action === 'at') {
+        const key = flagString(parsed, 'key');
+        print(await vault.memoriesAt(requiredPositional(parsed, 1, 'ISO timestamp'), {
+          ...(key === undefined ? {} : { key }), includeUnknown: flagBoolean(parsed, 'include-unknown'),
+          includeSensitive: flagBoolean(parsed, 'include-sensitive'), includeSecret: flagBoolean(parsed, 'include-secret'),
+          offset: numberFlag(parsed, 'offset', 0), limit: numberFlag(parsed, 'limit', 30),
+        }));
+      } else if (action === 'validity') {
+        if (!flagBoolean(parsed, 'confirm')) throw new Error('Time annotation requires --confirm');
+        const from = requiredFlag(parsed, 'from'), until = requiredFlag(parsed, 'until');
+        print(await vault.setMemoryValidity(requiredPositional(parsed, 1, 'memory ID'), {
+          validFrom: from === 'unknown' ? null : from, validUntil: until === 'unknown' ? null : until,
+          expectedRevision: numberFlag(parsed, 'expected-revision', 0),
+        }));
+      } else throw new Error('Memory action must be at or validity');
+      return;
+    }
     case 'import': {
       const controller = new AbortController();
       const stop = () => controller.abort();
@@ -525,6 +544,8 @@ Usage:
   amem import web-preview <https-url...> [--timeout-ms 10000] > web-plan.json
   amem import web-apply --plan web-plan.json [--scope project] [--sensitivity internal] [--progress]
   amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
+  amem memory at <ISO> [--key KEY] [--include-unknown] [--offset N] [--limit N]
+  amem memory validity <memory-id> --from ISO|unknown --until ISO|unknown --expected-revision N --confirm
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove

@@ -39,7 +39,7 @@ test('plugin exposes only principal-granted categories and executes real vault c
     const disposers: Array<() => unknown> = [];
     const tools = loadPlugin(defaultConfig(''), disposers);
     assert.deepEqual([...tools.keys()].sort(), [
-      'memory_capture', 'memory_config', 'memory_consolidate', 'memory_context', 'memory_doctor',
+      'memory_at', 'memory_capture', 'memory_config', 'memory_consolidate', 'memory_context', 'memory_doctor',
       'memory_explain', 'memory_forget', 'memory_get', 'memory_history', 'memory_maintenance', 'memory_policy',
       'memory_propose', 'memory_recall', 'memory_recover', 'memory_reindex', 'memory_review', 'memory_search', 'memory_source_timeline', 'memory_version',
       'memory_wiki_apply', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_lint',
@@ -86,7 +86,7 @@ test('read-only visibility, argument bounds, and pre-dispatch cancellation fail 
   }, async () => {
     const tools = loadPlugin(defaultConfig(root));
     assert.deepEqual([...tools.keys()].sort(), [
-      'memory_config', 'memory_context', 'memory_explain', 'memory_get', 'memory_history', 'memory_policy', 'memory_recall', 'memory_search', 'memory_source_timeline', 'memory_version',
+      'memory_at', 'memory_config', 'memory_context', 'memory_explain', 'memory_get', 'memory_history', 'memory_policy', 'memory_recall', 'memory_search', 'memory_source_timeline', 'memory_version',
       'memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules',
     ]);
     await assert.rejects(execute(tools, 'memory_search', { query: 'x', limit: 51 }), /VALIDATION_FAILED/);

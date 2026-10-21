@@ -34,6 +34,7 @@ try {
     'dist/context-budget.js', 'dist/directory-import.js', 'dist/source-timeline.js', 'docs/knowledge-workflows.md',
     'dist/web-source.js', 'dist/web-import.js', 'dist/web-import.d.ts', 'docs/public-web-import.md',
     'dist/wiki-jobs.js', 'dist/wiki-jobs.d.ts', 'dist/wiki-job-store.js', 'docs/wiki-jobs.md',
+    'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -111,7 +112,14 @@ try {
       type TokenCounter, type ContextBudgetReport, type DirectoryImportPlan, type DirectoryImportOptions,
       previewDirectoryImport, applyDirectoryImport, type WebImportPlan, type WebImportOptions, type WebPreviewOptions,
       previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
-      type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions } from 'memobranch';
+      type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
+      type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions } from 'memobranch';
+    export async function publicEffectiveTime(vault: MemoryVault, id: string) {
+      const interval: FactValidity = { validFrom: '2026-01-01T00:00:00Z' };
+      const change: MemoryValidityUpdate = { validFrom: interval.validFrom!, validUntil: null, expectedRevision: 1 };
+      const options: MemoriesAtOptions = { key: 'Atlas', includeUnknown: false, limit: 10 };
+      return { updated: await vault.setMemoryValidity(id, change), view: await vault.memoriesAt(change.validFrom!, options) };
+    }
     export async function publicWikiWorkflow(vault: MemoryVault, evidenceId: string) {
       const prepared = await vault.wikiIngest({ evidenceIds: [evidenceId] });
       const plan: WikiPlan | null = prepared.plan;

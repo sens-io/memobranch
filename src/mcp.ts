@@ -119,6 +119,15 @@ function createServer(): McpServer {
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.sourceTimeline(input.sourceUri, input)));
 
+  server.registerTool('memory_at', {
+    title: 'Inspect retained memories by explicit effective time',
+    description: 'Read currently authorized retained ordinary records at a stated effective time. Unknown intervals are excluded unless requested. Superseded/conflicted records carry warnings. Not Git history, as-known-then reconstruction or historical Wiki answering.',
+    inputSchema: z.strictObject({ at: z.string().min(1).max(64), key: z.string().min(1).max(512).optional(),
+      includeUnknown: z.boolean().default(false), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30),
+      includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false) }),
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async ({ at, ...options }, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.memoriesAt(at, options)));
+
   server.registerTool('memory_wiki_preview', {
     title: 'Review a signed Wiki plan',
     description: 'Verify the current authorized plan and show actual before/after restrictions, sources, dependent pages and bounded text changes without applying.',

@@ -108,6 +108,8 @@ flowchart LR
 
 > **Durable Wiki jobs:** [Submit evidence IDs and explicitly compile from the Web console or a separate local worker](docs/wiki-jobs.md), with encrypted proposals, progress, cancellation and explicit crash retry. Review/apply stays separate and Web approval binds the displayed proof. Development source only; requires the existing vault master key, including public-input jobs.
 
+> **Effective-time views (development source):** [Explicitly reviewed memory intervals and dated retained-record queries](docs/effective-time.md) distinguish fact time from record time. Current context excludes not-yet-effective/ended memories; dated reads preserve current permissions and withdrawal. Not historical Wiki reconstruction or a published npm feature.
+
 ### Requirements
 
 - Node.js 20 or later
