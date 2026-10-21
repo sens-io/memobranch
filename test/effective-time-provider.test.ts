@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
+import { getEventListeners } from 'node:events';
 import { LlmClient } from '../src/llm.js';
 import { serializeMarkdown } from '../src/markdown.js';
 import { PersistentSearchIndex } from '../src/search.js';
@@ -127,4 +128,55 @@ test('effective provider: caller cancellation interrupts pre-request validation 
   const stopped = assert.rejects(pending, { code: 'OPERATION_CANCELLED' });
   await ready; controller.abort(); await stopped;
   assert.equal(requests.length, 0);
+});
+
+test('effective provider: deadline ends a non-cooperative guard that never settles', { timeout: 2000 }, async t => {
+  const { intercept, requests } = await fixture(t, 0);
+  intercept(body => embeddings(body.input!));
+  const client = new LlmClient({ apiKey: 'fixture', embeddingModel: 'time-vector', baseUrl: 'https://effective-fixture.invalid/v1', requestTimeoutMs: 100 });
+  const keepAlive = setTimeout(() => {}, 1500);
+  try {
+    await assert.rejects(client.embed(['never'], 'time-vector', () => new Promise<void>(() => {})), { code: 'DEPENDENCY_UNAVAILABLE' });
+    assert.equal(requests.length, 0);
+    assert.deepEqual(await client.embed(['later']), [[1, 0]]);
+  } finally { clearTimeout(keepAlive); }
+});
+
+test('effective provider: non-cooperative guard cancellation detaches listeners and observes late failure', { timeout: 2000 }, async t => {
+  const { intercept, requests } = await fixture(t, 0);
+  intercept(body => embeddings(body.input!));
+  const client = new LlmClient({ apiKey: 'fixture', embeddingModel: 'time-vector', baseUrl: 'https://effective-fixture.invalid/v1' });
+  const controller = new AbortController();
+  let entered!: () => void, rejectGuard!: (error: Error) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const pending = withOperation(controller.signal, () => client.embed(['cancel-late'], 'time-vector', () => {
+    entered(); return new Promise<void>((_resolve, reject) => { rejectGuard = reject; });
+  }));
+  const stopped = assert.rejects(pending, { code: 'OPERATION_CANCELLED' });
+  await ready; controller.abort(); await stopped;
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  rejectGuard(new Error('late callback failure')); await delay(10);
+  assert.equal(requests.length, 0);
+});
+
+test('effective provider: concurrent review cannot send an old embedding after canonical time changes', async t => {
+  const { vault, root, intercept, requests } = await fixture(t, 0);
+  const candidate = await vault.propose({ key: 'shared fact', statement: 'shared fact ENDING_CANARY', kind: 'fact', scope: 'public', sensitivity: 'public',
+    confidence: 1, explicit: true, conditions: [], tags: [] });
+  const memory = await vault.approve(candidate.id);
+  let annotated = false;
+  class ConcurrentReview extends LlmClient {
+    override async embed(inputs: string[], model = this.embeddingModel, check?: () => void | Promise<void>) {
+      if (!annotated && inputs.some(input => input.includes('ENDING_CANARY'))) {
+        annotated = true;
+        await vault.setMemoryValidity(memory.memoryId, { validFrom: '2999-01-01T00:00:00Z', validUntil: null, expectedRevision: 1 });
+      }
+      return super.embed(inputs, model, check);
+    }
+  }
+  const concurrent = new MemoryVault(root, { llm: new ConcurrentReview({ apiKey: 'fixture', embeddingModel: 'time-vector', baseUrl: 'https://effective-fixture.invalid/v1' }) });
+  intercept(body => embeddings(body.input!));
+  const result = await concurrent.searchDetailed('shared fact', { semantic: true });
+  assert.equal(annotated, true); assert.equal(result.semanticStatus, 'degraded');
+  assert.deepEqual(result.hits, []); assert.equal(requests.length, 0);
 });

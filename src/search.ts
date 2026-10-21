@@ -7,10 +7,10 @@ import { isEncryptedEnvelope } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
 import { isEmbeddingVector, type LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
-import { throwIfCancelled } from './operation.js';
+import { operationSignal, throwIfCancelled } from './operation.js';
 import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
-import { sha256, unique, writeText } from './utils.js';
+import { resolveInside, sha256, unique, writeText } from './utils.js';
 
 const INDEX_VERSION = 6 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
@@ -413,8 +413,33 @@ export class PersistentSearchIndex {
       throwIfCancelled();
       const batch = missing.slice(offset, offset + 32).filter(isActive);
       if (!batch.length) continue;
-      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel, () => {
-        if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
+      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel, async () => {
+        for (const document of batch) {
+          throwIfCancelled();
+          const path = resolveInside(this.root, document.path);
+          let component = this.root;
+          const parts = document.path.split('/');
+          for (let index = 0; index < parts.length; index += 1) {
+            component = join(component, parts[index]!);
+            const entry = await lstat(component);
+            if (entry.isSymbolicLink() || (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())) {
+              throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer a regular managed file');
+            }
+          }
+          // All embedding inputs are unencrypted canonical records. Reading
+          // plaintext directly preserves maintain-only reindex authorization;
+          // using the read-bound secureReader here would require extra grants.
+          const raw = await readFile(path, { encoding: 'utf8', signal: operationSignal() });
+          const parsed = parseMarkdown<Record<string, unknown>>(raw);
+          if (isEncryptedEnvelope(parsed.meta)) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer available');
+          const source = await stat(path);
+          const current = indexDocument(document.path, raw, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
+          authorize(principal, permission, { scope: current.scope, sensitivity: current.sensitivity, tenantId: this.config.tenantId });
+          if (!isActive(current) || this.config.policy.requireEncryptionFor.includes(current.sensitivity)
+              || current.contentHash !== document.contentHash || current.sourceIdentity !== document.sourceIdentity) {
+            throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context changed or is no longer currently effective');
+          }
+        }
       });
       if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
           || vector.length !== results[0]?.length)) {
@@ -442,7 +467,6 @@ export class PersistentSearchIndex {
       !excludedPaths.has(document.path) && !this.config.policy.requireEncryptionFor.includes(document.sensitivity));
     await this.refreshEmbeddings(safeDocuments, principal, 'read');
     const cache = await this.readEmbeddingCache();
-    if (!safeDocuments.some(isActive)) return new Map();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
     if (!isEmbeddingVector(queryVector)) throw new Error('Invalid query embedding');
     const currentDocuments = safeDocuments.filter(isActive);

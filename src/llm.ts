@@ -196,7 +196,7 @@ export class LlmClient {
         // Revalidation failures must not themselves enter the transport retry loop.
         throwIfCancelled();
         if (beforeRequest) {
-          try { await withOperation(signal, async () => beforeRequest()); }
+          try { await guardRequest(signal, beforeRequest); }
           catch (error) {
             if (callerSignal?.aborted) throw cancellationError();
             if (controller.signal.aborted) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM request timed out or was cancelled');
@@ -258,6 +258,21 @@ const wikiOperationInstructions = {
   query: 'Operation query: answer the supplied question from the supplied pages and their actual versions. Return {"answer":string,"citations":string[],"uncertainty":string[]}. Citations must be page keys among the supplied pages actually supporting the answer, never merely unseen catalog entries. Cite those keys in the answer. Explain insufficient, stale or conflicting evidence and distinguish inference from sourced fact. Do not propose a page write or implicitly save the answer.',
   lint: `Operation lint: inspect the supplied pages for supported semantic problems and return {"suggestions":[{"kind":"contradiction"|"stale"|"missing-concept"|"gap","message":string,"pageKeys":string[],"evidenceIds":string[],"repairs"?:[${wikiPageShape}]}]}. Reference only supplied page keys and evidence IDs. Explain each finding with specific support, preserve differing conditions, and distinguish uncertain suggestions from proven defects. Optional repairs are bounded proposed pages using the same provenance, conflict and linking requirements as compile, never applied changes. Return an empty suggestions array when no supported semantic problem is found; do not invent findings.`,
 } as const;
+
+/** Observe cancellation even when an asynchronous callback ignores its signal.
+ * Built-in checks still receive the signal to release their own I/O/locks.
+ * The race observes late rejection; completion can never send a late request.
+ */
+async function guardRequest(signal: AbortSignal, check: () => void | Promise<void>): Promise<void> {
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const stopped = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try { await Promise.race([stopped, withOperation(signal, async () => check())]); }
+  finally { signal.removeEventListener('abort', abort); }
+}
 
 function parseJsonObject(raw: string): Record<string, unknown> {
   const unwrapped = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
