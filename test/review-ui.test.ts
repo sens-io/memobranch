@@ -555,6 +555,16 @@ test('Web merge UI: editing during preparation rejects late content and preserve
   const preparing=mergeEditor(output).fire('submit');await settle();named(output,'body').value='A newer draft.';await named(output,'body').fire('input');pending.resolve(success(mergePrepared));await preparing;
   assert.equal(named(output,'body').value,'A newer draft.');assert.equal(nodes(output).some(node=>node.tagName==='button'&&node.textContent==='批准并保存这次合并'),false);
 });
+test('Web merge UI: cancelling a version reload leaves the prior unsaved draft visible for copying but not approval',async()=>{
+  const ui=harness(mergeRoute),output=await mergeView(ui);await mergeSelector(output).fire('submit');
+  named(output,'body').value='Unsaved human draft worth keeping.';await named(output,'body').fire('input');await mergeEditor(output).fire('submit');
+  const old=button(output,'批准并保存这次合并'),count=ui.requests.length;
+  named(output,'fromCommit').value='c'.repeat(40);await named(output,'fromCommit').fire('input');ui.context.confirmResult=false;await mergeSelector(output).fire('submit');
+  const editor=find(output,node=>node.classList.contains('merge-editor')) as Element & {hidden:boolean};
+  assert.equal(editor.hidden,false);assert.equal(named(output,'body').value,'Unsaved human draft worth keeping.');assert.equal(named(output,'body').disabled,false);
+  assert.equal(button(output,'生成合并审核方案').disabled,true);await old.fire('click');assert.equal(ui.requests.length,count);
+  named(output,'fromCommit').value=mergeCommit;await named(output,'fromCommit').fire('input');await mergeSelector(output).fire('submit');assert.equal(editor.hidden,false);assert.equal(ui.requests.length,count);
+});
 for(const boundary of ['wiki-snapshot','merge-prepare','apply']){
   test(`Web merge UI: leaving during ${boundary} clears text and ignores late responses`,async()=>{
     const pending=deferred<Response>(),ui=harness(request=>request.operation===boundary?pending.promise:mergeRoute(request)),output=await mergeView(ui);

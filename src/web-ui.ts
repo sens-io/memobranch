@@ -424,7 +424,7 @@ async function merges(){
  function invalidate(selectionChanged){
   if(!valid()||phase==='applying')return;
   seq++;active?.abort();active=null;phase='idle';proposal=null;uncertain=null;saved=false;review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();
-  if(selectionChanged){loaded=null;history.replaceChildren();editor.hidden=true;feedback.textContent='选择已变化，请重新读取。已有草稿会在重新读取前请求确认。';}
+  if(selectionChanged){loaded=null;history.replaceChildren();editor.hidden=!dirty||!can('write');feedback.textContent=dirty?'选择已变化。下方保留上一组版本的未保存草稿，可继续编辑或复制；重新读取会先确认重置，旧方案不能批准。':'选择已变化，请重新读取。';}
   else{dirty=true;feedback.textContent='草稿已变化，旧方案不能批准；请重新生成。';}sync();
  }
  for(const input of [key.input,commit.input,sensitive.input,secret.input])input.addEventListener('input',()=>invalidate(true));
