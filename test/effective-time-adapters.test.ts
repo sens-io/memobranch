@@ -93,11 +93,18 @@ test('effective adapters: authenticated HTTP enforces confirmation, strict schem
   assert.equal((await call(admin, 'memory-validity', { ...update, confirm: true, tenantId: 'other' })).status, 400);
   assert.equal((await call(admin, 'memory-validity', { ...update, confirm: true }, { Origin: 'https://evil.invalid' })).status, 403);
   assert.equal((await call(admin, 'memory-validity', { ...update, confirm: true })).body.result.revision, 2);
+  const listing = (await call(admin, 'records', { collection: 'memories' })).body.result;
+  assert.equal(listing.total, 1);
+  assert.deepEqual({ id: listing.items[0].id, revision: listing.items[0].revision, validFrom: listing.items[0].validFrom, validUntil: listing.items[0].validUntil },
+    { id: memory.memoryId, revision: 2, validFrom: at, validUntil: null });
+  const evidence = (await call(admin, 'records', { collection: 'evidence' })).body.result.items;
+  assert.ok(evidence.every((item: object) => !Object.hasOwn(item, 'validFrom') && !Object.hasOwn(item, 'validUntil')));
   assert.equal((await call(admin, 'memory-validity', { ...update, confirm: true })).status, 400);
   const reader = await startWebServer(vault.root, { principal: { ...vault.principal,
     permissions: ['read'], scopes: ['public'], maxSensitivity: 'public', tenantId: (await vault.config()).tenantId } }); handles.push(reader);
   const head = await vault.git.run(['rev-parse', 'HEAD']);
   assert.equal((await call(reader, 'memories-at', { at })).body.result.total, 1);
+  assert.equal((await call(reader, 'records', { collection: 'memories' })).body.result.items[0].validFrom, at);
   assert.equal((await call(reader, 'memory-validity', { ...update, expectedRevision: 2, confirm: true })).status, 403);
   assert.equal((await call(reader, 'memories-at', { at, includeSecret: true })).status, 400);
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);

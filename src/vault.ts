@@ -322,6 +322,7 @@ export class MemoryVault {
       id: String(doc.meta.id), title: String(doc.meta.key ?? doc.meta.id), type: kind,
       scope: doc.meta.scope, sensitivity: doc.meta.sensitivity, status: doc.meta.status ?? 'immutable',
       createdAt: doc.meta.createdAt, snippet: doc.body.slice(0, 500),
+      ...(kind === 'memory' ? { revision: doc.meta.revision, validFrom: doc.meta.validFrom ?? null, validUntil: doc.meta.validUntil ?? null } : {}),
     })) };
   }
 
