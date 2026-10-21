@@ -196,7 +196,7 @@ dialog .meta { font-size: 11px; color: #a9bddf; }
 .time-query { border-top: 2px solid var(--mint); }
 .time-query .forms { margin-bottom: 18px; }
 .time-query input[type=datetime-local], .time-editor input[type=datetime-local] { font-variant-numeric: tabular-nums; min-width: 0; }
-.time-query .query-context { padding: 13px 16px; background: #142d3d; border: 1px solid #365c6d; border-radius: 7px; overflow-wrap: anywhere; }
+.time-query .query-context { margin-top: 16px; padding: 13px 16px; background: #142d3d; border: 1px solid #365c6d; border-radius: 7px; overflow-wrap: anywhere; }
 .dated-record { padding: 19px 0; border-bottom: 1px solid var(--line); }
 .dated-record .record { padding-top: 0; border-bottom: 0; }
 .time-editor { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 20px; }
@@ -310,8 +310,8 @@ function memoryTime(meta){
  if(meta.status&&meta.status!=='active')box.append(el('p','','记录状态 '+meta.status+'；日期匹配不会恢复或批准这条记忆。'));
  return box;
 }
-function validityEditor(doc,live,signal,reload,onChanged){
- const section=el('section','time-editor');section.append(el('h3','','审核记忆有效期'),el('p','','所有输入均为 UTC。留空表示未知，不是创建时间；清空已有端点会移除相应时间限制。只修改时间标注，不重新证明事实，也不安排未来替代。'));
+function validityEditor(doc,live,signal,reload,onChanged,setSaving){
+ const section=el('section','time-editor');section.append(el('h3','','审核记忆有效期'),el('p','','所有输入均为 UTC。留空表示未知，不是创建时间；清空已有端点会移除相应时间限制。只修改时间标注，不重新证明事实，也不安排未来替代。保存期间暂停读取和编辑；关闭窗口不能撤回已完成的提交。'));
  const wrapper=form([['validFrom','开始时间（UTC，包含）','datetime-local',utcInput(doc.meta.validFrom),null,true],['validUntil','结束时间（UTC，不包含）','datetime-local',utcInput(doc.meta.validUntil),null,true]],'核对并保存有效期',async(values,output)=>{
   if(!live()||!section.isConnected)return;
   const from=values.validFrom?utcTimestamp(values.validFrom):null,until=values.validUntil?utcTimestamp(values.validUntil):null;
@@ -319,15 +319,19 @@ function validityEditor(doc,live,signal,reload,onChanged){
   const comparison='当前版本 v'+doc.meta.revision+'\n原开始：'+timeBound(doc.meta.validFrom)+'\n原结束：'+timeBound(doc.meta.validUntil)+'\n新开始：'+timeBound(from)+'\n新结束：'+timeBound(until);
   output.append(el('pre','review-summary',comparison));
   if(!confirm('确认保存这条记忆的时间标注？将检查当前版本并可能写入 Git。\n清空端点会移除相应时间限制。\n\n'+comparison)||!live()||!section.isConnected)return;
-  let result;
+  if(!setSaving(true))return;let result;
   try{result=await api('memory-validity',{id:doc.meta.id,validFrom:from,validUntil:until,expectedRevision:doc.meta.revision,confirm:true},signal);}
   catch(e){if(live()){wrapper.querySelector('form').remove();output.replaceChildren(el('div','error',e.message),el('p','muted','未自动重试。保存结果不明时，先查看当前版本及 Git 历史；重新读取后再决定是否修改。'),button('重新读取当前版本',reload));}return;}
+  finally{setSaving(false);}
   if(!live())return;
   toast('有效期已保存 · v'+result.revision+(result.commit?' · '+result.commit.slice(0,8):' · 无内容变化'));
   await reload();
   if(onChanged&&live()){try{await onChanged();}catch{if(live())toast('有效期已保存，但列表刷新失败；请手动刷新列表。');}}
  });
- wrapper.querySelectorAll('input').forEach(input=>{if(input.type==='datetime-local')input.step='0.001';});section.append(wrapper);return section;
+ wrapper.querySelectorAll('input').forEach(input=>{if(input.type!=='datetime-local')return;input.step='0.001';const original=doc.meta[input.name];if(!original)return;
+  let represented=false;try{represented=utcTimestamp(input.value)===new Date(original).toISOString();}catch{}
+  if(!represented){input.type='text';input.value=utcInput(original);input.placeholder='YYYY-MM-DDTHH:mm:ss.sss';section.append(el('p','muted','此原始日期不受浏览器日历支持，已用 UTC 文本完整保留；不会自动清空。'));}
+ });section.append(wrapper);return section;
 }
 function datedMemories(onChanged){
  const epoch=session,current=generation,section=card('按日期查看记忆','匹配审核者明确标注的生效区间；返回最新保留版本和最新标注，不是历史 Wiki，也不是“当时系统知道什么”。');section.classList.add('time-query');
@@ -359,12 +363,13 @@ function textList(values,fallback){if(!values?.length)return el('p','muted',fall
 function sourceList(values){if(!values?.length)return el('p','muted','未列明来源');const list=el('ul','source-list');values.forEach(value=>{const row=el('li'),match=String(value).match(/(?:^|\/|-)(ev-[a-f0-9]{12})(?:\.md)?$/);row.append(match?button(value,()=>openDocument(match[1])):el('span','',value));list.append(row);});return list;}
 async function openDocument(id,onChanged){
  const epoch=session,controller=new AbortController(),dialog=el('dialog');dialog.setAttribute('aria-label','文档详情');const head=el('div','dialog-head'),body=el('div');head.append(el('h2','','文档详情'),button('关闭',()=>dialog.close()));dialog.append(head,body);document.body.append(dialog);
- let read=0;const live=()=>epoch===session&&dialog.isConnected;dialog.addEventListener('close',()=>{controller.abort();dialog.remove();});dialog.showModal();
- async function load(){if(!live())return;const requested=++read;body.replaceChildren(el('div','loading','读取中…'));try{const doc=await api('get',{id},controller.signal);if(!live()||requested!==read)return;head.querySelector('h2').textContent=doc.meta.title||doc.meta.key||id;body.replaceChildren(el('div','meta muted',doc.path+(doc.meta.revision?' · 当前版本 v'+doc.meta.revision:'')));const badges=el('p');[doc.meta.type,doc.meta.status,doc.meta.scope,doc.meta.sensitivity].filter(Boolean).forEach(v=>badges.append(tag(v)));body.append(badges);
+ let read=0,saving=false;const live=()=>epoch===session&&dialog.isConnected;dialog.addEventListener('close',()=>{controller.abort();dialog.remove();});dialog.showModal();
+ function setSaving(value){if(value&&saving)return false;saving=value;if(live()){body.querySelectorAll('button').forEach(control=>{control.disabled=value;});body.querySelectorAll('input').forEach(control=>{control.disabled=value;});}return true;}
+ async function load(){if(!live()||saving)return;const requested=++read;body.replaceChildren(el('div','loading','读取中…'));try{const doc=await api('get',{id},controller.signal);if(!live()||requested!==read)return;head.querySelector('h2').textContent=doc.meta.title||doc.meta.key||id;body.replaceChildren(el('div','meta muted',doc.path+(doc.meta.revision?' · 当前版本 v'+doc.meta.revision:'')));const badges=el('p');[doc.meta.type,doc.meta.status,doc.meta.scope,doc.meta.sensitivity].filter(Boolean).forEach(v=>badges.append(tag(v)));body.append(badges);
   if(doc.meta.type==='memory')body.append(memoryTime(doc.meta),el('p','muted','生效时间独立于保存时间，由审核者明确标注。此处时间状态按读取时的时钟显示；需要最新状态请重新读取。'));
   body.append(el('pre','',doc.body));if(Array.isArray(doc.meta.evidence)){body.append(el('h3','','来源'),sourceList(doc.meta.evidence));}if(doc.meta.conditions?.length)body.append(el('h3','','适用条件'),textList(doc.meta.conditions,''));if(doc.meta.uncertainty?.length)body.append(el('h3','','不确定性'),textList(doc.meta.uncertainty,''));const meta=el('details');meta.append(el('summary','','来源与元数据'),pretty(doc.meta));body.append(meta);
   const actions=el('div','actions');actions.append(button('重新读取当前版本',load));if(doc.meta.type==='memory-candidate'&&doc.meta.status==='pending'&&can('review')){actions.append(actionButton('批准纳入记忆','approve',{id},()=>dialog.close()));actions.append(reasonButton('拒绝候选','reject',id,()=>dialog.close()));}if(doc.meta.type==='memory'&&can('review')&&doc.meta.status!=='revoked')actions.append(reasonButton('撤回记忆','forget',id,()=>dialog.close()));if(doc.meta.type==='wiki-page'&&can('review')&&doc.meta.status!=='revoked')actions.append(reasonButton('撤回页面','revoke',doc.meta.key,()=>dialog.close()));body.append(actions);
-  if(doc.meta.type==='memory'&&can('review')&&doc.meta.status!=='revoked')body.append(validityEditor(doc,live,controller.signal,load,onChanged));
+  if(doc.meta.type==='memory'&&can('review')&&doc.meta.status!=='revoked')body.append(validityEditor(doc,live,controller.signal,load,onChanged,setSaving));
   if(doc.meta.type==='wiki-page'&&can('read')&&can('write'))body.append(correctionForm(doc.meta.key,doc.meta.revision));
  }catch(e){if(live()&&requested===read)body.replaceChildren(el('div','error',e.message),button('重新读取当前版本',load));}}
  await load();

@@ -217,6 +217,56 @@ test('time UI: successful commit stays successful if detail refresh fails', asyn
   assert.equal(ui.requests.filter(r => r.operation === 'memory-validity').length, 1);
 });
 
+test('time UI: pending saves freeze reads and edits until either outcome, without hidden failures or lost drafts', async () => {
+  for (const accepted of [false, true]) {
+    const pending = deferred<Response>(); let current = timeDocument;
+    const ui = harness(request => request.operation === 'get' ? success(current) : pending.promise);
+    await ui.run("openDocument('record')"); const dialog = find(ui.body, node => node.tagName === 'dialog');
+    const form = find(dialog, node => node.tagName === 'form'), from = named(dialog, 'validFrom');
+    const refresh = button(dialog, '重新读取当前版本');
+    const saving = form.fire('submit');
+    assert.equal(from.disabled, true); assert.equal(refresh.disabled, true);
+    assert.equal(button(dialog, '撤回记忆').disabled, true);
+    assert.equal(button(dialog, '关闭').disabled, false);
+    await refresh.fire('click'); await form.fire('submit');
+    assert.deepEqual(ui.requests.map(r => r.operation), ['get', 'memory-validity']);
+    current = { ...timeDocument, meta: { ...timeDocument.meta, revision: 8 } };
+    pending.resolve(accepted ? success({ revision: 8, commit: 'saved-commit' }) : failure('VALIDATION_FAILED'));
+    await saving;
+    if (!accepted) {
+      assert.match(dialog.textContent, /未自动重试/);
+      assert.equal(nodes(dialog).some(node => node.tagName === 'form'), false);
+      await refresh.fire('click');
+    }
+    assert.match(dialog.textContent, /当前版本 v8/);
+    assert.equal(named(dialog, 'validFrom').disabled, false);
+    named(dialog, 'validFrom').value = '2030-06-01T00:00';
+    await Promise.resolve();
+    assert.equal(named(dialog, 'validFrom').value, '2030-06-01T00:00');
+    assert.deepEqual(ui.requests.map(r => r.operation), ['get', 'memory-validity', 'get']);
+  }
+});
+
+test('time UI: unsupported native calendar years remain exact text instead of becoming unknown on save', async () => {
+  const document = { ...timeDocument, meta: { ...timeDocument.meta, validFrom: '0000-01-01T00:00:00.000Z' } };
+  const ui = harness(request => request.operation === 'get' ? success(document) : failure('VALIDATION_FAILED'));
+  const create = ui.document.createElement;
+  ui.document.createElement = tag => {
+    const node = create(tag); let value = '';
+    if (tag === 'input') Object.defineProperty(node, 'value', {
+      get: () => value,
+      set: (next: string) => { value = node.type === 'datetime-local' && next.startsWith('0000-') ? '' : next; },
+    });
+    return node;
+  };
+  await ui.run("openDocument('record')"); const dialog = find(ui.body, node => node.tagName === 'dialog');
+  assert.equal(named(dialog, 'validFrom').type, 'text');
+  assert.equal(named(dialog, 'validFrom').value, '0000-01-01T00:00:00.000');
+  assert.match(dialog.textContent, /原始日期不受浏览器日历支持.*不会自动清空/);
+  await find(dialog, node => node.tagName === 'form').fire('submit');
+  assert.equal(ui.requests.find(r => r.operation === 'memory-validity')?.data.validFrom, document.meta.validFrom);
+});
+
 test('time UI: dated paging uses capped limits and submitted criteria, preserving retained warnings and source text', async () => {
   const ui = harness(request => success({ ...datedResult(request.data.offset), at: request.data.at }));
   const view = ui.run('datedMemories()') as { element: Element }; ui.body.append(view.element);
