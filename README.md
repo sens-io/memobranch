@@ -102,7 +102,7 @@ flowchart LR
 
 > **Development branch preview:** [Easier setup, approved-context recall, Wiki before/after review and correction](docs/memory-adoption.md), plus [37 reproducible evaluation cases](evaluation/README.md), are available from the current source branch. These additions have not been published to npm yet. Existing npm installation instructions below still refer to the released package.
 
-> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. Web crawling, PDF parsing and team knowledge merges remain future work. These additions are not yet published to npm.
+> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. General crawling, OCR and team knowledge merges remain future work. These additions are not yet published to npm.
 
 > **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
 
@@ -111,6 +111,8 @@ flowchart LR
 > **Effective-time views (development source):** [Explicitly reviewed memory intervals and dated retained-record queries](docs/effective-time.md) distinguish fact time from record time. Current context excludes not-yet-effective/ended memories; dated reads preserve current permissions and withdrawal. Not historical Wiki reconstruction or a published npm feature.
 
 > **Web time management (development source):** [Inspect interval warnings, review UTC endpoints and query retained records by date](docs/web-effective-time.md) in the console. Saves require the displayed revision and explicit confirmation; unknown time is not inferred. Not yet published to npm.
+
+> **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
 
 ### Requirements
 

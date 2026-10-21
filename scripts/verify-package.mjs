@@ -14,6 +14,8 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 try {
   if (process.argv.length > 3) throw new Error('Usage: npm run test:package -- [tarball]');
   const supplied = process.argv[2] ? resolve(process.argv[2]) : undefined;
+  console.log('Consumer execution configuration:', JSON.stringify({ node: process.version, executable: process.execPath,
+    package: supplied ?? 'fresh local pack', gitDefaultBranchOverride: process.env.GIT_CONFIG_VALUE_0 ?? null }));
   const packed = await exec(npm, supplied ? ['pack', supplied, '--dry-run', '--json', '--ignore-scripts']
     : ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
   const [{ filename, files }] = JSON.parse(packed.stdout);
@@ -36,6 +38,7 @@ try {
     'dist/wiki-jobs.js', 'dist/wiki-jobs.d.ts', 'dist/wiki-job-store.js', 'docs/wiki-jobs.md',
     'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
     'docs/web-effective-time.md',
+    'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -114,7 +117,15 @@ try {
       previewDirectoryImport, applyDirectoryImport, type WebImportPlan, type WebImportOptions, type WebPreviewOptions,
       previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
-      type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions } from 'memobranch';
+      type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
+      previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal } from 'memobranch';
+    export async function publicPdfWorkflow(vault: MemoryVault, path: string) {
+      const plan: PdfImportPlan = await previewPdfImport(path);
+      const options: PdfImportOptions = { scope: 'project', signal: new AbortController().signal };
+      const saved = await applyPdfImport(vault, plan, options);
+      const original: Buffer = await readPdfOriginal(vault, saved.evidenceId);
+      return { saved, original };
+    }
     export async function publicEffectiveTime(vault: MemoryVault, id: string) {
       const interval: FactValidity = { validFrom: '2026-01-01T00:00:00Z' };
       const change: MemoryValidityUpdate = { validFrom: interval.validFrom!, validUntil: null, expectedRevision: 1 };
@@ -194,6 +205,12 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(wikiJobs.stdout);
+  await writeFile(join(consumer, 'verify-installed-pdf.mjs'), await readFile(join(root, 'scripts/verify-installed-pdf.mjs')));
+  await writeFile(join(consumer, 'pdf-fixture.base64'), await readFile(join(root, 'test/fixtures/pdf-text.base64')));
+  const pdf = await exec(process.execPath, ['verify-installed-pdf.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(pdf.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
