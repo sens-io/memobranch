@@ -72,6 +72,9 @@ test('Wiki jobs: persist encrypted proposals across instances without canonical 
   assert.equal((await reopen().wikiJob(job.id)).stage, 'finished');
   const plan = await reopen().wikiJobPlan(job.id);
   assert.ok(plan.pages[0]!.body.includes('DURABLE_JOB_SOURCE_CANARY'));
+  const reviewed = await reopen().wikiReviewJob(job.id);
+  assert.equal(reviewed.plan.proof, plan.proof);
+  assert.equal(reviewed.preview.pages.length, 1);
   const calls = llm.calls.length;
   assert.equal(await vault.wikiRunJob({ id: job.id }), null); assert.equal(llm.calls.length, calls);
   await vault.wikiApply(plan);

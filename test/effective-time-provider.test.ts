@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import fs, { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -56,6 +56,14 @@ function observeReads(t: TestContext, action: (path: string) => void | Promise<v
   }) as typeof fs.readFile);
   syncBuiltinESMExports();
   t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+}
+
+async function expectQueuedPeer(root: string) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if ((await readdir(join(root, '.amem', 'write.lock.queue'))).filter(name => name.endsWith('.json')).length >= 2) return;
+    await delay(10);
+  }
+  assert.fail('Expected an independent call to queue behind the active read snapshot');
 }
 
 test('effective provider: 33 documents cannot send a later batch after its interval ends', async t => {
@@ -271,7 +279,7 @@ test('effective provider: a canonical writer waits until all batch members are c
     validFrom: '2999-01-01T00:00:00Z', validUntil: null, expectedRevision: 1,
   }).finally(() => { finished = true; });
   try {
-    await delay(40); assert.equal(finished, false);
+    await expectQueuedPeer(root); assert.equal(finished, false);
     release();
     assert.equal((await pending).semanticStatus, 'ready');
     await writer; assert.equal(finished, true);
@@ -281,7 +289,7 @@ test('effective provider: a canonical writer waits until all batch members are c
 });
 
 test('effective provider: nested semantic context reuses only its own active read snapshot', { timeout: 10000 }, async t => {
-  const { vault, intercept } = await fixture(t, 1);
+  const { vault, root, intercept } = await fixture(t, 1);
   let entered!: () => void, release!: () => void, paused = false;
   const ready = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -294,7 +302,7 @@ test('effective provider: nested semantic context reuses only its own active rea
   let finished = false;
   const concurrentRead = vault.memoriesAt('2030-02-01T00:00:00Z').finally(() => { finished = true; });
   try {
-    await delay(40); assert.equal(finished, false);
+    await expectQueuedPeer(root); assert.equal(finished, false);
     release(); assert.match(await context, /ENDING_CANARY/);
     await concurrentRead; assert.equal(finished, true);
   } finally { release(); await Promise.allSettled([context, concurrentRead]); }
@@ -337,7 +345,7 @@ test('effective provider: Wiki request validation reads memory and evidence in o
     validFrom: '2999-01-01T00:00:00Z', validUntil: null, expectedRevision: 1,
   }).finally(() => { finished = true; });
   try {
-    await delay(40); assert.equal(finished, false);
+    await expectQueuedPeer(root); assert.equal(finished, false);
     release(); await rejected; await writer;
     assert.equal(requests.length, 1); assert.match(requests[0]!.raw, /ENDING_CANARY/);
   } finally { release(); await Promise.allSettled([pending, writer, rejected]); }

@@ -103,12 +103,12 @@ export class MemoryVault {
   private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
   private readonly readSnapshots = new AsyncLocalStorage<{ active: boolean }>();
 
-  private wikiEngine(): WikiEngine {
+  private wikiEngine(readSnapshot = <T>(permission: Permission, action: () => Promise<T>) => this.settledRead(action, permission)): WikiEngine {
     return new WikiEngine({
       principal: this.principal,
       llm: this.llm,
       config: () => this.config(),
-      readSnapshot: (permission, action) => this.settledRead(action, permission),
+      readSnapshot,
       read: (directory, permission, selection) => this.readDirectory<Record<string, unknown>>(directory, permission, selection),
       scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
       catalogMatches: () => this.wikiCatalogMatches(),
@@ -158,7 +158,16 @@ export class MemoryVault {
         if (ids.some(id => !available.has(id))) throw new AgentMemoryError('NOT_FOUND', 'Wiki job source is unavailable');
       },
       compile: async (input, ceiling) => (await bound(ceiling)).wikiIngest({ ...input, apply: false }),
-      preview: async (plan, ceiling) => (await bound(ceiling)).wikiEngine().preview(plan),
+      preview: async (plan, ceiling) => {
+        const restricted = await bound(ceiling);
+        // Jobs already hold this instance's settled read. Reuse that real
+        // snapshot, but retain the restricted vault's own authority checks.
+        return restricted.wikiEngine((permission, action) => this.settledRead(async () => {
+          authorize(restricted.principal, permission);
+          await restricted.config();
+          return action();
+        }, permission)).preview(plan);
+      },
       apply: async (plan, ceiling) => (await bound(ceiling, true)).wikiApply(plan),
     });
   }
@@ -1708,13 +1717,21 @@ export class MemoryVault {
     return documents;
   }
 
-  private async settledRead<T>(action: () => Promise<T>, permission: Permission = 'read'): Promise<T> {
+  /** @internal Read-only adapter boundary; never wrap a canonical mutation. */
+  async withReadSnapshot<T>(action: () => Promise<T>, permission: Permission, diagnostics = false): Promise<T> {
+    return this.settledRead(action, permission, diagnostics);
+  }
+
+  private async settledRead<T>(action: () => Promise<T>, permission: Permission = 'read', diagnostics = false): Promise<T> {
     authorize(this.principal, permission);
-    await this.config(); // Reject absent vaults and foreign tenants before creating a lock.
+    // Diagnostic actions perform their own config/tenant checks and can report
+    // malformed configuration instead of failing before healthReport runs.
+    if (diagnostics) this.assertInitialized();
+    else await this.config();
     const checked = async () => {
       throwIfCancelled();
-      await this.config();
-      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+      if (!diagnostics) await this.config();
+      if (!diagnostics && (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json')))) {
         throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
       }
       return action();

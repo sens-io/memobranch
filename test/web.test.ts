@@ -142,6 +142,28 @@ test('web: unresolved recovery blocks content reads but diagnostics and recovery
   assert.equal((await call(handle, 'records', { collection: 'memories' })).status, 200);
 });
 
+test('web: diagnostic snapshot reports broken configuration without swallowing tenant refusal', async t => {
+  const { root, vault, start } = await fixture(t);
+  const config = await vault.config(), path = join(root, 'agent-memory.json');
+  const handle = await start({ id: 'diagnostics', name: 'Diagnostics', permissions: ['read', 'maintain'],
+    scopes: ['user', 'project', 'team', 'public'], maxSensitivity: 'secret', tenantId: config.tenantId });
+  try {
+    for (const [invalid, message] of [
+      ['{broken', /^Invalid agent-memory\.json:/],
+      [JSON.stringify({ ...config, version: 999 }), /version.*999|999.*version/i],
+    ] as const) {
+      await writeFile(path, invalid);
+      const result = await call(handle, 'doctor');
+      assert.equal(result.status, 200);
+      assert.equal(result.body.result.healthy, false);
+      assert.equal(result.body.result.configuration.healthy, false);
+      assert.match(result.body.result.configuration.error, message);
+    }
+    await writeFile(path, JSON.stringify({ ...config, tenantId: 'different-tenant' }));
+    assert.equal((await call(handle, 'doctor')).status, 403);
+  } finally { await writeFile(path, JSON.stringify(config)); }
+});
+
 test('web: static assets are offline, bounded by CSP, and contain no token or vault data', async t => {
   const { start } = await fixture(t);
   const handle = await start();
@@ -316,6 +338,9 @@ test('web: Wiki plan/apply/query/file/lint/rules preserve explicit writes and ev
   const lint = await call(handle, 'lint', { semantic: false });
   assert.equal(lint.status, 200);
   assert.equal(lint.body.result.semantic, 'not-requested');
+  const semanticLint = await call(handle, 'lint', { semantic: true });
+  assert.equal(semanticLint.status, 200);
+  assert.equal(semanticLint.body.result.semantic, 'available');
   const rule = { purpose: 'Maintain source-grounded knowledge', instructions: 'Keep uncertainty explicit.', scope: 'public', sensitivity: 'public', expectedRevision: 0, confirm: true };
   assert.equal((await call(handle, 'rules-save', rule)).status, 200);
   assert.equal((await call(handle, 'rules-save', rule)).status, 400);

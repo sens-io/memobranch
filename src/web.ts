@@ -1,16 +1,12 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { withOperation } from './operation.js';
 import { authorize, type Permission } from './policy.js';
 import { settingsSchema } from './settings.js';
-import { pendingTransactionCount } from './transaction.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
-import { withFileLock } from './utils.js';
 import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
 
@@ -99,14 +95,8 @@ const routes: Record<string, Route> = {
 const snapshotRoutes = new Set(['session', 'records', 'get', 'settings', 'catalog', 'rules',
   'ingest', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
 
-async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false): Promise<T> {
-  return withFileLock(join(vault.root, '.amem', 'write.lock'), async () => {
-    if (!diagnostics && (await pendingTransactionCount(vault.root) > 0
-        || existsSync(join(vault.root, '.amem', 'sync-intent.json')))) {
-      throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
-    }
-    return action();
-  });
+async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false, permission: Permission = 'read'): Promise<T> {
+  return vault.withReadSnapshot(action, permission, diagnostics);
 }
 
 export interface WebHandle {
@@ -216,7 +206,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       const result = await withOperation(controller.signal, () => {
         const vault = new MemoryVault(root, vaultOptions);
         const action = () => operation.run(vault, input);
-        return snapshotRoutes.has(name) ? settledRead(vault, action, name === 'doctor' || name === 'session') : action();
+        return snapshotRoutes.has(name) ? settledRead(vault, action, name === 'doctor' || name === 'session', operation.permission) : action();
       });
       // A successful preview must be resubmittable through the same adapter.
       // Fail closed before showing a plan that can never pass its approval route.
