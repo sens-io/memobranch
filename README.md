@@ -118,6 +118,8 @@ flowchart LR
 
 > **Manual Wiki merge review (development source):** [Combine a retained revision with the current page through a signed, explicit review](docs/manual-wiki-merge.md). Keeps sources, conditions, conflicts and stricter access limits; no model call, automatic approval or Git branch merge. Not yet published to npm.
 
+> **Web merge workbench (development source):** [Compare history, edit a draft and approve separately in the local console](docs/web-manual-merge.md). Draft edits invalidate old approvals; uncertain saves can explicitly retry the original signed plan. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

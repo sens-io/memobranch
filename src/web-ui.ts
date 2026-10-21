@@ -201,6 +201,16 @@ dialog .meta { font-size: 11px; color: #a9bddf; }
 .dated-record .record { padding-top: 0; border-bottom: 0; }
 .time-editor { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 20px; }
 .time-editor .review-summary { border-left-color: var(--mint); }
+.merge-workbench [hidden] { display: none !important; }
+.merge-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+.merge-steps span { border-top: 2px solid var(--violet); padding: 12px 10px 0 0; color: #c9b9ef; font: 12px/1.7 var(--mono); }
+.merge-steps span:last-child { border-color: var(--mint); color: #91e4d2; }
+.merge-selection { border-left: 3px solid var(--violet); }
+.merge-editor { border-top: 2px solid var(--accent); }
+.merge-editor textarea[name=body] { min-height: 280px; font: 13px/1.9 var(--mono); }
+.merge-feedback { margin: 16px 0; overflow-wrap: anywhere; }
+.merge-workbench .comparison { margin-bottom: 20px; }
+.merge-workbench .commit-reference { font: 11px/1.8 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
 @media (max-width: 1100px) { .job-board { grid-template-columns: minmax(0, 1fr); } }
 @keyframes pulse { 50% { opacity: .55; } }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
@@ -227,6 +237,8 @@ dialog .meta { font-size: 11px; color: #a9bddf; }
   .topbar { min-height: 60px; padding: 15px 18px; flex-wrap: wrap; }
   .content { padding: 26px 18px 40px; }
   .forms, .comparison { grid-template-columns: minmax(0, 1fr); }
+  .merge-steps { gap: 8px; }
+  .merge-steps span { font-size: 10px; }
   .page-head { display: block; }
   .page-head>.actions { margin-top: 18px; }
   h1 { font-size: 32px; }
@@ -262,8 +274,8 @@ const app = document.getElementById('app');
 const notice = document.getElementById('notice');
 let token = '', principal = null, vaultName = '', page = 'overview', generation = 0, session = 0, toastTimer, pageCleanup = () => {};
 const requests = new Set();
-const pages = [['overview','总览','Overview'],['records','记忆库','Memory library'],['review','审核队列','Review queue'],['wiki','LLM Wiki','Knowledge wiki'],['jobs','编译任务','Compilation jobs'],['settings','配置','Configuration'],['operations','运维记录','Operations']];
-const descriptions = {overview:'让每一条记忆有据可查，让知识持续生长。',records:'保存原始证据，浏览经过审核的长期记忆。原始资料不会被覆盖。',review:'让人决定方向。检查候选内容与来源，再将其纳入正式知识。',wiki:'摄取、查询、维护各司其职。所有写回都需要单独确认。',jobs:'编译进度加密保存在本机。执行、重试与批准，都由你明确决定。',settings:'调整知识管理策略。密钥、租户与身份仍由启动环境管理。',operations:'检查健康状态、查看 Git 历史，或明确发起维护与同步。'};
+const pages = [['overview','总览','Overview'],['records','记忆库','Memory library'],['review','审核队列','Review queue'],['wiki','LLM Wiki','Knowledge wiki'],['merges','知识合并','Merge review'],['jobs','编译任务','Compilation jobs'],['settings','配置','Configuration'],['operations','运维记录','Operations']];
+const descriptions = {overview:'让每一条记忆有据可查，让知识持续生长。',records:'保存原始证据，浏览经过审核的长期记忆。原始资料不会被覆盖。',review:'让人决定方向。检查候选内容与来源，再将其纳入正式知识。',wiki:'摄取、查询、维护各司其职。所有写回都需要单独确认。',merges:'把历史与当前放在一起读。由你编辑，保留来源，再明确批准。',jobs:'编译进度加密保存在本机。执行、重试与批准，都由你明确决定。',settings:'调整知识管理策略。密钥、租户与身份仍由启动环境管理。',operations:'检查健康状态、查看 Git 历史，或明确发起维护与同步。'};
 function el(tag, cls, text){const n=document.createElement(tag);if(cls){n.className=cls;if(cls.split(' ').includes('loading'))n.setAttribute('role','status');if(cls.split(' ').includes('error'))n.setAttribute('role','alert');}if(text!==undefined)n.textContent=String(text);return n;}
 function button(label,action,cls=''){const b=el('button',cls,label);b.type='button';b.addEventListener('click',action);return b;}
 function can(permission){return principal && (principal.permissions.includes('admin')||principal.permissions.includes(permission));}
@@ -287,7 +299,7 @@ function logout(){session++;generation++;pageCleanup();pageCleanup=()=>{};for(co
 function brandLogo(){const image=el('img','brand-logo');image.src='/assets/logo.png';image.alt='';image.width=40;image.height=40;return image;}
 function login(){app.replaceChildren();const box=el('main','login');const brand=el('div','brand');brand.append(brandLogo(),el('span','','MemoBranch'));const story=el('section','login-story');story.append(brand,el('div','section-number','LOCAL KNOWLEDGE WORKBENCH'),el('h1','','知识，留在你手中。'),el('p','','把对话变成有来源、可审核、可追溯的长期知识。'));const principles=el('div','login-principles');['Git 可追溯','来源可核验','本机优先'].forEach(text=>principles.append(el('span','',text)));story.append(principles);const access=el('section','login-access');access.append(el('div','section-number','SECURE LOCAL SESSION'),el('h2','','连接工作台'),el('p','','输入启动命令显示的访问令牌，连接本机记忆库。'));const form=el('form');const label=el('label','','访问令牌');const input=el('input');input.type='password';input.autocomplete='off';input.required=true;input.placeholder='粘贴终端中的 token';label.append(input);const submit=el('button','primary','连接工作台 →');submit.type='submit';const error=el('div');form.append(label,submit,error);form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;token=input.value.trim();input.value='';error.replaceChildren();try{const data=await api('session');principal=data.principal;vaultName=data.name;page='overview';shell();await navigate(page);}catch(e){token='';error.append(el('p','error',e.message));}finally{submit.disabled=false;}});access.append(form,el('small','','仅监听 127.0.0.1 · 令牌仅保存在当前页面内存 · 重启服务后失效'));box.append(story,access);app.append(box);input.focus();}
 function shell(){app.replaceChildren();const layout=el('div','layout'),side=el('aside','sidebar'),brand=el('div','brand');brand.append(brandLogo(),el('span','','MemoBranch'));side.append(brand,el('div','eyebrow','YOUR KNOWLEDGE, BRANCHED.'));const nav=el('nav');nav.setAttribute('aria-label','主导航');pages.forEach(([key,title],i)=>{const b=button('',()=>navigate(key));b.dataset.page=key;b.append(el('span','nav-index',String(i+1).padStart(2,'0')),document.createTextNode(title));nav.append(b);});side.append(nav);const foot=el('footer');foot.append(el('div','eyebrow','OPERATOR'),el('div','',principal.name),button('断开连接',logout));side.append(foot);const work=el('div','workspace'),top=el('header','topbar');top.append(el('span','',vaultName));const online=el('span','online');online.append(el('span','dot'),document.createTextNode('本机连接 · Git 原生'));top.append(online);work.append(top,el('main','content'));layout.append(side,work);app.append(layout);}
-async function navigate(key){pageCleanup();pageCleanup=()=>{};page=key;const current=++generation;document.querySelectorAll('[data-page]').forEach(b=>{if(b.dataset.page===key)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});const main=app.querySelector('main.content');if(!main)return;main.replaceChildren(el('div','loading','正在读取授权范围内的数据…'));try{const content=await ({overview,records:()=>records('memories'),review:()=>records('candidates'),wiki,jobs,settings,operations}[key])();if(current!==generation)return;const head=el('header','page-head'),left=el('div');left.append(el('div','section-number',pages.find(p=>p[0]===key)[2].toUpperCase()),el('h1','',pages.find(p=>p[0]===key)[1]),el('p','',descriptions[key]));head.append(left);main.replaceChildren(head,content);}catch(e){if(current!==generation)return;main.replaceChildren(el('div','error',e.message),button('重新读取',()=>navigate(key)));}}
+async function navigate(key){pageCleanup();pageCleanup=()=>{};page=key;const current=++generation;document.querySelectorAll('[data-page]').forEach(b=>{if(b.dataset.page===key)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});const main=app.querySelector('main.content');if(!main)return;main.replaceChildren(el('div','loading','正在读取授权范围内的数据…'));try{const content=await ({overview,records:()=>records('memories'),review:()=>records('candidates'),wiki,merges,jobs,settings,operations}[key])();if(current!==generation)return;const head=el('header','page-head'),left=el('div');left.append(el('div','section-number',pages.find(p=>p[0]===key)[2].toUpperCase()),el('h1','',pages.find(p=>p[0]===key)[1]),el('p','',descriptions[key]));head.append(left);main.replaceChildren(head,content);}catch(e){if(current!==generation)return;main.replaceChildren(el('div','error',e.message),button('重新读取',()=>navigate(key)));}}
 function field(name,title,type='text',value='',options){const label=el('label','',title),input=el(type==='textarea'?'textarea':options?'select':'input');input.name=name;if(options){options.forEach(o=>{const option=el('option','',Array.isArray(o)?o[1]:o);option.value=Array.isArray(o)?o[0]:o;input.append(option);});}else if(type!=='textarea')input.type=type;if(type==='checkbox')input.checked=Boolean(value);else input.value=String(value??'');if(type==='number')input.step='any';if(type!=='checkbox')input.required=true;label.append(input);return {label,input};}
 function form(fields,label,action){const wrapper=el('div'),f=el('form','forms');const inputs={};fields.forEach(spec=>{const [name,title,type='text',value='',options,optional=false]=spec;const item=field(name,title,type,value,options);if(type==='textarea')item.label.classList.add('wide');if(optional)item.input.required=false;inputs[name]=item.input;f.append(item.label);});const actions=el('div','actions wide'),submit=el('button','primary',label);submit.type='submit';actions.append(submit);const output=el('div','wide');f.append(actions);wrapper.append(f,output);f.addEventListener('submit',async e=>{e.preventDefault();e.stopPropagation();if(submit.disabled)return;const values={};for(const [key,input] of Object.entries(inputs))values[key]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value;submit.disabled=true;submit.textContent='处理中…';output.replaceChildren();try{const result=await action(values,output);if(result!==undefined)output.append(pretty(result));}catch(e){output.append(el('div','error',e.message));}finally{submit.disabled=false;submit.textContent=label;}});return wrapper;}
 function classifications(){const levels=['public','internal','sensitive','secret'].slice(0,['public','internal','sensitive','secret'].indexOf(principal.maxSensitivity)+1);return [['scope','作用域','text',principal.scopes[0],principal.scopes],['sensitivity','敏感级别','text',levels.includes('internal')?'internal':'public',levels]];}
@@ -386,6 +398,102 @@ function versionPanel(label,version){const panel=el('section','version-panel');p
 function renderPlanPreview(target,data){const summary=el('div','review-summary');summary.append(el('strong','','本次涉及 '+data.pages.length+' 页'),el('p','','操作：'+({compile:'摄取资料',file:'保存查询成果',repair:'修订知识'}[data.kind]||data.kind)));target.append(summary);for(const item of data.pages){const details=el('details','plan-page');details.open=true;const operation={create:'新建',update:'更新',unchanged:'无变化'}[item.operation]||item.operation;details.append(el('summary','',operation+' · '+item.title+' · '+item.pageType),el('p','meta muted',item.key));const comparison=el('div','comparison');comparison.append(versionPanel('修改前',item.before),versionPanel('修改后',item.after));details.append(comparison);const changes=el('details');changes.append(el('summary','','正文差异 · 新增 '+item.diff.added+' 行 / 删除 '+item.diff.removed+' 行'));const diff=el('div','diff');diff.setAttribute('aria-label','正文逐行差异');for(const line of item.diff.lines){const prefix={added:'+ ',removed:'− ',context:'  ',omitted:'… '}[line.kind]||'';diff.append(el('div','diff-line '+line.kind,prefix+line.text));}changes.append(diff);if(item.diff.truncated)changes.append(el('p','muted','差异较长，部分行已省略；上方保留修改前后全文。'));details.append(changes);target.append(details);}const affected=el('details');affected.open=true;affected.append(el('summary','','受影响页面（'+data.affectedPageKeys.length+'）'),textList(data.affectedPageKeys,'没有受影响页面'));target.append(affected);}
 async function showPlan(container,result){if(!result?.plan){container.append(pretty(result));return;}const plan=JSON.parse(JSON.stringify(result.plan)),epoch=session,preview=card('待审核变更计划','尚未写入正式知识。请逐页检查来源、内容与影响；版本变化后需要重新生成。'),content=el('div'),approval=el('div','actions');const raw=el('details');raw.append(el('summary','','完整签名计划'),pretty(plan));preview.append(content,raw,approval);container.append(preview);async function load(){content.replaceChildren(el('div','loading inline-loading','正在校验签名、权限与页面版本，并读取修改前后内容…'));content.setAttribute('aria-busy','true');approval.replaceChildren();try{const data=await api('preview',{plan});if(epoch!==session)return;content.replaceChildren();renderPlanPreview(content,data);if(can('review'))approval.append(actionButton('批准并应用此计划','apply',{plan},()=>{const dialog=preview.closest('dialog');if(dialog)dialog.close();}));else approval.append(el('p','','当前身份没有审核权限，不能应用计划。'));}catch(e){if(epoch!==session)return;content.replaceChildren(el('div','error',e.message),el('p','muted','预览校验未通过，暂时不能应用。页面可能已经变化，请核对后重新生成计划。'),button('重新校验此计划',load));}finally{content.removeAttribute('aria-busy');}}await load();}
 function retrievalSearch(){const section=card('检索与匹配说明','搜索正式记忆和 Wiki 页面，查看系统实际使用的匹配分数。点击结果可查看当前版本与来源。');section.append(form([['query','要查找的内容','textarea']],'检索并查看说明',async(values,output)=>{const epoch=session;output.append(el('div','loading inline-loading','正在检索授权范围内的内容…'));let result;try{result=await api('explain',{query:values.query});}catch(e){if(epoch===session)output.replaceChildren(el('div','error',e.message));return;}if(epoch!==session)return;output.replaceChildren();const explanation=result.explanation,note=el('div','retrieval-note'),semanticLabel={disabled:'未启用',ready:'可用',degraded:'暂不可用，使用词法匹配'}[result.semanticStatus]||result.semanticStatus;note.append(el('strong','',explanation.strategy==='hybrid'?'词法与语义混合检索':'词法检索'),el('p','','语义检索状态：'+semanticLabel+' · '+(result.indexRebuilt?'本次已重建检索索引':'使用现有检索索引')));if(explanation.notes.length)note.append(textList(explanation.notes,''));output.append(note);if(!result.hits.length){output.append(empty('没有匹配结果。可换用页面标题、关键词或更具体的内容。'));return;}for(const hit of result.hits){const row=el('section','retrieval-hit');row.append(recordButton(hit),el('p','meta muted',hit.path));const signal=explanation.signals.find(value=>value.id===hit.id&&value.path===hit.path),scores=el('dl');[['综合分数',signal?signal.score:hit.score],['词法分数',signal?.lexicalScore],['语义分数',signal?.semanticScore]].forEach(([label,value])=>{const pair=el('div');pair.append(el('dt','',label),el('dd','',typeof value==='number'&&Number.isFinite(value)?String(value):'未参与'));scores.append(pair);});row.append(scores);output.append(row);}}));return section;}
+
+async function merges(){
+ const epoch=session,current=generation,out=el('div','merge-workbench');
+ let closed=false,seq=0,active=null,phase='idle',loaded=null,proposal=null,uncertain=null,dirty=false,saved=false;
+ const valid=()=>!closed&&epoch===session&&current===generation;
+ const steps=el('div','merge-steps');['01 / 读取历史与当前','02 / 编辑并检查方案','03 / 单独批准'].forEach(text=>steps.append(el('span','',text)));out.append(steps);
+ const selection=card('选择这次要比较的版本','仅限同一资料库。历史仍受当前权限、撤回、密钥和期限约束；不是 Git 分支合并。');selection.classList.add('merge-selection');
+ const selector=el('form','forms'),key=field('pageKey','正式 Wiki 页面','text','',[]),commit=field('fromCommit','完整历史提交编号');commit.input.maxLength=64;
+ const sensitive=field('includeSensitive','明确读取敏感资料','checkbox',false),secret=field('includeSecret','明确读取机密资料','checkbox',false);
+ const loadButton=el('button','primary','读取历史与当前');loadButton.type='submit';const loadActions=el('div','actions wide');loadActions.append(loadButton);
+ selector.append(key.label,commit.label,sensitive.label,secret.label,loadActions);selection.append(selector,el('p','muted','正文和草稿只在当前页面内存中保留；离开或断开会清除，不会自动保存。'));
+ const feedback=el('div','merge-feedback');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');selection.append(feedback);out.append(selection);
+ const history=el('div'),editor=card('编辑要保留的知识','编辑区从当前正文开始，不包含自动生成的来源链接。请结合两侧资料修改；旧条件、冲突和更早期限不会因此消失。');editor.classList.add('merge-editor');editor.hidden=true;
+ const draft=el('form','forms'),title=field('title','页面标题（可留空沿用）'),summary=field('summary','合并摘要'),body=field('body','合并正文（Markdown）','textarea');title.input.required=false;title.input.maxLength=300;summary.input.maxLength=2000;body.input.maxLength=100000;body.label.classList.add('wide');
+ const prepare=el('button','primary','生成合并审核方案');prepare.type='submit';const prepareActions=el('div','actions wide');prepareActions.append(prepare);draft.append(title.label,summary.label,body.label,prepareActions);editor.append(draft);out.append(history,editor);
+ const review=el('div'),approval=el('div','actions'),outcome=el('div');out.append(review,approval,outcome);
+ function sync(){
+  loadButton.disabled=phase!=='idle'||!key.input.value;prepare.disabled=phase!=='idle'||!loaded||!can('write')||saved;
+  for(const input of [key.input,commit.input,title.input,summary.input,body.input])input.disabled=phase==='applying'||(saved&&[title.input,summary.input,body.input].includes(input));
+  sensitive.input.disabled=phase==='applying'||!['sensitive','secret'].includes(principal.maxSensitivity);
+  secret.input.disabled=phase==='applying'||principal.maxSensitivity!=='secret';
+  loadButton.textContent=phase==='loading'?'正在读取…':'读取历史与当前';prepare.textContent=phase==='preparing'?'正在生成与校验…':'生成合并审核方案';
+ }
+ function invalidate(selectionChanged){
+  if(!valid()||phase==='applying')return;
+  seq++;active?.abort();active=null;phase='idle';proposal=null;uncertain=null;saved=false;review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();
+  if(selectionChanged){loaded=null;history.replaceChildren();editor.hidden=true;feedback.textContent='选择已变化，请重新读取。已有草稿会在重新读取前请求确认。';}
+  else{dirty=true;feedback.textContent='草稿已变化，旧方案不能批准；请重新生成。';}sync();
+ }
+ for(const input of [key.input,commit.input,sensitive.input,secret.input])input.addEventListener('input',()=>invalidate(true));
+ for(const input of [title.input,summary.input,body.input])input.addEventListener('input',()=>invalidate(false));
+ function begin(next){if(!valid()||phase!=='idle')return null;const turn=++seq;active=new AbortController();phase=next;sync();return {signal:active.signal,live:()=>valid()&&turn===seq};}
+ function finish(attempt){if(attempt.live()){phase='idle';active=null;sync();}}
+ function showComparison(base,target){
+  const old=base.pages.find(page=>page.meta.type==='wiki-page'&&page.meta.key===key.input.value);if(!old)throw Error('历史正式页面不可用，请重新选择。');
+  const comparison=card('历史与当前 · 完整正文','旧正文不是当前事实。两边的来源、条件和不确定性都需要人工核对。');
+  comparison.append(el('p','commit-reference','历史提交 '+base.commit+' · 当前页 v'+target.meta.revision));
+  const columns=el('div','comparison');columns.append(versionPanel('历史 · v'+old.meta.revision,{...old.meta,body:old.body}),versionPanel('当前 · v'+target.meta.revision,{...target.meta,body:target.body}));comparison.append(columns);
+  comparison.append(el('p','muted','历史到期：'+timeBound(old.meta.expiresAt)+' · 当前到期：'+timeBound(target.meta.expiresAt)));
+  const graph=el('details');graph.append(el('summary','','历史关联页面与条件（'+base.pages.length+'）'),pretty(base.pages));comparison.append(graph);history.replaceChildren(comparison);
+ }
+ selector.addEventListener('submit',async event=>{
+  event.preventDefault();event.stopPropagation();if(!valid()||phase!=='idle')return;
+  if(dirty&&!confirm('重新读取将重置当前编辑区。确认放弃未保存的草稿？'))return;
+  const values={commit:commit.input.value.trim(),pageKeys:[key.input.value],includeSensitive:sensitive.input.checked,includeSecret:secret.input.checked};
+  if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(values.commit)){feedback.replaceChildren(el('div','error','请输入完整的本地历史提交编号，可从运维记录查看。'));return;}
+  loaded=null;proposal=null;uncertain=null;history.replaceChildren();review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();editor.hidden=true;
+  const attempt=begin('loading');if(!attempt)return;feedback.textContent='正在检查历史、当前权限与支持关系…';
+  try{
+   const base=await api('wiki-snapshot',values,attempt.signal);if(!attempt.live())return;
+   const live=await api('wiki-snapshot',{...values,commit:base.authorityHead},attempt.signal);if(!attempt.live())return;
+   const target=live.pages.find(page=>page.meta.type==='wiki-page'&&page.meta.key===values.pageKeys[0]);
+   if(!target||base.authorityHead!==live.authorityHead||target.meta.revision!==target.currentRevision||base.pages.find(page=>page.meta.key===values.pageKeys[0])?.currentRevision!==target.meta.revision)throw Error('读取期间资料已变化，请重新读取历史与当前版本。');
+   loaded={fromCommit:values.commit,pageKey:values.pageKeys[0],expectedRevision:target.meta.revision,includeSensitive:values.includeSensitive,includeSecret:values.includeSecret};
+   showComparison(base,target);title.input.value=target.meta.title;summary.input.value=target.meta.summary;body.input.value=target.body.split('<!-- MEMOBRANCH_WIKI_LINKS -->')[0].trim();dirty=false;saved=false;
+   editor.hidden=!can('write');feedback.textContent=can('write')?'已读取。请编辑合并正文，再生成审核方案；尚未保存任何知识。':'已读取完整比较。当前身份没有写入权限，不能准备合并。';
+  }catch(error){if(attempt.live())feedback.replaceChildren(el('div','error',error.message));}finally{finish(attempt);}
+ });
+ async function inspect(plan,attempt){
+  proposal=null;approval.replaceChildren();const preview=await api('preview',{plan},attempt.signal);if(!attempt.live())return;
+  review.replaceChildren();const header=card('待批准的人工合并','下列是这次签名方案的完整影响。原始证据不会被改写；批准是另一项操作。');renderPlanPreview(header,preview);
+  const raw=el('details');raw.append(el('summary','','完整签名方案（包含明文，请勿随意分享）'),pretty(plan));header.append(raw);review.append(header);proposal=plan;
+  if(can('review'))approval.append(button('批准并保存这次合并',()=>apply(plan),'primary'));
+  else approval.append(el('p','muted','当前身份没有审核权限，不能批准。签名不授予额外权限。'));
+ }
+ draft.addEventListener('submit',async event=>{
+  event.preventDefault();event.stopPropagation();if(!valid()||phase!=='idle'||!loaded||!can('write')||saved)return;
+  if(!body.input.value.trim()||!summary.input.value.trim()){feedback.replaceChildren(el('div','error','请填写合并正文和摘要。'));return;}
+  const values={...loaded,body:body.input.value,summary:summary.input.value,...(title.input.value.trim()?{title:title.input.value}:{} )};
+  const attempt=begin('preparing');if(!attempt)return;proposal=null;uncertain=null;approval.replaceChildren();review.replaceChildren();outcome.replaceChildren();feedback.textContent='正在重新读取两边资料并检查合并影响，不调用模型…';
+  try{const result=await api('merge-prepare',values,attempt.signal);if(!attempt.live())return;showComparison(result.comparison.base,result.comparison.current);await inspect(JSON.parse(JSON.stringify(result.plan)),attempt);if(attempt.live())feedback.textContent='方案已生成但未写入。请检查每个修改前后版本，再单独批准。';}
+  catch(error){if(attempt.live()){proposal=null;approval.replaceChildren();review.replaceChildren();feedback.replaceChildren(el('div','error',error.message),el('p','muted','不能应用旧方案。请核对版本，必要时重新读取；编辑区尚未自动保存。'));}}finally{finish(attempt);}
+ });
+ async function apply(plan){
+  if(!valid()||phase!=='idle'||proposal!==plan||!can('review'))return;
+  if(!confirm('确认批准这次合并？历史提交 '+plan.merge.fromCommit+'。请先逐页核对正文与来源；这会写入 Git，关闭页面不能撤回已完成提交。'))return;
+  const attempt=begin('applying');if(!attempt)return;let requested=false;outcome.replaceChildren();for(const control of approval.querySelectorAll('button'))control.disabled=true;
+  try{
+   // An uncertain successful application makes ordinary preview stale. Only an
+   // explicit retry of the exact retained plan may use the core's replay check.
+   if(uncertain!==plan)await api('preview',{plan},attempt.signal);if(!attempt.live())return;requested=true;
+   const result=await api('apply',{plan,confirm:true},attempt.signal);if(!attempt.live())return;
+   proposal=null;uncertain=null;loaded=null;dirty=false;saved=true;approval.replaceChildren();outcome.append(el('div','job-applied',result.commit?'合并已保存 · Git 提交 '+result.commit:'此签名方案已完成，本次没有新增提交。'));feedback.textContent='本次审核已完成。需要继续修改时，请重新读取当前版本。';
+  }catch(error){if(attempt.live()){
+   outcome.replaceChildren(el('div','error',error.message),el('p','muted',requested?'保存结果未确认。先检查运维记录；如需重试，仅重复提交原方案，勿盲目生成新方案。':'当前预览校验失败，不能批准。请重新读取并生成方案。'));
+   if(!requested){proposal=null;approval.replaceChildren();}else{uncertain=plan;for(const control of approval.querySelectorAll('button'))control.textContent='重试原签名方案';}
+  }}finally{if(attempt.live()){for(const control of approval.querySelectorAll('button'))control.disabled=false;}finish(attempt);}
+ }
+ pageCleanup=()=>{closed=true;seq++;active?.abort();active=null;loaded=null;proposal=null;uncertain=null;for(const input of [title.input,summary.input,body.input,commit.input])input.value='';out.replaceChildren();};
+ const attempt=begin('loading');
+ try{const catalog=await api('catalog',{},attempt.signal);if(attempt.live()){
+  const entries=catalog.filter(page=>!page.key.startsWith('legacy:'));for(const page of entries){const option=el('option','',page.title+' · v'+page.revision);option.value=page.key;key.input.append(option);}
+  if(entries.length)key.input.value=entries[0].key;else feedback.textContent='没有可合并的正式 Wiki 页面。请先摄取资料并审核页面。';
+ }}catch(error){if(attempt.live())feedback.replaceChildren(el('div','error',error.message));}finally{finish(attempt);}
+ return out;
+}
 
 const jobLabels={queued:'等待执行',running:'正在编译',ready:'计划待审核',duplicate:'已摄取，无需重编',failed:'执行失败',cancelled:'已取消'};
 const jobReasons={'worker-interrupted':'执行进程已退出；需要明确重试','context-erased':'相关资料已删除，旧计划不可再用',deadline:'达到本次执行时限',cancelled:'已取消本次任务','compilation-failed':'编译或结果校验失败'};

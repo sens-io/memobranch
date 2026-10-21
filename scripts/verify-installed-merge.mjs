@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { LlmClient, MemoryVault } from 'memobranch';
+import { LlmClient, MemoryVault, startWebServer } from 'memobranch';
 
 const exec = promisify(execFile), cli = join(process.cwd(), 'node_modules/memobranch/dist/cli.js'), key = '82'.repeat(32);
 async function fixture(name, sensitivity = 'internal') {
@@ -26,7 +26,7 @@ async function fixture(name, sensitivity = 'internal') {
   const second = await vault.capture({ content: 'Installed current merge source.', scope: 'project', sensitivity, extract: false });
   await vault.wikiIngest({ evidenceIds: [second.evidenceId], apply: true });
   const currentBody = (await vault.get(targetId)).body;
-  return { vault, first, second, historicalBody, currentBody, calls: () => calls, input: { fromCommit, pageKey: 'entity:installed-merge', expectedRevision: 2,
+  return { vault, llm, first, second, historicalBody, currentBody, calls: () => calls, input: { fromCommit, pageKey: 'entity:installed-merge', expectedRevision: 2,
     body: 'Installed human combination of historical and current knowledge. 中文 🧠📚', summary: 'Explicit manual review.' } };
 }
 
@@ -82,3 +82,32 @@ assert.doesNotMatch(await readFile(join(privateCase.vault.root, page.path), 'utf
 await privateCase.vault.encryption.erase(privateCase.first.evidenceId);
 await assert.rejects(privateCase.vault.wikiApply(privatePlan.plan));
 console.log('Installed package: signed historical/current manual merge, full preview, provenance, no model calls, private opt-in/encryption/key loss, cancellation, forged-plan refusal, real CLI approval and exact retry passed (same vault, no branch/shared-vault merge or semantic-quality claim).');
+
+const webCase = await fixture('manual-web-merge-vault'), webCount = webCase.calls(), webHead = await webCase.vault.git.run(['rev-parse', 'HEAD']);
+const sourceBytes = await Promise.all([webCase.first, webCase.second].map(source => readFile(join(webCase.vault.root, source.evidencePath))));
+const web = await startWebServer(webCase.vault.root, { llm: webCase.llm, masterKey: key });
+try {
+  const post = async (operation, data) => {
+    const response = await fetch(web.url + '/api/' + operation, { method: 'POST', headers: {
+      Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
+    }, body: JSON.stringify(data) });
+    return { status: response.status, body: await response.json() };
+  };
+  const base = await post('wiki-snapshot', { commit: webCase.input.fromCommit, pageKeys: [webCase.input.pageKey] }); assert.equal(base.status, 200);
+  assert.equal(base.body.result.pages.find(page => page.meta.key === webCase.input.pageKey).body, webCase.historicalBody);
+  const current = await post('wiki-snapshot', { commit: base.body.result.authorityHead, pageKeys: [webCase.input.pageKey] }); assert.equal(current.status, 200);
+  assert.equal(current.body.result.pages.find(page => page.meta.key === webCase.input.pageKey).body, webCase.currentBody);
+  const prepared = await post('merge-prepare', webCase.input); assert.equal(prepared.status, 200);
+  assert.equal(prepared.body.result.comparison.current.body, webCase.currentBody);
+  const view = await post('preview', { plan: prepared.body.result.plan }); assert.equal(view.status, 200); assert.deepEqual(view.body.result, prepared.body.result.preview);
+  assert.equal(webCase.calls(), webCount); assert.equal(await webCase.vault.git.run(['rev-parse', 'HEAD']), webHead);
+  assert.equal((await post('apply', { plan: prepared.body.result.plan })).status, 400);
+  assert.ok((await post('apply', { plan: prepared.body.result.plan, confirm: true })).body.result.commit);
+  assert.deepEqual((await post('apply', { plan: prepared.body.result.plan, confirm: true })).body.result, { pageIds: [], commit: null });
+  const target = view.body.result.pages.find(page => page.key === webCase.input.pageKey), id = (await webCase.vault.wikiCatalog()).find(page => page.key === webCase.input.pageKey).id;
+  assert.equal((await webCase.vault.get(id)).body, target.after.body); assert.ok(target.after.body.includes(webCase.input.body));
+  for (const [index, source] of [webCase.first, webCase.second].entries()) assert.deepEqual(await readFile(join(webCase.vault.root, source.evidencePath)), sourceBytes[index]);
+  assert.match(await (await fetch(web.url + '/app.js')).text(), /async function merges\(/);
+  assert.equal(webCase.calls(), webCount);
+  console.log('Installed package: authenticated historical/current Web reads, complete signed merge preview, separate confirmed approval, both source bytes and exact retry passed (HTTP and assets, not browser interaction).');
+} finally { await web.stop(); }

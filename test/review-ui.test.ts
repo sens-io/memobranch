@@ -512,6 +512,72 @@ test('review UI: a late preview from a disconnected session cannot expose an app
   assert.equal(ui.requests.some(value => value.operation === 'apply'), false);
 });
 
+const mergeCommit='a'.repeat(40),mergeHead='b'.repeat(40);
+const mergeOld={meta:{...wikiDocument.meta,revision:2,summary:'Current summary.',uncertainty:before.uncertainty},body:before.body,currentRevision:3};
+const mergeCurrent={...mergeOld,meta:{...mergeOld.meta,revision:3},body:after.body+'\n\n<!-- MEMOBRANCH_WIKI_LINKS -->\nGenerated sources'};
+const mergeBase={commit:mergeCommit,authorityHead:mergeHead,pages:[mergeOld]},mergeLive={commit:mergeHead,authorityHead:mergeHead,pages:[mergeCurrent]};
+const mergePlan={...plan,kind:'merge',merge:{fromCommit:mergeCommit,key:wikiDocument.meta.key}};
+const mergePrepared={plan:mergePlan,comparison:{base:mergeBase,current:mergeCurrent}};
+function mergeRoute(request: Request): Response {
+  if(request.operation==='catalog')return success([{key:wikiDocument.meta.key,title:'退货政策',revision:3},{key:'legacy:mem-123456789abc',title:'Not compiled',revision:1}]);
+  if(request.operation==='wiki-snapshot')return success(request.data.commit===mergeCommit?mergeBase:mergeLive);
+  if(request.operation==='merge-prepare')return success(mergePrepared);
+  if(request.operation==='preview')return success({...preview,kind:'merge'});
+  if(request.operation==='apply')return success({commit:'merge-saved-commit',pageIds:['page']});
+  throw Error('Unexpected merge request '+request.operation);
+}
+async function mergeView(ui: ReturnType<typeof harness>){const output=await ui.run('merges()') as Element;ui.app.append(output);named(output,'fromCommit').value=mergeCommit;return output;}
+const mergeSelector=(output: Element)=>nodes(output).filter(node=>node.tagName==='form')[0]!;
+const mergeEditor=(output: Element)=>nodes(output).filter(node=>node.tagName==='form')[1]!;
+
+test('Web merge UI: complete text, safe rendering and signed review precede separate confirmed approval',async()=>{
+  const ui=harness(mergeRoute),output=await mergeView(ui);await mergeSelector(output).fire('submit');
+  assert.match(output.textContent,/旧政策/);assert.match(output.textContent,/<script>untrusted\(\)<\/script>/);assert.equal(nodes(output).some(node=>node.tagName==='script'),false);
+  assert.equal(named(output,'body').value,after.body);assert.doesNotMatch(named(output,'body').value,/MEMOBRANCH_WIKI_LINKS|Generated sources/);
+  assert.equal(nodes(output).some(node=>node.tagName==='option'&&node.value.startsWith('legacy:')),false);
+  named(output,'body').value='Reviewed 中文 🧠';await named(output,'body').fire('input');await mergeEditor(output).fire('submit');
+  assert.deepEqual(ui.requests.find(request=>request.operation==='merge-prepare')!.data,{fromCommit:mergeCommit,pageKey:wikiDocument.meta.key,expectedRevision:3,includeSensitive:false,includeSecret:false,body:'Reviewed 中文 🧠',summary:'Current summary.',title:wikiDocument.meta.title});
+  assert.match(output.textContent,/受影响页面/);assert.match(output.textContent,/仅限线上订单/);const approve=button(output,'批准并保存这次合并');
+  ui.context.confirmResult=false;await approve.fire('click');assert.equal(ui.requests.some(request=>request.operation==='apply'),false);
+  ui.context.confirmResult=true;await approve.fire('click');assert.deepEqual(ui.requests.find(request=>request.operation==='apply')!.data,{plan:mergePlan,confirm:true});assert.match(output.textContent,/merge-saved-commit/);
+});
+test('Web merge UI: readers compare, writers prepare, only reviewers can approve',async()=>{
+  for(const permissions of [['read'],['read','write']]){const ui=harness(mergeRoute,permissions),output=await mergeView(ui);await mergeSelector(output).fire('submit');await mergeEditor(output).fire('submit');
+    assert.equal(ui.requests.filter(request=>request.operation==='merge-prepare').length,permissions.includes('write')?1:0);
+    assert.equal(nodes(output).some(node=>node.tagName==='button'&&node.textContent==='批准并保存这次合并'),false);assert.match(output.textContent,permissions.includes('write')?/没有审核权限/:/没有写入权限/);}
+});
+test('Web merge UI: every draft/selection edit removes old approval, including retained detached buttons',async()=>{
+  for(const name of ['body','summary','title','fromCommit','pageKey','includeSensitive','includeSecret']){const ui=harness(mergeRoute),output=await mergeView(ui);await mergeSelector(output).fire('submit');await mergeEditor(output).fire('submit');
+    const old=button(output,'批准并保存这次合并');await named(output,name).fire('input');await old.fire('click');assert.equal(old.isConnected,false);assert.equal(ui.requests.some(request=>request.operation==='apply'),false);}
+});
+test('Web merge UI: editing during preparation rejects late content and preserves newer text',async()=>{
+  const pending=deferred<Response>(),ui=harness(request=>request.operation==='merge-prepare'?pending.promise:mergeRoute(request)),output=await mergeView(ui);await mergeSelector(output).fire('submit');
+  const preparing=mergeEditor(output).fire('submit');await settle();named(output,'body').value='A newer draft.';await named(output,'body').fire('input');pending.resolve(success(mergePrepared));await preparing;
+  assert.equal(named(output,'body').value,'A newer draft.');assert.equal(nodes(output).some(node=>node.tagName==='button'&&node.textContent==='批准并保存这次合并'),false);
+});
+for(const boundary of ['wiki-snapshot','merge-prepare','apply']){
+  test(`Web merge UI: leaving during ${boundary} clears text and ignores late responses`,async()=>{
+    const pending=deferred<Response>(),ui=harness(request=>request.operation===boundary?pending.promise:mergeRoute(request)),output=await mergeView(ui);
+    const loading=mergeSelector(output).fire('submit');if(boundary==='wiki-snapshot'){await settle();ui.run('pageCleanup();generation++');pending.resolve(success(mergeBase));await loading;}
+    else{await loading;const preparing=mergeEditor(output).fire('submit');if(boundary==='merge-prepare'){await settle();ui.run('pageCleanup();generation++');pending.resolve(success(mergePrepared));await preparing;}
+      else{await preparing;const saving=button(output,'批准并保存这次合并').fire('click');await settle();ui.run('pageCleanup();generation++');pending.resolve(success({commit:'late-commit'}));await saving;}}
+    assert.equal(output.textContent,'');assert.equal(nodes(output).length,1);
+  });
+}
+test('Web merge UI: incompatible heads and failed pre-approval validation cannot apply',async()=>{
+  const changed=harness(request=>request.operation==='wiki-snapshot'&&request.data.commit===mergeHead?success({...mergeLive,authorityHead:'c'.repeat(40)}):mergeRoute(request)),output=await mergeView(changed);
+  await mergeSelector(output).fire('submit');assert.match(output.textContent,/资料已变化/);assert.equal(button(output,'生成合并审核方案').disabled,true);
+  let reads=0;const ui=harness(request=>request.operation==='preview'&&++reads===2?failure('VALIDATION_FAILED'):mergeRoute(request)),target=await mergeView(ui);
+  await mergeSelector(target).fire('submit');await mergeEditor(target).fire('submit');await button(target,'批准并保存这次合并').fire('click');assert.match(target.textContent,/不能批准/);assert.equal(ui.requests.some(request=>request.operation==='apply'),false);
+});
+test('Web merge UI: uncertain saves allow only explicit original-plan replay, without a stale preview or duplicate click',async()=>{
+  let applies=0,previews=0;const pending=deferred<Response>();
+  const ui=harness(request=>{if(request.operation==='preview'){previews++;return mergeRoute(request);}if(request.operation==='apply'){applies++;return applies===1?pending.promise:success({commit:null,pageIds:[]});}return mergeRoute(request);}),output=await mergeView(ui);
+  await mergeSelector(output).fire('submit');await mergeEditor(output).fire('submit');const approve=button(output,'批准并保存这次合并'),saving=approve.fire('click');await settle();await approve.fire('click');assert.equal(applies,1);assert.equal(named(output,'body').disabled,true);
+  pending.resolve(failure('OPERATION_CANCELLED'));await saving;assert.match(output.textContent,/保存结果未确认/);assert.equal(applies,1);await button(output,'重试原签名方案').fire('click');assert.equal(applies,2);assert.equal(previews,2);
+  const requests=ui.requests.filter(request=>request.operation==='apply');assert.deepEqual(requests[0]!.data,requests[1]!.data);assert.match(output.textContent,/本次没有新增提交/);
+});
+
 const task = { id: 'wj-' + 'a'.repeat(32), status: 'queued', stage: 'queued', attempts: 0, createdAt: '2026-10-21T00:00:00.000Z',
   updatedAt: '2026-10-21T00:00:00.000Z', startedAt: null, finishedAt: null, cancelRequested: false, error: null };
 async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
