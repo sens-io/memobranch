@@ -30,6 +30,8 @@
 
 两组全量检查及两版安装顺序执行。安装消费者从自身 `node_modules/memobranch` 加载编译后代码，检查公开类型及实际 CLI、MCP、Harness、HTTP，不用源码加载器代替最低 Node 版本验证。新检查确认安装后的列表包含准确版本与时间端点，Web 提供实际日期界面脚本，HTTP 仍要求确认并拒绝旧版本；此前知识流程、权限及任务场景保留。
 
+安装摘要本身没有输出运行版本；运行配置来自本次实际执行的命令，不能从当前终端默认 Node 版本推断。执行 Node22 验证前，将 `/Users/imac/.nvm/versions/node/v22.17.0/bin` 放在 `PATH` 首位；Node20 验证前，再将 `/Users/imac/.npm/_npx/a3dea26673f30de8/node_modules/node/bin` 放在首位。两个 `node --version` 的绝对路径检查分别返回 `v22.17.0` 和 `v20.0.0`。两次均执行 `node scripts/verify-package.mjs`，传入下段同一安装包的绝对路径；前一次成功退出才执行后一次。每次通过 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=init.defaultBranch` 覆盖 Git 设置，`GIT_CONFIG_VALUE_0` 分别为 `main` 和 `master`，不修改用户的全局 Git 配置。两组全量检查也使用同样的 Node22 路径及对应 Git 覆盖设置。这些配置说明补记于报告，不伪称原安装摘要已包含这些字段。
+
 本地验收包：`.scratch/web-time-package.7Zr2Ho/memobranch-1.1.0.tgz`，279 个条目，SHA-256：`138025343d28d281decc3ba91413c367b7d1d039d20f569592fb40d112aaaf96`。两版安装使用同一文件。它是本地开发源码包，不是已经发布的 npm 1.1.0；不含后补的本报告和任务完成标记，正式发布必须另定版本并重新打包验收。
 
 ## 真实浏览器验收
