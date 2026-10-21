@@ -4,6 +4,7 @@ import { join, posix, relative } from 'node:path';
 import { assertManagedDocument } from './document-schema.js';
 import { factEffectiveAt, factValidityFields } from './effective-time.js';
 import { isEncryptedEnvelope } from './encryption.js';
+import { AgentMemoryError } from './errors.js';
 import { isEmbeddingVector, type LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
 import { throwIfCancelled } from './operation.js';
@@ -195,8 +196,6 @@ export class PersistentSearchIndex {
 
     const queryTerms = tokenize(query);
     if (queryTerms.length === 0) return { hits: [], strategy: 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
-    const documentFrequency = frequencies(documents, queryTerms);
-    const lexical = new Map(documents.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, documents.length)]));
     let semantic = new Map<string, number>();
     if (options.semantic && this.config.index.embeddingModel) {
       try {
@@ -208,10 +207,15 @@ export class PersistentSearchIndex {
       }
     }
 
+    // Provider waits can cross a fact/expiry boundary. Rank only what is current
+    // now, before consuming the caller's result slots or expanding links.
+    const currentDocuments = documents.filter(isActive);
+    const documentFrequency = frequencies(currentDocuments, queryTerms);
+    const lexical = new Map(currentDocuments.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, currentDocuments.length)]));
     const lexicalWeight = semantic.size > 0 ? this.config.index.lexicalWeight : 1;
     const semanticWeight = semantic.size > 0 ? this.config.index.semanticWeight : 0;
     const maximumLexical = Math.max(1, ...lexical.values());
-    const scored = documents
+    const scored = currentDocuments
       .map((document) => {
         const lexicalScore = (lexical.get(document.path) ?? 0) / maximumLexical;
         const semanticScore = semantic.get(document.path) ?? 0;
@@ -222,14 +226,14 @@ export class PersistentSearchIndex {
 
     const requestedLimit = options.limit ?? 8;
     const limit = Math.max(1, Math.min(requestedLimit, this.config.limits.maxResults));
-    const selected = scored.slice(0, limit);
-    const backlinkMap = buildBacklinks(documents);
+    const selected = [...scored];
+    const backlinkMap = buildBacklinks(currentDocuments);
     if (options.expandLinks !== false) {
       const selectedPaths = new Set(selected.map((entry) => entry.document.path));
       for (const entry of [...selected]) {
         for (const neighbor of unique([...entry.document.links, ...(backlinkMap.get(entry.document.path) ?? [])])) {
           if (selected.length >= limit || selectedPaths.has(neighbor)) continue;
-          const document = documents.find((candidate) => candidate.path === neighbor);
+          const document = currentDocuments.find((candidate) => candidate.path === neighbor);
           if (!document) continue;
           selected.push({ document, score: entry.score * 0.35, lexicalScore: 0, semanticScore: 0 });
           selectedPaths.add(neighbor);
@@ -237,9 +241,10 @@ export class PersistentSearchIndex {
       }
     }
 
-    const verified: Array<SearchHit | null> = await Promise.all(selected.slice(0, limit).map(async ({ document, score, lexicalScore, semanticScore }): Promise<SearchHit | null> => {
+    const verify = async ({ document, score, lexicalScore, semanticScore }: (typeof selected)[number]): Promise<SearchHit | null> => {
       throwIfCancelled();
       try {
+        if (!isActive(document)) return null;
         if (!this.secureReader) throw new Error('Canonical reader is unavailable');
         const canonical = await this.secureReader(document.path);
         const current = await stat(join(this.root, document.path));
@@ -276,8 +281,16 @@ export class PersistentSearchIndex {
         throwIfCancelled();
         return null;
       }
-    }));
-    return { hits: verified.filter((hit): hit is SearchHit => hit !== null), strategy: semantic.size > 0 ? 'hybrid' : 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
+    };
+    const verified: SearchHit[] = [];
+    let cursor = 0;
+    while (verified.length < limit && cursor < selected.length) {
+      const batch = selected.slice(cursor, cursor + limit - verified.length);
+      cursor += batch.length;
+      const hits = await Promise.all(batch.map(verify));
+      verified.push(...hits.filter((hit): hit is SearchHit => hit !== null));
+    }
+    return { hits: verified, strategy: semantic.size > 0 ? 'hybrid' : 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
   }
 
   async health(): Promise<SearchIndexHealth> {
@@ -398,8 +411,11 @@ export class PersistentSearchIndex {
     }
     for (let offset = 0; offset < missing.length; offset += 32) {
       throwIfCancelled();
-      const batch = missing.slice(offset, offset + 32);
-      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel);
+      const batch = missing.slice(offset, offset + 32).filter(isActive);
+      if (!batch.length) continue;
+      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel, () => {
+        if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
+      });
       if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
           || vector.length !== results[0]?.length)) {
         throw new Error('Invalid embedding batch');
@@ -426,16 +442,18 @@ export class PersistentSearchIndex {
       !excludedPaths.has(document.path) && !this.config.policy.requireEncryptionFor.includes(document.sensitivity));
     await this.refreshEmbeddings(safeDocuments, principal, 'read');
     const cache = await this.readEmbeddingCache();
+    if (!safeDocuments.some(isActive)) return new Map();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
     if (!isEmbeddingVector(queryVector)) throw new Error('Invalid query embedding');
-    if (safeDocuments.some(document => cache.vectors[document.contentHash]?.length !== queryVector.length)) {
+    const currentDocuments = safeDocuments.filter(isActive);
+    if (currentDocuments.some(document => cache.vectors[document.contentHash]?.length !== queryVector.length)) {
       // A provider can change dimensions behind the same model name. Refuse
       // mixed-space scoring now; rebuild the derived cache on the next call.
       await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} })}\n`);
       throw new Error('Query and document embedding dimensions differ');
     }
     return new Map(
-      safeDocuments
+      currentDocuments
         .map((document) => {
           const vector = cache.vectors[document.contentHash];
           return vector ? ([document.path, Math.max(0, cosine(queryVector, vector))] as const) : null;

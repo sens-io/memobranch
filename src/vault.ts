@@ -790,7 +790,7 @@ export class MemoryVault {
         .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
           && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()) && factEffectiveAt(page.meta))
         .map(page => [page.meta.id, page]));
-      const records: Array<{ hit: SearchHit; ordinary: boolean; record: RecallResult['wikiPages'][number] }> = [];
+      const records: Array<{ hit: SearchHit; ordinary: boolean; record: RecallResult['wikiPages'][number]; document: MarkdownDocument<MemoryMeta | WikiPageMeta> }> = [];
       for (const hit of hits) {
         throwIfCancelled();
         const page = memories.get(hit.id) ?? pages.get(hit.id);
@@ -802,7 +802,7 @@ export class MemoryVault {
           ...(ordinary ? factValidityFields(page.meta as MemoryMeta) : {}) };
         // Keep an entire record, including conditions and citations, or omit it.
         // JSON encoding also separates source text from the surrounding prompt.
-        records.push({ hit, ordinary, record });
+        records.push({ hit, ordinary, record, document: page });
       }
       return records;
   }
@@ -895,6 +895,10 @@ export class MemoryVault {
   }
 
   async contextDetailed(query: string, options: SearchOptions & ContextBudgetOptions = {}) {
+    return (await this.prepareContext(query, options)).result;
+  }
+
+  private async prepareContext(query: string, options: SearchOptions & ContextBudgetOptions = {}) {
     authorize(this.principal, 'read');
     return this.settledRead(async () => {
     const config = await this.config();
@@ -914,8 +918,22 @@ export class MemoryVault {
         evidence: memory.meta.evidence, ...factValidityFields(memory.meta) }) }));
     for (const { record } of recalled) blocks.push({ id: record.id, section: 'retrieved', text: JSON.stringify(record) });
     const packed = packContext(blocks, { ...options, maxCharacters: Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters) });
-    return { text: packed.text, budget: packed.budget, truncated: packed.truncated,
-      records: packed.selected.map(({ id, section }) => ({ id, section })) };
+    const documents = new Map([...residentMemories, ...recalled.map(item => item.document)].map(document => [document.meta.id, document]));
+    const expected = packed.selected.map(({ id }) => documents.get(id)!);
+    const validate = () => this.settledRead(async () => {
+      const pages = new Map((await this.wikiEngine().recallPages(expected.filter(page => page.meta.type === 'wiki-page').map(page => page.meta.id), options))
+        .map(page => [page.meta.id, page]));
+      for (const before of expected) {
+        const current = before.meta.type === 'memory' ? await this.readDocument<MemoryMeta>(before.path) : pages.get(before.meta.id);
+        if (!current || current.meta.status !== 'active' || (current.meta.expiresAt && Date.parse(current.meta.expiresAt) <= Date.now())
+            || (current.meta.type === 'memory' && !factEffectiveAt(current.meta))
+            || sha256(JSON.stringify({ meta: current.meta, body: current.body })) !== sha256(JSON.stringify({ meta: before.meta, body: before.body }))) {
+          throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context changed or is no longer currently effective; ask again');
+        }
+      }
+    });
+    return { result: { text: packed.text, budget: packed.budget, truncated: packed.truncated,
+      records: packed.selected.map(({ id, section }) => ({ id, section })) }, validate };
     });
   }
 
@@ -924,7 +942,10 @@ export class MemoryVault {
   }
 
   async answer(question: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<string> {
-    return this.llm.answer(question, await this.context(question, options));
+    const context = await this.prepareContext(question, options);
+    const answer = await this.llm.answer(question, context.result.text, context.validate);
+    await context.validate();
+    return answer;
   }
 
   async recover(): Promise<RecoveryResult> {

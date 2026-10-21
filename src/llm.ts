@@ -2,7 +2,7 @@ import type { MemoryKind, ProposedMemory, Scope, Sensitivity } from './types.js'
 import { memoryKinds, sensitivities } from './types.js';
 import { AgentMemoryError } from './errors.js';
 import { sensitivityRank } from './policy.js';
-import { cancellationError, combineSignals, operationSignal, throwIfCancelled } from './operation.js';
+import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 
 interface LlmOptions {
   baseUrl?: string;
@@ -55,11 +55,11 @@ export class LlmClient {
     for (const controller of this.pending) controller.abort();
   }
 
-  async embed(inputs: string[], model = this.embeddingModel): Promise<number[][]> {
+  async embed(inputs: string[], model = this.embeddingModel, beforeRequest?: () => void | Promise<void>): Promise<number[][]> {
     if (!this.apiKey || !model) throw new Error('Embeddings are not configured. Set an embedding model and API key.');
     if (inputs.length === 0) return [];
     if (inputs.length > 32 || inputs.some((input) => input.length > 16_000)) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Embedding request exceeds the configured batch bounds');
-    const payload = await this.requestJson('/embeddings', { model, input: inputs }) as { data?: unknown } | null;
+    const payload = await this.requestJson('/embeddings', { model, input: inputs }, beforeRequest) as { data?: unknown } | null;
     if (!Array.isArray(payload?.data) || payload.data.length !== inputs.length) {
       throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Embedding response has an invalid vector count');
     }
@@ -112,7 +112,7 @@ export class LlmClient {
     return memories.map((item) => validateProposal(item, defaults));
   }
 
-  async answer(question: string, context: string): Promise<string> {
+  async answer(question: string, context: string, beforeRequest?: () => void | Promise<void>): Promise<string> {
     if (!this.configured) {
       throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
     }
@@ -127,7 +127,7 @@ export class LlmClient {
         },
         { role: 'user', content: `Question:\n${question}\n\nMemory context:\n${context}` },
       ],
-    }) as {
+    }, beforeRequest) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
     const answer = payload.choices?.[0]?.message?.content?.trim();
@@ -136,7 +136,7 @@ export class LlmClient {
   }
 
   /** Return an advisory Wiki proposal; callers must validate its schema and authority. */
-  async wiki<T = unknown>(operation: 'navigate' | 'compile' | 'query' | 'lint', input: object): Promise<T> {
+  async wiki<T = unknown>(operation: 'navigate' | 'compile' | 'query' | 'lint', input: object, beforeRequest?: () => void | Promise<void>): Promise<T> {
     if (!this.configured || !this.apiKey.trim() || !this.model.trim()) {
       throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM is not configured. Set AMEM_LLM_API_KEY and optionally AMEM_LLM_MODEL/AMEM_LLM_BASE_URL.');
     }
@@ -164,7 +164,7 @@ export class LlmClient {
         { role: 'system', content: wikiSystemInstructions + ' ' + wikiOperationInstructions[operation] },
         { role: 'user', content: `{"operation":${JSON.stringify(operation)},"input":${serialized}}` },
       ],
-    }) as { choices?: Array<{ message?: { content?: unknown } }> } | null;
+    }, beforeRequest) as { choices?: Array<{ message?: { content?: unknown } }> } | null;
     const raw = payload?.choices?.[0]?.message?.content;
     if (typeof raw !== 'string' || !raw.trim()) {
       throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Wiki model returned no JSON content');
@@ -181,7 +181,7 @@ export class LlmClient {
     return parsed as T;
   }
 
-  private async requestJson(path: string, payload: object): Promise<unknown> {
+  private async requestJson(path: string, payload: object, beforeRequest?: () => void | Promise<void>): Promise<unknown> {
     throwIfCancelled();
     const callerSignal = operationSignal();
     const controller = new AbortController();
@@ -193,6 +193,16 @@ export class LlmClient {
     this.pending.add(controller);
     try {
       for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+        // Revalidation failures must not themselves enter the transport retry loop.
+        throwIfCancelled();
+        if (beforeRequest) {
+          try { await withOperation(signal, async () => beforeRequest()); }
+          catch (error) {
+            if (callerSignal?.aborted) throw cancellationError();
+            if (controller.signal.aborted) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'LLM request timed out or was cancelled');
+            throw error;
+          }
+        }
         try {
           signal.throwIfAborted();
           const response = await fetch(`${this.baseUrl}${path}`, {

@@ -520,7 +520,7 @@ export class WikiEngine {
     await this.revalidate(state);
     if (JSON.stringify(input).length > state.config.limits.maxContextCharacters) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Wiki context exceeds the configured budget; no source was silently truncated');
     throwIfCancelled();
-    const result = await this.port.llm.wiki(operation, input);
+    const result = await this.port.llm.wiki(operation, input, () => this.revalidate(state));
     throwIfCancelled();
     await this.revalidate(state);
     return result;

@@ -21,6 +21,10 @@ Current search, recall, resident context and Wiki dependencies MUST exclude not-
 - **WHEN** current retrieval, navigation or query reads the knowledge
 - **THEN** neither that memory nor a page dependent on it is eligible as current knowledge
 
+#### Scenario: A provider wait crosses the effective end
+- **WHEN** a later embedding batch, retry, or answer would reuse the earlier context
+- **THEN** ended content is not sent again, stale answers are refused, and ended matches do not consume current result slots
+
 ### Requirement: Time contracts are explicit across adapters
 Supported adapters MUST validate timezone-bearing ISO timestamps with at most millisecond precision and distinguish dated retained-record views from historical knowledge reconstruction. Reads MUST NOT mutate canonical knowledge or call a model. HTTP annotation MUST require explicit confirmation.
 
