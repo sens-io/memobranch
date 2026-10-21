@@ -133,6 +133,7 @@ export class MemoryVault {
   async wikiSnapshot(options: WikiSnapshotOptions): Promise<WikiSnapshot> {
     authorize(this.principal, 'read');
     const input = snapshotOptions(options);
+    let validateTime = () => {};
     const action = () => this.settledRead<WikiSnapshot>(async () => {
       const config = await this.config();
       const erasures = join(this.root, '.amem', 'erasures');
@@ -196,10 +197,14 @@ export class MemoryVault {
       const pages = await historic.referencePages(selection);
       if (pages.length !== visited.size || pages.some(page => !visited.has(keyOf(page)))) throw unavailable();
       await reader.finish();
-      const now = Date.now();
-      for (const page of [...pages, ...[...visited].map(key => current.get(key)!)]) {
-        if ((page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= now) || (page.meta.type === 'memory' && !factEffectiveAt(page.meta, now))) throw unavailable();
-      }
+      const checkedPages = [...pages, ...[...visited].map(key => current.get(key)!)];
+      validateTime = () => {
+        const now = Date.now();
+        for (const page of checkedPages) {
+          if ((page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= now) || (page.meta.type === 'memory' && !factEffectiveAt(page.meta, now))) throw unavailable();
+        }
+      };
+      validateTime();
       return { version: 1, kind: 'wiki-revision-view', commit: input.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
         pages: pages.sort((a, b) => a.path.localeCompare(b.path)).map(page => ({ ...page, currentRevision: current.get(keyOf(page))!.meta.revision })),
         sources: [...documents.values()].filter(document => document.meta.type === 'evidence').map(document => ({ id: String(document.meta.id), path: document.path, sha256: String(document.meta.sha256) })).sort((a, b) => a.path.localeCompare(b.path)),
@@ -208,9 +213,16 @@ export class MemoryVault {
         warnings: ['Historical committed content, not current advice or fact-effective history. Current access and lifecycle checks apply on every read.',
           'This result is a local read-only view, not a share token, revocable offline export, backup or approval. Previously copied content cannot be recalled.'] };
     });
-    if (!input.signal) return action();
+    const finish = async () => {
+      const result = await action();
+      // Releasing the lock performs asynchronous cleanup after the inner checks.
+      throwIfCancelled();
+      validateTime();
+      return result;
+    };
+    if (!input.signal) return finish();
     const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
-    try { return await withOperation(combined.signal, action); } finally { combined.dispose(); }
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
   }
   async wikiRules() { return this.wikiEngine().rules(); }
   async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }

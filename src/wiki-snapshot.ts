@@ -85,7 +85,7 @@ export async function snapshotReader(git: GitStore, commit: string, config: Vaul
       || historic.version !== 2 || historic.vaultId !== config.vaultId || historic.tenantId !== config.tenantId) throw unavailable();
   return { head, read, async finish() {
     throwIfCancelled();
-    if (await run(['rev-parse', '--verify', 'HEAD']) !== head || await dirty()) {
+    if (await dirty() || await run(['rev-parse', '--verify', 'HEAD']) !== head) {
       throw new AgentMemoryError('VALIDATION_FAILED', 'Vault revision changed while reading the Wiki snapshot');
     }
   } };

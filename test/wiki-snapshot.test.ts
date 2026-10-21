@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { defaultVaultConfig } from '../src/config.js';
 import { GitStore } from '../src/git-store.js';
 import { LlmClient } from '../src/llm.js';
@@ -328,4 +330,56 @@ test('Wiki snapshot: replace refs cannot substitute pinned content; graft and pa
   await mkdir(join(vault.git.gitDir, 'info'), { recursive: true });
   await writeFile(join(vault.git.gitDir, 'info', 'grafts'), '');
   await assert.rejects(vault.wikiSnapshot({ commit, pageKeys: ['entity:atlas'] }), /local full history/);
+});
+
+for (const boundary of ['expiresAt', 'validUntil', 'abort'] as const) {
+  test(`Wiki snapshot: lock cleanup crossing ${boundary} rejects after the actual lock release`, async t => {
+    const { vault, first } = await fixture(t), timestamp = Date.now(), originalNow = Date.now;
+    let pageKeys = ['entity:atlas'];
+    if (boundary === 'expiresAt') {
+      const page = await vault.get(wikiPageId('entity:atlas'));
+      page.meta.expiresAt = new Date(timestamp + 60_000).toISOString(); page.meta.links = []; page.meta.dependencies = {};
+      page.body = 'Synthetic expiring page with no linked page.'; await save(vault, page);
+    } else if (boundary === 'validUntil') {
+      const at = new Date(timestamp).toISOString();
+      await save(vault, { path: 'wiki/cleanup-memory.md', body: 'Synthetic current interval.', meta: {
+        id: 'mem-bbbbbbbbbbbb', type: 'memory', kind: 'fact', key: 'Cleanup interval', scope: 'project', sensitivity: 'internal',
+        createdAt: at, updatedAt: at, validatedAt: at, confidence: 0.9, status: 'active', evidence: [first.evidencePath], conditions: [], tags: [], revision: 1,
+        validUntil: new Date(timestamp + 60_000).toISOString(),
+      } });
+      pageKeys = ['legacy:mem-bbbbbbbbbbbb'];
+    }
+    const commit = await vault.git.run(['rev-parse', 'HEAD']), controller = new AbortController(), originalRm = fsPromises.rm;
+    let injected = false;
+    const hook = t.mock.method(fsPromises, 'rm', async (...args: Parameters<typeof fsPromises.rm>) => {
+      if (!injected && String(args[0]) === join(vault.root, '.amem', 'write.lock')) {
+        injected = true;
+        if (boundary === 'abort') controller.abort(); else Date.now = () => timestamp + 120_000;
+      }
+      return originalRm(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(vault.wikiSnapshot({ commit, pageKeys, signal: controller.signal }), { code: boundary === 'abort' ? 'OPERATION_CANCELLED' : 'NOT_FOUND' });
+      assert.equal(injected, true);
+    } finally { Date.now = originalNow; hook.mock.restore(); syncBuiltinESMExports(); }
+    await vault.capture({ content: `Synthetic after ${boundary} cleanup`, extract: false });
+  });
+}
+
+test('Wiki snapshot: a head change during the final status check cannot pass as stable authority', async () => {
+  const config = defaultVaultConfig('Synthetic final status', 'synthetic-vault'), hash = '1'.repeat(40);
+  let head = hash, statuses = 0;
+  const git = new GitStore('unused-final-status-fixture');
+  git.run = async args => {
+    args = args.filter(arg => arg !== '--no-replace-objects');
+    if (args[0] === 'config' || args[0] === 'merge-base') return '';
+    if (args[0] === 'rev-parse') return head;
+    if (args.includes('status')) { if (++statuses === 2) head = '2'.repeat(40); return ''; }
+    if (args[0] === 'ls-tree') return `100644 blob ${hash} 100\tagent-memory.json\0`;
+    if (args[0] === 'cat-file' && args[1] === '-t') return 'commit';
+    return JSON.stringify(config);
+  };
+  const reader = await snapshotReader(git, hash, config);
+  await assert.rejects(reader.finish(), /revision changed/);
 });
