@@ -126,7 +126,8 @@ try {
       const prepared = await vault.wikiMergePrepare(options);
       const origin: WikiMergeOrigin | undefined = prepared.plan.merge;
       const preview = await vault.wikiPreview(prepared.plan);
-      return { prepared, origin, preview };
+      const approve = (signal: AbortSignal) => vault.wikiApply(prepared.plan, { signal });
+      return { prepared, origin, preview, approve };
     }
     export async function publicRevisionView(vault: MemoryVault, commit: string) {
       const options: WikiSnapshotOptions = { commit, pageKeys: ['entity:atlas'], signal: new AbortController().signal };

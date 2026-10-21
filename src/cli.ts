@@ -325,7 +325,12 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
     case 'apply': {
       const document = await jsonFileFrom(args);
       const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
-      print(await vault.wikiApply(plan));
+      // Keep normal stdin cancellation until input is complete; the write itself
+      // needs cooperative cancellation so ready transactions can finish safely.
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { print(await vault.wikiApply(plan, { signal: controller.signal })); }
+      finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
     }
     case 'preview': {

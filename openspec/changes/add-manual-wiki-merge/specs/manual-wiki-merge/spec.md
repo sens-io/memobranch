@@ -20,6 +20,11 @@ The system SHALL apply a merge only through existing review authority, current s
 - **THEN** all declared dependent changes and the audit log are committed atomically
 - **AND** an identical retry does not create another revision or commit
 
+#### Scenario: Approval is cancelled around the commit boundary
+- **WHEN** the approval's own or enclosing operation is cancelled before the transaction is ready
+- **THEN** it rejects without partial canonical writes
+- **AND** cancellation after the transaction becomes ready allows safe completion/recovery, reports any completed commit and permits an unchanged signed-plan retry without a duplicate commit
+
 ### Requirement: Confidential choices survive the workflow
 The system SHALL use the signed confidential document choices consistently in preparation, preview and application, without exposing excluded unrelated catalog metadata.
 

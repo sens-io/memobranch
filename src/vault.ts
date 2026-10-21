@@ -254,7 +254,11 @@ export class MemoryVault {
   async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
-  async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
+  async wikiApply(plan: unknown, options: { signal?: AbortSignal } = {}) {
+    if (!options.signal) return this.wikiEngine().apply(plan);
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, options.signal] : [options.signal]);
+    try { return await withOperation(combined.signal, () => this.wikiEngine().apply(plan)); } finally { combined.dispose(); }
+  }
   async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
   private wikiJobsEngine(): WikiJobs {
     const bound = async (ceiling: WikiJobCeiling, review = false) => {

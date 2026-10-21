@@ -41,6 +41,8 @@ await assert.rejects(vault.wikiApply(forged), { code: 'VALIDATION_FAILED' });
 await assert.rejects(vault.wikiMergePrepare({ ...input, body: 'Malformed \uD800 body.' }), { code: 'VALIDATION_FAILED' });
 const cancelled = new AbortController(); cancelled.abort();
 await assert.rejects(vault.wikiMergePrepare({ ...input, signal: cancelled.signal }), { code: 'OPERATION_CANCELLED' });
+await assert.rejects(vault.wikiApply(prepared.plan, { signal: cancelled.signal }), { code: 'OPERATION_CANCELLED' });
+assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
 await writeFile('manual-input.json', JSON.stringify(input), { mode: 0o600 });
 const cliPrepared = await exec(process.execPath, [cli, 'wiki', 'merge-prepare', '--file', 'manual-input.json', '--root', vault.root]);
 await writeFile('manual-proposal.json', cliPrepared.stdout, { mode: 0o600 });

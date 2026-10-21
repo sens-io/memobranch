@@ -227,6 +227,48 @@ test('Wiki merge: pre-cancelled and parent operations leave canonical data uncha
   await vault.wikiMergePrepare(input);
 });
 
+test('Wiki merge: approval observes its own and enclosing cancellation before writing', async t => {
+  const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input);
+  const head = await vault.git.run(['rev-parse', 'HEAD']), controller = new AbortController(); controller.abort();
+  await assert.rejects(vault.wikiApply(prepared.plan, { signal: controller.signal }), { code: 'OPERATION_CANCELLED' });
+  await assert.rejects(withOperation(controller.signal, () => vault.wikiApply(prepared.plan, { signal: new AbortController().signal })), { code: 'OPERATION_CANCELLED' });
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.deepEqual(await readdir(join(vault.root, '.amem/transactions')), []);
+});
+
+for (const boundary of ['before-ready', 'after-ready'] as const) {
+  test(`Wiki merge: cancellation ${boundary} rolls back or reports the completed commit`, async t => {
+    const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input), controller = new AbortController();
+    const head = await vault.git.run(['rev-parse', 'HEAD']), write = VaultTransaction.prototype.write, commit = vault.git.commit;
+    const before = await readFile(join(vault.root, (await vault.get(wikiPageId(input.pageKey))).path));
+    try {
+      if (boundary === 'before-ready') {
+        VaultTransaction.prototype.write = async function (path, content) { await write.call(this, path, content); if (path === 'log.md') controller.abort(); };
+        await assert.rejects(vault.wikiApply(prepared.plan, { signal: controller.signal }), { code: 'OPERATION_CANCELLED' });
+      } else {
+        vault.git.commit = async (...args) => { controller.abort(); return commit.apply(vault.git, args); };
+        await assert.rejects(vault.wikiApply(prepared.plan, { signal: controller.signal }), error => {
+          assert.equal((error as { code?: string }).code, 'OPERATION_CANCELLED');
+          assert.equal((error as { safeDetails?: { committed?: unknown[] } }).safeDetails?.committed?.length, 1);
+          return true;
+        });
+      }
+    } finally { VaultTransaction.prototype.write = write; vault.git.commit = commit; }
+    const afterHead = await vault.git.run(['rev-parse', 'HEAD']);
+    if (boundary === 'before-ready') {
+      assert.equal(afterHead, head);
+      assert.deepEqual(await readFile(join(vault.root, (await vault.get(wikiPageId(input.pageKey))).path)), before);
+      assert.ok((await vault.wikiApply(prepared.plan)).commit);
+    } else {
+      assert.notEqual(afterHead, head);
+      assert.match((await vault.get(wikiPageId(input.pageKey))).body, /Manually combined/);
+      assert.deepEqual(await vault.wikiApply(prepared.plan), { pageIds: [], commit: null });
+      assert.equal(await vault.git.run(['rev-parse', 'HEAD']), afterHead);
+    }
+    assert.deepEqual(await readdir(join(vault.root, '.amem/transactions')), []);
+  });
+}
+
 test('Wiki merge: partial writes roll back and a ready transaction recovers with idempotent approval', async t => {
   const { vault, input } = await fixture(t), prepared = await vault.wikiMergePrepare(input), head = await vault.git.run(['rev-parse', 'HEAD']);
   const before = await readFile(join(vault.root, (await vault.get(wikiPageId(input.pageKey))).path));
