@@ -12,6 +12,7 @@ import { MemoryVault } from '../src/vault.js';
 import { startWebServer, type WebHandle } from '../src/web.js';
 import { wikiPageId } from '../src/wiki-schema.js';
 import type { WikiPageDraft } from '../src/wiki-types.js';
+import { fixture as datedFixture, pageKey as datedKey } from './dated-wiki-fixture.js';
 
 async function fixture(t: TestContext, sensitivity: Sensitivity = 'internal') {
   await mkdir(join(process.cwd(), '.scratch'), { recursive: true });
@@ -40,6 +41,19 @@ async function call(handle: WebHandle, operation: string, data: unknown = {}, ex
   }, body: JSON.stringify(data) });
   return { status: response.status, body: await response.json() as { result: any; error?: { code: string } } };
 }
+
+test('Web dated comparison: resolve once, pin the real hash for preparation and approve separately without rewriting sources',async t=>{
+  const example=await datedFixture(t),{vault,llm,versions}=example,handle=await startWebServer(vault.root,{llm,masterKey:'85'.repeat(32)});example.cleanup.push(()=>handle.stop());
+  const head=await vault.git.run(['rev-parse','HEAD']),count=example.calls(),sources=await Promise.all(versions.map(version=>readFile(join(vault.root,version.evidencePath))));
+  const selected=await call(handle,'wiki-snapshot',example.input);assert.equal(selected.status,200);const base=selected.body.result;assert.equal(base.commit,versions[0]!.commit);assert.ok(base.selection);
+  const current=await call(handle,'wiki-snapshot',{commit:base.authorityHead,pageKeys:[datedKey]});assert.equal(current.status,200);assert.equal('selection' in current.body.result,false);
+  const input={fromCommit:base.commit,pageKey:datedKey,expectedRevision:2,body:'Human-reviewed dated combination 中文 🧠.',summary:'Reviewed date-selected source conditions.'};
+  const prepared=await call(handle,'merge-prepare',input);assert.equal(prepared.status,200);assert.equal(prepared.body.result.plan.merge.fromCommit,versions[0]!.commit);assert.equal('at' in prepared.body.result.plan.merge,false);
+  assert.equal(await vault.git.run(['rev-parse','HEAD']),head);assert.equal(example.calls(),count);assert.equal((await call(handle,'apply',{plan:prepared.body.result.plan})).status,400);
+  const applied=await call(handle,'apply',{plan:prepared.body.result.plan,confirm:true});assert.equal(applied.status,200);assert.ok(applied.body.result.commit);
+  assert.deepEqual((await call(handle,'apply',{plan:prepared.body.result.plan,confirm:true})).body.result,{pageIds:[],commit:null});
+  for(const [i,version] of versions.entries())assert.deepEqual(await readFile(join(vault.root,version.evidencePath)),sources[i]);assert.equal(example.calls(),count);
+});
 
 test('Web merge: complete historical/current reads, signed preview, separate approval and exact retry preserve both sources', async t => {
   const { vault, input, first, second, oldBody, start, calls } = await fixture(t), handle = await start();

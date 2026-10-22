@@ -62,7 +62,7 @@ const button = (node: Element, label: string) => find(node, item => item.tagName
 const success = (result: unknown) => ({ ok: true, json: async () => ({ result }) });
 const failure = (code: string) => ({ ok: false, json: async () => ({ error: { code } }) });
 type Response = ReturnType<typeof success> | ReturnType<typeof failure>;
-type Request = { operation: string; data: any; headers: Record<string, string> };
+type Request = { operation: string; data: any; headers: Record<string, string>; signal?: AbortSignal };
 
 function harness(route: (request: Request) => Response | Promise<Response>, permissions = ['admin']) {
   const body = new Element('body'); body.root = true;
@@ -81,8 +81,8 @@ function harness(route: (request: Request) => Response | Promise<Response>, perm
     setTimeout: (callback: () => unknown, milliseconds: number) => { const id = ++nextTimer; timers.set(id, { callback, milliseconds }); return id; },
     clearTimeout: (id: number) => { timers.delete(id); }, AbortController,
     confirmResult: true, confirm: () => Boolean(context.confirmResult),
-    fetch: async (url: string, init: { body: string; headers: Record<string, string> }) => {
-      const request = { operation: url.replace('/api/', ''), data: JSON.parse(init.body), headers: init.headers };
+    fetch: async (url: string, init: { body: string; headers: Record<string, string>; signal: AbortSignal }) => {
+      const request = { operation: url.replace('/api/', ''), data: JSON.parse(init.body), headers: init.headers, signal: init.signal };
       requests.push(request); return route(request);
     },
   });
@@ -529,6 +529,62 @@ function mergeRoute(request: Request): Response {
 async function mergeView(ui: ReturnType<typeof harness>){const output=await ui.run('merges()') as Element;ui.app.append(output);named(output,'fromCommit').value=mergeCommit;return output;}
 const mergeSelector=(output: Element)=>nodes(output).filter(node=>node.tagName==='form')[0]!;
 const mergeEditor=(output: Element)=>nodes(output).filter(node=>node.tagName==='form')[1]!;
+
+const requestedWikiTime='2026-01-15T12:00:00+08:00';
+const datedMergeBase={...mergeBase,selection:{kind:'git-committer-time',at:'2026-01-15T04:00:00.000Z',committedAt:'2026-01-10T00:00:00.000Z',traversal:'first-parent',scannedCommits:4},warnings:['Mutable Git clocks do not establish historical agent knowledge.']};
+const datedMergeRoute=(request: Request)=>request.operation==='wiki-snapshot'&&request.data.at!==undefined?success(datedMergeBase):mergeRoute(request);
+async function dateMode(output: Element){named(output,'historySelector').value='at';await named(output,'historySelector').fire('change');named(output,'at').value=requestedWikiTime;await named(output,'at').fire('input');}
+
+test('Web dated Wiki UI: exclusive controls pin the resolved hash and retain complete date metadata through preparation',async()=>{
+  const ui=harness(datedMergeRoute),output=await mergeView(ui),commit=named(output,'fromCommit'),at=named(output,'at');
+  assert.equal(named(output,'historySelector').value,'commit');assert.equal(commit.required,true);assert.equal(at.required,false);assert.equal(at.disabled,true);
+  await dateMode(output);commit.value='IGNORED_INACTIVE_COMMIT';assert.equal(commit.disabled,true);assert.equal(commit.required,false);assert.equal(at.required,true);assert.equal(at.disabled,false);
+  await mergeSelector(output).fire('submit');const reads=ui.requests.filter(request=>request.operation==='wiki-snapshot');
+  assert.deepEqual(reads.map(request=>request.data),[{at:requestedWikiTime,pageKeys:[wikiDocument.meta.key],includeSensitive:false,includeSecret:false},{commit:mergeHead,pageKeys:[wikiDocument.meta.key],includeSensitive:false,includeSecret:false}]);
+  assert.match(output.textContent,/请求时刻（UTC）：2026-01-15T04:00:00.000Z/);assert.match(output.textContent,/选中提交者时间：2026-01-10T00:00:00.000Z/);assert.match(output.textContent,/第一父链检查 4 条/);assert.match(output.textContent,/Git 时间可被改写/);assert.match(output.textContent,/Mutable Git clocks/);assert.match(output.textContent,new RegExp(mergeCommit));
+  assert.match(output.textContent,/旧政策/);assert.match(output.textContent,/<script>untrusted\(\)<\/script>/);assert.equal(nodes(output).some(node=>node.tagName==='script'),false);
+  named(output,'body').value='Reviewed dated 中文 🧠';await named(output,'body').fire('input');await mergeEditor(output).fire('submit');
+  const prepared=ui.requests.find(request=>request.operation==='merge-prepare')!.data;assert.equal(prepared.fromCommit,mergeCommit);assert.equal('at' in prepared,false);assert.equal('historySelector' in prepared,false);
+  assert.match(output.textContent,/日期已解析为实际提交/);assert.equal(ui.requests.filter(request=>request.operation==='wiki-snapshot').length,2);assert.equal(ui.requests.some(request=>request.operation==='apply'),false);
+  ui.context.confirmResult=false;await button(output,'批准并保存这次合并').fire('click');assert.equal(ui.requests.some(request=>request.operation==='apply'),false);
+});
+
+test('Web dated Wiki UI: empty and unsupported modes stop locally; server date rejection never falls back to current text',async()=>{
+  const ui=harness(request=>request.operation==='wiki-snapshot'?failure('VALIDATION_FAILED'):mergeRoute(request)),output=await mergeView(ui);await dateMode(output);
+  named(output,'at').value=' ';await mergeSelector(output).fire('submit');assert.equal(ui.requests.length,1);assert.match(output.textContent,/带时区的 ISO/);
+  named(output,'historySelector').value='foreign';await named(output,'historySelector').fire('change');await mergeSelector(output).fire('submit');assert.equal(ui.requests.length,1);assert.match(output.textContent,/有效的历史版本/);
+  await dateMode(output);named(output,'at').value='2026-02-30T12:00:00Z';await mergeSelector(output).fire('submit');
+  assert.equal(ui.requests.length,2);assert.equal(ui.requests[1]!.data.at,'2026-02-30T12:00:00Z');assert.match(output.textContent,/VALIDATION_FAILED/);assert.equal(button(output,'生成合并审核方案').disabled,true);
+  assert.equal(nodes(output).some(node=>node.classList.contains('recorded-selection')),false);assert.doesNotMatch(output.textContent,/旧政策/);assert.equal(ui.requests.some(request=>['apply','merge-prepare'].includes(request.operation)),false);
+});
+
+for(const name of ['at','historySelector'])test(`Web dated Wiki UI: ${name} edits remove resolved metadata and detached approval while preserving an unsaved draft`,async()=>{
+  const ui=harness(datedMergeRoute),output=await mergeView(ui);await dateMode(output);await mergeSelector(output).fire('submit');named(output,'body').value='Keep this unsaved draft.';await named(output,'body').fire('input');await mergeEditor(output).fire('submit');
+  const old=button(output,'批准并保存这次合并'),count=ui.requests.length;if(name==='at')named(output,name).value='2026-01-16T00:00:00Z';else named(output,name).value='commit';await named(output,name).fire(name==='at'?'input':'change');
+  assert.equal(nodes(output).some(node=>node.classList.contains('recorded-selection')),false);assert.equal(named(output,'body').value,'Keep this unsaved draft.');assert.equal((find(output,node=>node.classList.contains('merge-editor')) as Element & {hidden:boolean}).hidden,false);
+  assert.equal(button(output,'生成合并审核方案').disabled,true);await old.fire('click');assert.equal(ui.requests.length,count);ui.context.confirmResult=false;await mergeSelector(output).fire('submit');assert.equal(ui.requests.length,count);assert.equal(named(output,'body').value,'Keep this unsaved draft.');
+});
+
+for(const boundary of ['mode','date','leave'])test(`Web dated Wiki UI: ${boundary} cancels the owned pending read and ignores its late result`,async()=>{
+  const pending=deferred<Response>(),ui=harness(request=>request.operation==='wiki-snapshot'?pending.promise:mergeRoute(request)),output=await mergeView(ui);await dateMode(output);
+  const reading=mergeSelector(output).fire('submit');await settle();const request=ui.requests.find(item=>item.operation==='wiki-snapshot')!;assert.equal(request.signal!.aborted,false);
+  if(boundary==='mode'){named(output,'historySelector').value='commit';await named(output,'historySelector').fire('change');}else if(boundary==='date'){named(output,'at').value='2026-01-16T00:00:00Z';await named(output,'at').fire('input');}else ui.run('pageCleanup();generation++');
+  assert.equal(request.signal!.aborted,true);pending.resolve(success(datedMergeBase));await reading;
+  assert.equal(ui.requests.filter(item=>item.operation==='wiki-snapshot').length,1);assert.equal(nodes(output).some(node=>node.classList.contains('recorded-selection')),false);assert.doesNotMatch(output.textContent,/旧政策/);assert.equal(ui.requests.some(item=>item.operation==='apply'),false);
+});
+
+test('Web dated Wiki UI: read-only users compare but cannot prepare or approve dated content',async()=>{
+  const ui=harness(datedMergeRoute,['read']),output=await mergeView(ui);await dateMode(output);await mergeSelector(output).fire('submit');await mergeEditor(output).fire('submit');
+  assert.match(output.textContent,/日期已解析为实际提交/);assert.match(output.textContent,/没有写入权限/);assert.equal(ui.requests.some(request=>['merge-prepare','apply'].includes(request.operation)),false);assert.equal((find(output,node=>node.classList.contains('merge-editor')) as Element & {hidden:boolean}).hidden,true);
+});
+
+test('Web dated Wiki UI: pending approval disables both new controls and retries only the same signed hash-bound plan',async()=>{
+  let applies=0;const pending=deferred<Response>(),ui=harness(request=>request.operation==='apply'?(++applies===1?pending.promise:success({commit:null,pageIds:[]})):datedMergeRoute(request)),output=await mergeView(ui);
+  await dateMode(output);await mergeSelector(output).fire('submit');await mergeEditor(output).fire('submit');const approve=button(output,'批准并保存这次合并'),saving=approve.fire('click');await settle();
+  assert.equal(named(output,'historySelector').disabled,true);assert.equal(named(output,'at').disabled,true);assert.equal(named(output,'fromCommit').disabled,true);await approve.fire('click');assert.equal(applies,1);
+  pending.resolve(failure('OPERATION_CANCELLED'));await saving;await button(output,'重试原签名方案').fire('click');assert.equal(applies,2);
+  const saves=ui.requests.filter(request=>request.operation==='apply');assert.deepEqual(saves[0]!.data,saves[1]!.data);assert.equal(saves[0]!.data.plan.merge.fromCommit,mergeCommit);assert.equal(ui.requests.filter(request=>request.operation==='wiki-snapshot').length,2);
+});
 
 test('Web merge UI: complete text, safe rendering and signed review precede separate confirmed approval',async()=>{
   const ui=harness(mergeRoute),output=await mergeView(ui);await mergeSelector(output).fire('submit');

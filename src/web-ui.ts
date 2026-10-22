@@ -211,6 +211,10 @@ dialog .meta { font-size: 11px; color: #a9bddf; }
 .merge-feedback { margin: 16px 0; overflow-wrap: anywhere; }
 .merge-workbench .comparison { margin-bottom: 20px; }
 .merge-workbench .commit-reference { font: 11px/1.8 var(--mono); overflow-wrap: anywhere; color: var(--muted); }
+.merge-selection .forms>label { min-width: 0; }
+.merge-selection input[name=at], .merge-selection input[name=fromCommit] { font: 12px/1.8 var(--mono); }
+.recorded-selection { border-left-color: var(--mint); }
+.recorded-selection code { display: block; margin: 8px 0; font: 12px/1.8 var(--mono); color: var(--ink); }
 @media (max-width: 1100px) { .job-board { grid-template-columns: minmax(0, 1fr); } }
 @keyframes pulse { 50% { opacity: .55; } }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
@@ -405,18 +409,21 @@ async function merges(){
  const valid=()=>!closed&&epoch===session&&current===generation;
  const steps=el('div','merge-steps');['01 / 读取历史与当前','02 / 编辑并检查方案','03 / 单独批准'].forEach(text=>steps.append(el('span','',text)));out.append(steps);
  const selection=card('选择这次要比较的版本','仅限同一资料库。历史仍受当前权限、撤回、密钥和期限约束；不是 Git 分支合并。');selection.classList.add('merge-selection');
- const selector=el('form','forms'),key=field('pageKey','正式 Wiki 页面','text','',[]),commit=field('fromCommit','完整历史提交编号');commit.input.maxLength=64;
+ const selector=el('form','forms'),key=field('pageKey','正式 Wiki 页面','text','',[]),mode=field('historySelector','历史版本选择方式','text','commit',[['commit','按完整提交编号'],['at','按 Git 记录时间']]),commit=field('fromCommit','完整历史提交编号'),at=field('at','记录时刻（ISO，必须带时区）');commit.input.maxLength=64;at.input.maxLength=64;
+ commit.label.classList.add('wide');at.label.classList.add('wide');at.input.placeholder='2026-01-15T12:00:00+08:00';at.input.autocomplete='off';at.input.spellcheck=false;
+ const dateHelp=el('p','muted wide','示例：2026-01-15T12:00:00+08:00 或 2026-01-15T04:00:00Z，最多三位毫秒。沿当前 HEAD 的第一父链，选择首个提交者时间不晚于此时刻的版本，最多检查 2000 条。Git 时间可被改写，不是事实生效时间或“当时已知内容”；不会按本机时区猜测。');dateHelp.id='wiki-recorded-time-help';at.input.setAttribute('aria-describedby',dateHelp.id);
  const sensitive=field('includeSensitive','明确读取敏感资料','checkbox',false),secret=field('includeSecret','明确读取机密资料','checkbox',false);
  const loadButton=el('button','primary','读取历史与当前');loadButton.type='submit';const loadActions=el('div','actions wide');loadActions.append(loadButton);
- selector.append(key.label,commit.label,sensitive.label,secret.label,loadActions);selection.append(selector,el('p','muted','正文和草稿只在当前页面内存中保留；离开或断开会清除，不会自动保存。'));
- const feedback=el('div','merge-feedback');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');selection.append(feedback);out.append(selection);
+ selector.append(key.label,mode.label,commit.label,at.label,dateHelp,sensitive.label,secret.label,loadActions);selection.append(selector,el('p','muted','正文和草稿只在当前页面内存中保留；离开或断开会清除，不会自动保存。'));
+ const feedback=el('div','merge-feedback'),resolution=el('div');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');selection.append(feedback,resolution);out.append(selection);
  const history=el('div'),editor=card('编辑要保留的知识','编辑区从当前正文开始，不包含自动生成的来源链接。请结合两侧资料修改；旧条件、冲突和更早期限不会因此消失。');editor.classList.add('merge-editor');editor.hidden=true;
  const draft=el('form','forms'),title=field('title','页面标题（可留空沿用）'),summary=field('summary','合并摘要'),body=field('body','合并正文（Markdown）','textarea');title.input.required=false;title.input.maxLength=300;summary.input.maxLength=2000;body.input.maxLength=100000;body.label.classList.add('wide');
  const prepare=el('button','primary','生成合并审核方案');prepare.type='submit';const prepareActions=el('div','actions wide');prepareActions.append(prepare);draft.append(title.label,summary.label,body.label,prepareActions);editor.append(draft);out.append(history,editor);
  const review=el('div'),approval=el('div','actions'),outcome=el('div');out.append(review,approval,outcome);
  function sync(){
   loadButton.disabled=phase!=='idle'||!key.input.value;prepare.disabled=phase!=='idle'||!loaded||!can('write')||saved;
-  for(const input of [key.input,commit.input,title.input,summary.input,body.input])input.disabled=phase==='applying'||(saved&&[title.input,summary.input,body.input].includes(input));
+  for(const input of [key.input,mode.input,title.input,summary.input,body.input])input.disabled=phase==='applying'||(saved&&[title.input,summary.input,body.input].includes(input));
+  const dated=mode.input.value==='at';commit.label.hidden=dated;at.label.hidden=!dated;dateHelp.hidden=!dated;commit.input.required=!dated;at.input.required=dated;commit.input.disabled=phase==='applying'||dated;at.input.disabled=phase==='applying'||!dated;
   sensitive.input.disabled=phase==='applying'||!['sensitive','secret'].includes(principal.maxSensitivity);
   secret.input.disabled=phase==='applying'||principal.maxSensitivity!=='secret';
   loadButton.textContent=phase==='loading'?'正在读取…':'读取历史与当前';prepare.textContent=phase==='preparing'?'正在生成与校验…':'生成合并审核方案';
@@ -424,13 +431,19 @@ async function merges(){
  function invalidate(selectionChanged){
   if(!valid()||phase==='applying')return;
   seq++;active?.abort();active=null;phase='idle';proposal=null;uncertain=null;saved=false;review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();
-  if(selectionChanged){loaded=null;history.replaceChildren();editor.hidden=!dirty||!can('write');feedback.textContent=dirty?'选择已变化。下方保留上一组版本的未保存草稿，可继续编辑或复制；重新读取会先确认重置，旧方案不能批准。':'选择已变化，请重新读取。';}
+  if(selectionChanged){loaded=null;history.replaceChildren();resolution.replaceChildren();editor.hidden=!dirty||!can('write');feedback.textContent=dirty?'选择已变化。下方保留上一组版本的未保存草稿，可继续编辑或复制；重新读取会先确认重置，旧方案不能批准。':'选择已变化，请重新读取。';}
   else{dirty=true;feedback.textContent='草稿已变化，旧方案不能批准；请重新生成。';}sync();
  }
- for(const input of [key.input,commit.input,sensitive.input,secret.input])input.addEventListener('input',()=>invalidate(true));
+ mode.input.addEventListener('change',()=>invalidate(true));
+ for(const input of [key.input,commit.input,at.input,sensitive.input,secret.input])input.addEventListener('input',()=>invalidate(true));
  for(const input of [title.input,summary.input,body.input])input.addEventListener('input',()=>invalidate(false));
  function begin(next){if(!valid()||phase!=='idle')return null;const turn=++seq;active=new AbortController();phase=next;sync();return {signal:active.signal,live:()=>valid()&&turn===seq};}
  function finish(attempt){if(attempt.live()){phase='idle';active=null;sync();}}
+ function showResolution(base){
+  resolution.replaceChildren();if(!base.selection)return;
+  const info=base.selection,note=el('section','review-summary recorded-selection');note.setAttribute('aria-label','日期选择结果');note.append(el('strong','','日期已解析为实际提交'),el('p','','请求时刻（UTC）：'+info.at),el('p','','选中提交者时间：'+info.committedAt),el('code','',base.commit),el('p','','沿第一父链检查 '+info.scannedCommits+' 条；合并准备使用以上完整提交，不会再次按日期选择。'),el('p','','Git 时间可被改写，旧正文不是已核实的历史事实。当前权限、撤回、期限和密钥限制仍然有效。'));
+  const warnings=el('details');warnings.append(el('summary','','读取限制与服务端提示'),textList(base.warnings,'未提供额外提示'));note.append(warnings);resolution.append(note);
+ }
  function showComparison(base,target){
   const old=base.pages.find(page=>page.meta.type==='wiki-page'&&page.meta.key===key.input.value);if(!old)throw Error('历史正式页面不可用，请重新选择。');
   const comparison=card('历史与当前 · 完整正文','旧正文不是当前事实。两边的来源、条件和不确定性都需要人工核对。');
@@ -442,17 +455,19 @@ async function merges(){
  selector.addEventListener('submit',async event=>{
   event.preventDefault();event.stopPropagation();if(!valid()||phase!=='idle')return;
   if(dirty&&!confirm('重新读取将重置当前编辑区。确认放弃未保存的草稿？'))return;
-  const values={commit:commit.input.value.trim(),pageKeys:[key.input.value],includeSensitive:sensitive.input.checked,includeSecret:secret.input.checked};
-  if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(values.commit)){feedback.replaceChildren(el('div','error','请输入完整的本地历史提交编号，可从运维记录查看。'));return;}
-  loaded=null;proposal=null;uncertain=null;history.replaceChildren();review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();editor.hidden=true;
+  const options={pageKeys:[key.input.value],includeSensitive:sensitive.input.checked,includeSecret:secret.input.checked};let values;
+  if(mode.input.value==='at'){if(!at.input.value.trim()){feedback.replaceChildren(el('div','error','请输入带时区的 ISO 日期和时间。'));return;}values={...options,at:at.input.value.trim()};}
+  else if(mode.input.value==='commit'){if(!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit.input.value.trim())){feedback.replaceChildren(el('div','error','请输入完整的本地历史提交编号，可从运维记录查看。'));return;}values={...options,commit:commit.input.value.trim()};}
+  else{feedback.replaceChildren(el('div','error','请选择有效的历史版本选择方式。'));return;}
+  loaded=null;proposal=null;uncertain=null;history.replaceChildren();resolution.replaceChildren();review.replaceChildren();approval.replaceChildren();outcome.replaceChildren();editor.hidden=true;
   const attempt=begin('loading');if(!attempt)return;feedback.textContent='正在检查历史、当前权限与支持关系…';
   try{
    const base=await api('wiki-snapshot',values,attempt.signal);if(!attempt.live())return;
-   const live=await api('wiki-snapshot',{...values,commit:base.authorityHead},attempt.signal);if(!attempt.live())return;
+   const live=await api('wiki-snapshot',{...options,commit:base.authorityHead},attempt.signal);if(!attempt.live())return;
    const target=live.pages.find(page=>page.meta.type==='wiki-page'&&page.meta.key===values.pageKeys[0]);
    if(!target||base.authorityHead!==live.authorityHead||target.meta.revision!==target.currentRevision||base.pages.find(page=>page.meta.key===values.pageKeys[0])?.currentRevision!==target.meta.revision)throw Error('读取期间资料已变化，请重新读取历史与当前版本。');
-   loaded={fromCommit:values.commit,pageKey:values.pageKeys[0],expectedRevision:target.meta.revision,includeSensitive:values.includeSensitive,includeSecret:values.includeSecret};
-   showComparison(base,target);title.input.value=target.meta.title;summary.input.value=target.meta.summary;body.input.value=target.body.split('<!-- MEMOBRANCH_WIKI_LINKS -->')[0].trim();dirty=false;saved=false;
+   loaded={fromCommit:base.commit,pageKey:values.pageKeys[0],expectedRevision:target.meta.revision,includeSensitive:values.includeSensitive,includeSecret:values.includeSecret};
+   showComparison(base,target);showResolution(base);title.input.value=target.meta.title;summary.input.value=target.meta.summary;body.input.value=target.body.split('<!-- MEMOBRANCH_WIKI_LINKS -->')[0].trim();dirty=false;saved=false;
    editor.hidden=!can('write');feedback.textContent=can('write')?'已读取。请编辑合并正文，再生成审核方案；尚未保存任何知识。':'已读取完整比较。当前身份没有写入权限，不能准备合并。';
   }catch(error){if(attempt.live())feedback.replaceChildren(el('div','error',error.message));}finally{finish(attempt);}
  });
@@ -486,7 +501,7 @@ async function merges(){
    if(!requested){proposal=null;approval.replaceChildren();}else{uncertain=plan;for(const control of approval.querySelectorAll('button'))control.textContent='重试原签名方案';}
   }}finally{if(attempt.live()){for(const control of approval.querySelectorAll('button'))control.disabled=false;}finish(attempt);}
  }
- pageCleanup=()=>{closed=true;seq++;active?.abort();active=null;loaded=null;proposal=null;uncertain=null;for(const input of [title.input,summary.input,body.input,commit.input])input.value='';out.replaceChildren();};
+ pageCleanup=()=>{closed=true;seq++;active?.abort();active=null;loaded=null;proposal=null;uncertain=null;for(const input of [title.input,summary.input,body.input,commit.input,at.input])input.value='';out.replaceChildren();};
  const attempt=begin('loading');
  try{const catalog=await api('catalog',{},attempt.signal);if(attempt.live()){
   const entries=catalog.filter(page=>!page.key.startsWith('legacy:'));for(const page of entries){const option=el('option','',page.title+' · v'+page.revision);option.value=page.key;key.input.append(option);}

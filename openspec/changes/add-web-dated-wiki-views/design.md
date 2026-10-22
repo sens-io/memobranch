@@ -1,0 +1,9 @@
+# Design
+
+Extend `merges()` in the existing self-contained browser assets. Default to the prior full-hash mode; the active mode alone controls the required/enabled input and the first snapshot request. Use a text input for ISO dates with a visible timezone example rather than a browser-local calendar or a second date parser. The server remains responsible for exact date validity. Inactive values may remain in page memory but are never submitted.
+
+Read the selected historical snapshot, then read its `authorityHead` with only `commit`. Keep existing head/current-revision consistency checks. Store `base.commit` in the existing merge input; neither the original date nor selector metadata is sent to `merge-prepare`. Show normalized requested time, selected committer time, actual hash, first-parent traversal count and explicit mutable-clock/current-authority warnings. Retain that read's date resolution while preparing a hash-bound proposal; clear it on selection changes, new reads and navigation. Preparation and approval never re-resolve the date.
+
+Mode/date edits use the existing selection invalidation: cancel owned requests, discard comparisons and old approval/retry controls, preserve an unsaved draft until the user confirms replacing it. During approval disable both new controls as well. Keep literal text rendering, current read/write/review separation and no browser storage. Use existing cobalt/violet/teal, typography, focus treatment and responsive layout rather than a new theme.
+
+Verify shipped event handlers with the DOM fixture, authenticated real HTTP and a real local browser on synthetic data. Execute the installed browser asset against the installed server in independent Node 20/22 consumers, without importing checkout source. Retain all prior checks and independently review committed candidates.
