@@ -122,6 +122,8 @@ flowchart LR
 
 > **Agent revision/merge tools (development source):** [Use the same bounded reader and manual merge preparation through MCP or DeepSeek Harness](docs/agent-manual-merge.md). Host-owned authority, explicit confidential selection and separate signed-plan approval remain required. No automatic merge; not yet published to npm.
 
+> **Recorded-time Wiki views (development source):** [Select a retained local version by explicit date](docs/dated-wiki-views.md), using first-parent Git committer time and current access checks. Returns the actual hash and complete content; not as-known-at truth or a historical model answer. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

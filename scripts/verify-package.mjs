@@ -41,7 +41,7 @@ try {
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
-    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md',
+    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -122,7 +122,7 @@ try {
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
       type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
       previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
-      type WikiSnapshot, type WikiSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin } from 'memobranch';
+      type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin } from 'memobranch';
     export async function publicManualMerge(vault: MemoryVault, options: WikiMergeOptions) {
       const prepared = await vault.wikiMergePrepare(options);
       const origin: WikiMergeOrigin | undefined = prepared.plan.merge;
@@ -134,6 +134,13 @@ try {
       const options: WikiSnapshotOptions = { commit, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
       const result: WikiSnapshot = await vault.wikiSnapshot(options);
       return result;
+    }
+    export async function publicDatedRevisionView(vault: MemoryVault, at: string) {
+      const options: WikiDatedSnapshotOptions = { at, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
+      const result: WikiSnapshot = await vault.wikiSnapshot(options);
+      // @ts-expect-error Commit and recorded time are mutually exclusive public inputs.
+      const ambiguous: WikiSnapshotOptions | WikiDatedSnapshotOptions = { commit: 'a'.repeat(40), at, pageKeys: ['entity:atlas'] };
+      return { result, selection: result.selection, ambiguous };
     }
     export async function publicPdfWorkflow(vault: MemoryVault, path: string) {
       const plan: PdfImportPlan = await previewPdfImport(path);
@@ -237,6 +244,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(merge.stdout);
+  await writeFile(join(consumer, 'verify-installed-dated-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-dated-wiki.mjs')));
+  const datedWiki = await exec(process.execPath, ['verify-installed-dated-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(datedWiki.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

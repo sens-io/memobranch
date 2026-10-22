@@ -10,6 +10,8 @@ memobranch wiki snapshot entity:atlas --commit FULL_COMMIT_HASH --root ./vault
 
 The local library exposes `vault.wikiSnapshot({ commit, pageKeys, includeSensitive?, includeSecret?, signal? })`, with public `WikiSnapshotOptions` and `WikiSnapshot` types. Select 1–25 distinct keys, including ordinary memories as `legacy:<memory-id>`. Use a full lowercase 40/64-character hash for a local commit in current HEAD ancestry; symbolic refs, tags as names, abbreviations, tree/blob objects, unreachable and foreign-vault/tenant commits are rejected. Git replacement objects are ignored; grafts (including `GIT_GRAFT_FILE`) and partial-clone/promisor configurations are refused. It does not fetch missing history.
 
+Alternatively, [recorded-time selection](dated-wiki-views.md) accepts `at` instead of `commit` through the same reader and adapters, with public `WikiDatedSnapshotOptions`. Exactly one selector is required. This follows at most 2000 first-parent entries by mutable Git committer time and returns the actual selected hash; it does not reconstruct what an agent knew at a date. The constraints below apply to either selected version.
+
 ## What a result means
 
 `commit` identifies the historical content. `authorityHead` identifies the current local commit used while checking access; `checkedAt` is this read's time, not a claim that the information was true then. Each complete page keeps its actual historical metadata, body, revision, conditions, uncertainty and conflict status, with a separate `currentRevision`. Historical links and dependencies are included once, including cycles. All required pages must be available; unavailable dependencies or exceeded limits fail the whole read rather than silently dropping context.
