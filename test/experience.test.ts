@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -6,7 +7,11 @@ import { parseMarkdown } from '../src/markdown.js';
 import { MemoryVault } from '../src/vault.js';
 import { localAdminPrincipal } from '../src/policy.js';
 import { withOperation } from '../src/operation.js';
-import { EncryptionManager } from '../src/encryption.js';
+import { EncryptionManager, type EncryptedEnvelopeMeta } from '../src/encryption.js';
+import { asEvidenceDocument } from '../src/evidence.js';
+import { ExperienceEngine } from '../src/experience.js';
+import { stableWikiJson } from '../src/wiki-proof.js';
+import { VaultTransaction } from '../src/transaction.js';
 import type { ExperienceRunner, ExperienceSuite, ExperienceTraceInput } from '../src/experience.js';
 import type { Scope, Sensitivity } from '../src/types.js';
 
@@ -217,4 +222,83 @@ test('experience: a late evaluator inherits cancellation and cannot start a new 
   }, { timeoutMs: 100 }), { code: 'OPERATION_CANCELLED' });
   release(); await done;
   assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('experience: final-source async waits cannot save a report after review withdrawal or expiry', async t => {
+  for (const mode of ['permission', 'expiry'] as const) {
+    const { vault, plan, first, second } = await fixture(t);
+    const docs = new Map(await Promise.all([first.evidenceId, second.evidenceId].map(async id => [id, asEvidenceDocument(await vault.get(id))] as const)));
+    const config = await vault.config(), principal = { ...localAdminPrincipal(), permissions: ['read', 'write', 'review'] as Array<'read' | 'write' | 'review'> };
+    let saving = false, savedReports = 0, changed = false, controlledNow: number | undefined;
+    const realNow = Date.now;
+    const mocked = t.mock.method(Date, 'now', () => controlledNow ?? realNow());
+    const sign = (value: object) => createHmac('sha256', 'synthetic-experience-test-key').update(stableWikiJson(value)).digest('hex');
+    const engine = new ExperienceEngine({
+      principal, config: async () => structuredClone(config), read: action => action(),
+      evidence: async id => {
+        if (saving && !changed && id === second.evidenceId) {
+          changed = true;
+          if (mode === 'permission') principal.permissions = ['read', 'write'];
+          else controlledNow = Date.parse(proposal.expiresAt) + 1;
+        }
+        const doc = docs.get(id); assert.ok(doc); return structuredClone(doc);
+      },
+      sign: async value => sign(value),
+      verify: async (value, proof) => { assert.equal(timingSafeEqual(Buffer.from(sign(value)), Buffer.from(proof)), true); },
+      capture: async (_options, guard) => {
+        saving = true;
+        try {
+          await guard?.revalidate();
+          guard?.validate(); // synchronous final decision; no await before the ready transition
+          savedReports++;
+          return { evidenceId: 'ev-000000000000', evidencePath: 'synthetic', duplicate: false, candidates: [], commit: 'synthetic' };
+        } finally { saving = false; }
+      },
+    });
+    const proposal = await engine.prepare({ traceIds: [first.evidenceId, second.evidenceId], name: plan.name,
+      description: plan.description, procedure: plan.procedure, conditions: plan.conditions, limitations: plan.limitations });
+    await assert.rejects(engine.validate(proposal, suite, runner), { code: mode === 'permission' ? 'AUTHORIZATION_DENIED' : 'VALIDATION_FAILED' });
+    assert.equal(changed, true); assert.equal(savedReports, 0);
+    mocked.mock.restore();
+  }
+});
+
+test('experience: prepare/export decrypt only selected evidence, not unrelated secret records or erased keys', async t => {
+  const { vault, root, first, second, plan } = await fixture(t);
+  const unrelated = await vault.experienceCapture(trace('unrelated-private'), { scope: 'user', sensitivity: 'secret' });
+  const validated = await vault.experienceValidate(plan, suite, runner);
+  const decrypt = EncryptionManager.prototype.decrypt;
+  let privateDecryptions = 0;
+  t.mock.method(EncryptionManager.prototype, 'decrypt', async function (this: EncryptionManager, meta: EncryptedEnvelopeMeta, body: string) {
+    if (meta.id === unrelated.evidenceId) privateDecryptions++;
+    return decrypt.call(this, meta, body);
+  });
+  const options = { traceIds: [first.evidenceId, second.evidenceId], name: plan.name, description: plan.description,
+    procedure: plan.procedure, conditions: plan.conditions, limitations: plan.limitations };
+  await vault.experiencePrepare(options);
+  await vault.experienceExport(validated.evidenceId, { confirm: true });
+  await assert.rejects(vault.experiencePrepare({ ...options, traceIds: [unrelated.evidenceId] }), { code: 'AUTHORIZATION_DENIED' });
+  assert.equal(privateDecryptions, 0);
+  await new EncryptionManager(root, '49'.repeat(32)).erase(unrelated.evidenceId);
+  assert.equal((await vault.experiencePrepare(options)).sources.length, 2);
+  assert.equal((await vault.experienceExport(validated.evidenceId, { confirm: true })).name, plan.name);
+  assert.equal(privateDecryptions, 0);
+});
+
+test('experience: existing synchronous final transaction guards have no new microtask gap before commit', async t => {
+  const { vault } = await fixture(t);
+  let changedAfterDecision = false, called = false;
+  const commit = VaultTransaction.prototype.commit;
+  t.mock.method(VaultTransaction.prototype, 'commit', async function (this: VaultTransaction) {
+    called = true; assert.equal(changedAfterDecision, false);
+    return commit.call(this);
+  });
+  // Exercise the production transaction boundary without adding a public test API.
+  const internal = vault as unknown as { withMutation(permission: 'review', actor: typeof vault.principal,
+    operation: string, message: string, action: () => Promise<void>, ids: undefined,
+    options: { validateBeforeCommit(): void }): Promise<unknown> };
+  await internal.withMutation('review', vault.principal, 'test-final-check', 'test: final check', async () => {}, undefined, {
+    validateBeforeCommit: () => { queueMicrotask(() => { changedAfterDecision = true; }); },
+  });
+  assert.equal(called, true); assert.equal(changedAfterDecision, true);
 });

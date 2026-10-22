@@ -20,7 +20,10 @@ propagation. Results are copied and bounded. Failures/timeouts prevent export;
 errors must not expose callback exception text. Persisted reports bind the exact
 proposal and suite using the existing local proof key. All source/config/access
 checks repeat under the evidence mutation lock, including immediately before
-commit. No nested read-to-write lock upgrade.
+commit. After asynchronous revalidation, a separate synchronous final callback
+rechecks operation/read permissions and proposal time with no intervening await
+before the ready transition. Existing Wiki final callbacks remain synchronous.
+No nested read-to-write lock upgrade.
 
 Export requires review permission, explicit confirmation, complete passing checks,
 current source readability, unchanged config and explicit confidential selection.

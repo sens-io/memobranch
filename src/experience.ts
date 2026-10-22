@@ -77,10 +77,10 @@ interface ExperiencePort {
   principal: Principal;
   config(): Promise<VaultConfig>;
   read<T>(action: () => Promise<T>): Promise<T>;
-  evidence(id: string): Promise<MarkdownDocument<EvidenceMeta>>;
+  evidence(id: string, selection: ExperienceSelection): Promise<MarkdownDocument<EvidenceMeta>>;
   sign(value: object): Promise<string>;
   verify(value: object, proof: string): Promise<void>;
-  capture(options: CaptureOptions, guard?: () => Promise<void>): Promise<CaptureResult>;
+  capture(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void }): Promise<CaptureResult>;
 }
 
 /** Uses ordinary immutable evidence; never approves a memory or installs a skill. */
@@ -94,8 +94,11 @@ export class ExperienceEngine {
     const content = TRACE + stableWikiJson(value);
     bounded(content, 160_000);
     return this.port.capture({ content, scope: labels.scope ?? 'user', sensitivity: labels.sensitivity ?? 'internal',
-      sourceUri: `urn:memobranch:experience:${sha256(stableWikiJson([value.family, value.taskId, value.runId]))}` }, async () => {
-      if (sha256(stableWikiJson(await this.port.config())) !== sha256(stableWikiJson(config))) fail('Vault configuration changed; record again');
+      sourceUri: `urn:memobranch:experience:${sha256(stableWikiJson([value.family, value.taskId, value.runId]))}` }, {
+      revalidate: async () => {
+        if (sha256(stableWikiJson(await this.port.config())) !== sha256(stableWikiJson(config))) fail('Vault configuration changed; record again');
+      },
+      validate: () => authorize(this.port.principal, 'write', { scope: labels.scope ?? 'user', sensitivity: labels.sensitivity ?? 'internal' }),
     });
   }
 
@@ -123,7 +126,7 @@ export class ExperienceEngine {
       };
       return parsed(experiencePlanSchema, { ...unsigned, proof: await this.port.sign(unsigned) });
     });
-    throwIfCancelled(); timeCheck(result);
+    throwIfCancelled(); timeCheck(result); authorize(this.port.principal, 'write'); this.access(result.scope, result.sensitivity, options);
     return result;
   }
 
@@ -142,6 +145,10 @@ export class ExperienceEngine {
     const check = async () => {
       authorize(this.port.principal, 'write'); authorize(this.port.principal, 'review');
       await this.checkPlan(plan, opts);
+    };
+    const finalCheck = () => {
+      authorize(this.port.principal, 'write'); authorize(this.port.principal, 'review');
+      this.access(plan.scope, plan.sensitivity, opts); timeCheck(plan);
     };
     try {
       return await withOperation(combined.signal, async () => {
@@ -167,9 +174,7 @@ export class ExperienceEngine {
         const report = parsed(reportSchema, { ...unsigned, proof: await this.port.sign(unsigned) });
         const content = REPORT + stableWikiJson(report); bounded(content, 900_000);
         const captured = await this.port.capture({ content, scope: plan.scope, sensitivity: plan.sensitivity,
-          sourceUri: `urn:memobranch:experience-validation:${report.runId}` }, async () => {
-          await check();
-        });
+          sourceUri: `urn:memobranch:experience-validation:${report.runId}` }, { revalidate: check, validate: finalCheck });
         throwIfCancelled(); timeCheck(plan);
         return { ...captured, passed: passing(report), report };
       });
@@ -185,7 +190,7 @@ export class ExperienceEngine {
     const options = parsed(selectionSchema.extend({ confirm: z.literal(true) }).strict(), input);
     parsed(evidenceId, validationId);
     const result = await this.port.read(async () => {
-      const doc = await this.port.evidence(validationId);
+      const doc = await this.port.evidence(validationId, options);
       this.access(doc.meta.scope, doc.meta.sensitivity, options);
       const report = decoded(reportSchema, doc, REPORT);
       await this.verify(report);
@@ -200,6 +205,7 @@ export class ExperienceEngine {
         warnings: ['Selected host-evaluated cases are not proof of general effectiveness.', 'Plaintext copies cannot be revoked after export.'] };
     });
     throwIfCancelled();
+    authorize(this.port.principal, 'review'); this.access(result.scope, result.sensitivity, options);
     if (Date.parse(result.proposalExpiresAt) <= Date.now()) fail('Procedure proposal expired while exporting; prepare again');
     return result;
   }
@@ -214,7 +220,7 @@ export class ExperienceEngine {
   private async sources(ids: string[], options: ExperienceSelection) {
     const docs = [];
     for (const id of ids) {
-      const doc = await this.port.evidence(id);
+      const doc = await this.port.evidence(id, options);
       this.access(doc.meta.scope, doc.meta.sensitivity, options);
       docs.push(doc);
     }
@@ -237,6 +243,7 @@ export class ExperienceEngine {
     for (const [i, doc] of docs.entries()) {
       if (documentHash(doc) !== plan.sources[i]!.hash) fail('Experience source changed; prepare again');
     }
+    timeCheck(plan); this.access(plan.scope, plan.sensitivity, options);
   }
 
   private async coverage(plan: ExperiencePlan, suite: ExperienceSuite) {
@@ -289,7 +296,7 @@ async function abortable<T>(action: () => Promise<T>, signal: AbortSignal): Prom
   throwIfCancelled();
   let listener: (() => void) | undefined;
   try {
-    return await Promise.race([Promise.resolve().then(action), new Promise<never>((_resolve, reject) => {
+    return await Promise.race([Promise.resolve().then(() => { throwIfCancelled(); return action(); }), new Promise<never>((_resolve, reject) => {
       listener = () => reject(new AgentMemoryError('OPERATION_CANCELLED', 'Experience validation was cancelled or exceeded its deadline'));
       if (signal.aborted) listener(); else signal.addEventListener('abort', listener, { once: true });
     })]);

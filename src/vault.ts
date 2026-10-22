@@ -528,7 +528,7 @@ export class MemoryVault {
     return this.captureGuarded(options);
   }
 
-  private async captureGuarded(options: CaptureOptions, validateBeforeCommit?: () => Promise<void>): Promise<CaptureResult> {
+  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void }): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
     const content = options.content.trim();
@@ -566,7 +566,7 @@ export class MemoryVault {
       await this.writeDocument(evidence);
       await this.appendLog('capture', actor, `${evidenceId} (${scope}/${sensitivity})`);
       return { evidence, duplicate: false };
-    }, undefined, validateBeforeCommit ? { validateBeforeCommit } : {});
+    }, undefined, guard ? { revalidateBeforeCommit: guard.revalidate, validateBeforeCommit: guard.validate } : {});
 
     let candidates: Array<{ id: string; path: string }> = [];
     let commit = mutation.commit;
@@ -585,10 +585,38 @@ export class MemoryVault {
       principal: this.principal,
       config: () => this.config(),
       read: action => this.settledRead(action),
-      evidence: async id => asEvidenceDocument(await this.requireById<Record<string, unknown>>('evidence', id)),
+      evidence: (id, selection) => this.experienceEvidence(id, selection),
       sign: value => proof.sign(value), verify: (value, signature) => proof.verify(value, signature),
       capture: (options, guard) => this.captureGuarded(options, guard),
     });
+  }
+
+  private async experienceEvidence(id: string, selection: ExperienceSelection): Promise<MarkdownDocument<EvidenceMeta>> {
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
+    let target: MarkdownDocument<Record<string, unknown>> | undefined;
+    for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+      throwIfCancelled();
+      const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+      if (parsed.meta.id !== id) continue;
+      if (target) throw new AgentMemoryError('VALIDATION_FAILED', 'Experience evidence identity is ambiguous');
+      target = { path: toPosix(relative(this.root, file)), ...parsed };
+    }
+    if (!target) throw new AgentMemoryError('NOT_FOUND', 'Experience evidence not found');
+    const resource = { scope: scopeOf(target.meta), sensitivity: sensitivityOf(target.meta), tenantId: config.tenantId };
+    try { authorize(this.principal, 'read', resource); }
+    catch (error) {
+      if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw new AgentMemoryError('NOT_FOUND', 'Experience evidence not found');
+      throw error;
+    }
+    if (resource.sensitivity === 'sensitive' && selection.includeSensitive !== true || resource.sensitivity === 'secret' && selection.includeSecret !== true) {
+      throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Explicit confidential selection is required');
+    }
+    // Only the selected, authorized envelope reaches decryption. An unrelated
+    // erased private record must not block a still-authorized experience read.
+    const document = asEvidenceDocument(await this.materializeDocument<Record<string, unknown>>(target.path, target, { config }));
+    authorize(this.principal, 'read', { scope: document.meta.scope, sensitivity: document.meta.sensitivity, tenantId: config.tenantId });
+    return document;
   }
 
   async experienceCapture(input: ExperienceTraceInput, classification: { scope?: Scope; sensitivity?: Sensitivity } = {}) {
@@ -1361,7 +1389,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; validateBeforeCommit?: () => void | Promise<void> } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; revalidateBeforeCommit?: () => Promise<void>; validateBeforeCommit?: () => void } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -1389,7 +1417,8 @@ export class MemoryVault {
         await this.installRuntimeIgnore();
         const value = await action();
         await this.rebuildGenerated(await this.config());
-        await options.validateBeforeCommit?.();
+        if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
+        options.validateBeforeCommit?.();
         throwIfCancelled();
         ready = true;
         const commit = await withoutCancellation(() => transaction.commit());
