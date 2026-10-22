@@ -42,6 +42,7 @@ try {
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
     'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
+    'dist/experience.js', 'dist/experience.d.ts', 'docs/validated-experience.md', 'docs/validated-experience_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -250,6 +251,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(datedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-experience.mjs'), await readFile(join(root, 'scripts/verify-installed-experience.mjs')));
+  const experience = await exec(process.execPath, ['verify-installed-experience.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(experience.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

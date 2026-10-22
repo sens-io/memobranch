@@ -235,6 +235,43 @@ async function main(): Promise<void> {
     case 'remote':
       await remoteCommand(vault, parsed);
       return;
+    case 'experience': {
+      const args = parsed;
+      const action = args.positionals[0];
+      if (!['capture', 'prepare', 'export'].includes(action ?? '')) {
+        throw new Error('Experience actions: capture, prepare, export. Validation requires a trusted host callback through the library; no executable/module path is accepted.');
+      }
+      authorize(vault.principal, action === 'export' ? 'review' : 'write');
+      await vault.config();
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const selection = { includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') };
+          if (action === 'export') {
+            print(await vault.experienceExport(requiredPositional(args, 1, 'validation evidence ID'), {
+              ...selection, confirm: flagBoolean(args, 'confirm'),
+            }));
+          } else {
+            authorize(vault.principal, 'read');
+            const file = requiredFlag(args, 'file');
+            if (file === '-') throw new Error('Experience input requires a bounded local JSON file, not stdin');
+            const value = await readImportPreview(file);
+            if (action === 'capture') {
+              print(await vault.experienceCapture(value as never, {
+                scope: enumFlag<Scope>(args, 'scope', ['user', 'project', 'team', 'public'], 'user'),
+                sensitivity: enumFlag<Sensitivity>(args, 'sensitivity', ['public', 'internal', 'sensitive', 'secret'], 'internal'),
+              }));
+            } else {
+              if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Experience proposal input must be an object');
+              print(await vault.experiencePrepare({ ...value, ...selection } as never));
+            }
+          }
+        });
+      } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
     case 'wiki':
       await wikiCommand(vault, parsed);
       return;
@@ -589,6 +626,10 @@ Usage:
   amem import pdf-preview <file.pdf> [--timeout-ms 10000] > pdf-plan.json
   amem import pdf-apply --plan pdf-plan.json [--scope project] [--sensitivity internal] [--timeout-ms 10000]
   amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
+  amem experience capture --file TRACE.json [--scope project] [--sensitivity internal]
+  amem experience prepare --file PROPOSAL.json [--include-sensitive] [--include-secret]
+  amem experience export <validation-evidence-id> --confirm [--include-sensitive] [--include-secret]
+    Validation requires a trusted host library callback; export returns files as JSON, never installs or executes.
   amem memory at <ISO> [--key KEY] [--include-unknown] [--offset N] [--limit N]
   amem memory validity <memory-id> --from ISO|unknown --until ISO|unknown --expected-revision N --confirm
   amem doctor | recover | reindex [--semantic] | maintenance

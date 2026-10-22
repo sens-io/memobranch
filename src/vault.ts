@@ -40,6 +40,7 @@ import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, 
 import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInput, type WikiJobRunOptions } from './wiki-jobs.js';
 import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
 import { WikiProof } from './wiki-proof.js';
+import { ExperienceEngine, type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite, type ExperienceRunner, type ExperienceSelection } from './experience.js';
 import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
@@ -524,6 +525,10 @@ export class MemoryVault {
   }
 
   async capture(options: CaptureOptions): Promise<CaptureResult> {
+    return this.captureGuarded(options);
+  }
+
+  private async captureGuarded(options: CaptureOptions, validateBeforeCommit?: () => Promise<void>): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
     const content = options.content.trim();
@@ -561,7 +566,7 @@ export class MemoryVault {
       await this.writeDocument(evidence);
       await this.appendLog('capture', actor, `${evidenceId} (${scope}/${sensitivity})`);
       return { evidence, duplicate: false };
-    });
+    }, undefined, validateBeforeCommit ? { validateBeforeCommit } : {});
 
     let candidates: Array<{ id: string; path: string }> = [];
     let commit = mutation.commit;
@@ -572,6 +577,35 @@ export class MemoryVault {
       commit = extracted.commit ?? commit;
     }
     return { evidenceId, evidencePath: mutation.value.evidence.path, duplicate: mutation.value.duplicate, candidates, commit };
+  }
+
+  private experienceEngine(): ExperienceEngine {
+    const proof = new WikiProof(this.root);
+    return new ExperienceEngine({
+      principal: this.principal,
+      config: () => this.config(),
+      read: action => this.settledRead(action),
+      evidence: async id => asEvidenceDocument(await this.requireById<Record<string, unknown>>('evidence', id)),
+      sign: value => proof.sign(value), verify: (value, signature) => proof.verify(value, signature),
+      capture: (options, guard) => this.captureGuarded(options, guard),
+    });
+  }
+
+  async experienceCapture(input: ExperienceTraceInput, classification: { scope?: Scope; sensitivity?: Sensitivity } = {}) {
+    return this.experienceEngine().capture(input, classification);
+  }
+
+  async experiencePrepare(options: ExperiencePrepareOptions) {
+    return this.experienceEngine().prepare(options);
+  }
+
+  async experienceValidate(plan: ExperiencePlan, suite: ExperienceSuite, runner: ExperienceRunner,
+    options: ExperienceSelection & { signal?: AbortSignal; timeoutMs?: number } = {}) {
+    return this.experienceEngine().validate(plan, suite, runner, options);
+  }
+
+  async experienceExport(validationId: string, options: ExperienceSelection & { confirm: boolean }) {
+    return this.experienceEngine().export(validationId, options);
   }
 
   async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
@@ -1327,7 +1361,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; validateBeforeCommit?: () => void } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; validateBeforeCommit?: () => void | Promise<void> } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -1355,7 +1389,7 @@ export class MemoryVault {
         await this.installRuntimeIgnore();
         const value = await action();
         await this.rebuildGenerated(await this.config());
-        options.validateBeforeCommit?.();
+        await options.validateBeforeCommit?.();
         throwIfCancelled();
         ready = true;
         const commit = await withoutCancellation(() => transaction.commit());

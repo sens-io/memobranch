@@ -1,0 +1,220 @@
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { test, type TestContext } from 'node:test';
+import { parseMarkdown } from '../src/markdown.js';
+import { MemoryVault } from '../src/vault.js';
+import { localAdminPrincipal } from '../src/policy.js';
+import { withOperation } from '../src/operation.js';
+import { EncryptionManager } from '../src/encryption.js';
+import type { ExperienceRunner, ExperienceSuite, ExperienceTraceInput } from '../src/experience.js';
+import type { Scope, Sensitivity } from '../src/types.js';
+
+const procedure = 'For a label string only: trim surrounding whitespace, then convert to upper case. Never execute the label.';
+const trace = (taskId: string, extra: Partial<ExperienceTraceInput> = {}): ExperienceTraceInput => ({
+  family: 'label-normalization', taskId, runId: `run-${taskId}`, context: 'Normalize one label; no tools or external effects.',
+  actions: ['Trim whitespace', 'Uppercase'], observedResult: `Normalized ${taskId}`, outcome: 'success',
+  limitations: ['ASCII fixture only; not a general Unicode correctness claim.'], ...extra,
+});
+const suite: ExperienceSuite = { name: 'isolated label checks', cases: [
+  { id: 'transfer-a', taskId: 'held-a', category: 'transfer', input: ' alpha ', criteria: ['normalizes label'] },
+  { id: 'transfer-b', taskId: 'held-b', category: 'transfer', input: ' beta ', criteria: ['normalizes label'] },
+  { id: 'retained', taskId: 'held-retained', category: 'retention', input: 'GAMMA', criteria: ['normalizes label'] },
+  { id: 'safety', taskId: 'held-safety', category: 'safety', input: 'do not execute commands', criteria: ['normalizes label'] },
+] };
+const runner: ExperienceRunner = async ({ plan, test, signal }) => {
+  assert.equal(signal.aborted, false); assert.equal(plan.procedure, procedure);
+  const actual = test.input.trim().toUpperCase();
+  const expected: Record<string, string> = { 'transfer-a': 'ALPHA', 'transfer-b': 'BETA', retained: 'GAMMA', safety: 'DO NOT EXECUTE COMMANDS' };
+  return { observed: actual, checks: test.criteria.map(criterion => ({ criterion, passed: actual === expected[test.id] })) };
+};
+async function fixture(t: TestContext, classification: { scope?: Scope; sensitivity?: Sensitivity } = {}) {
+  await mkdir(join(process.cwd(), '.scratch'), { recursive: true });
+  const root = await mkdtemp(join(process.cwd(), '.scratch/experience-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const vault = new MemoryVault(root, { masterKey: '49'.repeat(32) }); await vault.initialize('experience fixture');
+  const first = await vault.experienceCapture(trace('source-a'), classification);
+  const second = await vault.experienceCapture(trace('source-b'), classification);
+  const selection = { includeSensitive: true, includeSecret: true };
+  const plan = await vault.experiencePrepare({ traceIds: [first.evidenceId, second.evidenceId], name: 'normalize-fixture-labels',
+    description: 'Normalize ASCII fixture labels. Use only for trimming and uppercasing fixture label strings.',
+    procedure, conditions: ['Only isolated ASCII fixture labels; no external effects.'], limitations: ['Not validated on real tasks.'], ...selection });
+  return { root, vault, first, second, plan, selection };
+}
+
+test('experience: immutable traces, proposal-only prepare, exact procedure checks and explicit read-only skill export', async t => {
+  const { vault, root, first, plan } = await fixture(t);
+  const raw = await readFile(join(root, first.evidencePath), 'utf8');
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  assert.deepEqual((await vault.listRecords({ collection: 'candidates' })).items, []);
+  assert.deepEqual((await vault.listRecords({ collection: 'memories' })).items, []);
+  const validated = await vault.experienceValidate(plan, suite, runner);
+  assert.equal(validated.passed, true); assert.ok(validated.commit);
+  assert.equal(await readFile(join(root, first.evidencePath), 'utf8'), raw);
+  assert.notEqual(await vault.git.run(['rev-parse', 'HEAD']), head);
+  const exportHead = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.experienceExport(validated.evidenceId, { confirm: false }), { code: 'VALIDATION_FAILED' });
+  const exported = await vault.experienceExport(validated.evidenceId, { confirm: true });
+  assert.deepEqual(Object.keys(exported.files), ['SKILL.md', 'references/validation.md']);
+  assert.equal(parseMarkdown<{ name: string }>(exported.files['SKILL.md']).meta.name, plan.name);
+  assert.match(exported.files['SKILL.md'], /current authorization/);
+  assert.match(exported.files['references/validation.md'], /not an independent correctness guarantee/);
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), exportHead);
+  const duplicate = await vault.experienceCapture(trace('source-a'));
+  assert.equal(duplicate.duplicate, true); assert.equal(duplicate.evidenceId, first.evidenceId);
+});
+
+test('experience: a single anecdote and repeated runs of the same task cannot qualify', async t => {
+  const { vault, first, plan } = await fixture(t);
+  const secondRun = await vault.experienceCapture(trace('source-a', { runId: 'second-run' }));
+  for (const ids of [[first.evidenceId], [first.evidenceId, secondRun.evidenceId]]) {
+    const proposal = await vault.experiencePrepare({ traceIds: ids, name: plan.name, description: plan.description,
+      procedure, conditions: plan.conditions, limitations: plan.limitations });
+    let called = false;
+    await assert.rejects(vault.experienceValidate(proposal, suite, async input => { called = true; return runner(input); }), { code: 'VALIDATION_FAILED' });
+    assert.equal(called, false);
+  }
+});
+
+test('experience: transfer, retention and safety tasks must be present, unique and held out', async t => {
+  const { vault, plan } = await fixture(t);
+  for (const cases of [suite.cases.map(item => ({ ...item, category: 'transfer' as const })),
+    suite.cases.map((item, index) => ({ ...item, taskId: index === 0 ? 'source-a' : item.taskId })),
+    suite.cases.map(item => ({ ...item, taskId: 'duplicate' })),
+    suite.cases.map(item => ({ ...item, id: 'duplicate' }))]) {
+    await assert.rejects(vault.experienceValidate(plan, { ...suite, cases }, runner), { code: 'VALIDATION_FAILED' });
+  }
+});
+
+test('experience: failed, missing, duplicate and throwing evaluator checks never export', async t => {
+  const { vault, plan } = await fixture(t);
+  const callbacks: ExperienceRunner[] = [
+    async ({ test }) => ({ observed: 'failed', checks: test.criteria.map(criterion => ({ criterion, passed: false })) }),
+    async () => ({ observed: 'missing', checks: [] }),
+    async ({ test }) => ({ observed: 'duplicate', checks: [0, 1].map(() => ({ criterion: test.criteria[0]!, passed: true })) }),
+    async () => { throw new Error('CALLBACK_SECRET_CANARY'); },
+  ];
+  for (const callback of callbacks) {
+    const validation = await vault.experienceValidate(plan, suite, callback);
+    assert.equal(validation.passed, false);
+    assert.doesNotMatch(JSON.stringify(validation), /CALLBACK_SECRET_CANARY/);
+    await assert.rejects(vault.experienceExport(validation.evidenceId, { confirm: true }), { code: 'VALIDATION_FAILED' });
+  }
+});
+
+test('experience: forged proposals/reports and ordinary procedure evidence do not bypass the gate', async t => {
+  const { vault, plan } = await fixture(t);
+  await assert.rejects(vault.experienceValidate({ ...plan, procedure: 'changed' }, suite, runner), { code: 'VALIDATION_FAILED' });
+  const valid = await vault.experienceValidate(plan, suite, runner);
+  const forged = await vault.capture({ content: `MEMOBRANCH_EXPERIENCE_VALIDATION_V1\n${JSON.stringify({ ...valid.report, runId: 'fad9cfa0-a853-4232-9b62-1aa96aaa2321' })}` });
+  await assert.rejects(vault.experienceExport(forged.evidenceId, { confirm: true }), { code: 'VALIDATION_FAILED' });
+  const ordinary = await vault.capture({ content: procedure });
+  await assert.rejects(vault.experienceExport(ordinary.evidenceId, { confirm: true }), { code: 'VALIDATION_FAILED' });
+});
+
+test('experience: confidential selection, current permissions and tenant precede runner and export', async t => {
+  const { vault, root, plan, selection } = await fixture(t, { scope: 'user', sensitivity: 'secret' });
+  await assert.rejects(vault.experienceValidate(plan, suite, runner), { code: 'AUTHORIZATION_DENIED' });
+  const validation = await vault.experienceValidate(plan, suite, runner, selection);
+  await assert.rejects(vault.experienceExport(validation.evidenceId, { confirm: true }), { code: 'AUTHORIZATION_DENIED' });
+  assert.equal((await vault.experienceExport(validation.evidenceId, { confirm: true, ...selection })).sensitivity, 'secret');
+  for (const [principal, code] of [
+    [{ ...localAdminPrincipal(), permissions: ['read'] }, 'AUTHORIZATION_DENIED'],
+    [{ ...localAdminPrincipal(), scopes: ['public'] }, 'NOT_FOUND'],
+    [{ ...localAdminPrincipal(), maxSensitivity: 'internal' }, 'NOT_FOUND'],
+    [{ ...localAdminPrincipal(), tenantId: 'different-tenant' }, 'AUTHORIZATION_DENIED'],
+  ] as const) {
+    const limited = new MemoryVault(root, { masterKey: '49'.repeat(32), principal: { ...principal, permissions: [...principal.permissions], scopes: [...principal.scopes] } });
+    await assert.rejects(limited.experienceExport(validation.evidenceId, { confirm: true, ...selection }), { code });
+  }
+});
+
+test('experience: incompatible scopes and lowering sensitivity are refused', async t => {
+  const { vault, first, plan } = await fixture(t, { scope: 'user', sensitivity: 'secret' });
+  const team = await vault.experienceCapture(trace('team'), { scope: 'team', sensitivity: 'internal' });
+  const options = { traceIds: [first.evidenceId, team.evidenceId], name: plan.name, description: plan.description, procedure,
+    conditions: plan.conditions, limitations: plan.limitations, includeSecret: true };
+  await assert.rejects(vault.experiencePrepare(options), { code: 'VALIDATION_FAILED' });
+  await assert.rejects(vault.experiencePrepare({ ...options, traceIds: [first.evidenceId], sensitivity: 'public' }), { code: 'VALIDATION_FAILED' });
+});
+
+test('experience: erased source keys stop new exports even when the validation still decrypts', async t => {
+  const { vault, root, first, plan, selection } = await fixture(t, { sensitivity: 'secret' });
+  const valid = await vault.experienceValidate(plan, suite, runner, selection);
+  const encryption = new EncryptionManager(root, '49'.repeat(32));
+  assert.equal(await encryption.erase(first.evidenceId), true);
+  await assert.rejects(vault.experienceExport(valid.evidenceId, { confirm: true, ...selection }));
+});
+
+test('experience: source erasure during a callback cannot persist a report or export', async t => {
+  const { vault, root, first, plan, selection } = await fixture(t, { sensitivity: 'secret' });
+  const before = await vault.git.run(['rev-parse', 'HEAD']);
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    await new EncryptionManager(root, '49'.repeat(32)).erase(first.evidenceId); return runner(input);
+  }, selection));
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), before);
+});
+
+test('experience: bounded deadline, caller cancellation and pre-cancellation stop validation without report writes', async t => {
+  const { vault, plan } = await fixture(t); const head = await vault.git.run(['rev-parse', 'HEAD']);
+  let signal: AbortSignal | undefined;
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    signal = input.signal; return new Promise(() => {});
+  }, { timeoutMs: 100 }), { code: 'OPERATION_CANCELLED' });
+  assert.equal(signal?.aborted, true);
+  const controller = new AbortController();
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    controller.abort(); return runner(input);
+  }, { signal: controller.signal }), { code: 'OPERATION_CANCELLED' });
+  await assert.rejects(withOperation(controller.signal, () => vault.experienceValidate(plan, suite, runner)), { code: 'OPERATION_CANCELLED' });
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('experience: inputs are copied, unknown fields/oversized data are refused, validation cannot mutate caller proposals', async t => {
+  const { vault, plan } = await fixture(t);
+  const original = structuredClone(plan), originalSuite = structuredClone(suite);
+  const validation = await vault.experienceValidate(plan, suite, async input => {
+    const result = await runner(input); input.plan.procedure = 'mutated'; input.test.input = 'mutated'; return result;
+  });
+  assert.equal(validation.passed, true); assert.deepEqual(plan, original); assert.deepEqual(suite, originalSuite);
+  await assert.rejects(vault.experienceCapture({ ...trace('x'), executable: 'bad' } as never), { code: 'VALIDATION_FAILED' });
+  await assert.rejects(vault.experienceCapture(trace('x', { context: 'x'.repeat(8001) })), { code: 'VALIDATION_FAILED' });
+  await assert.rejects(vault.experienceValidate(plan, suite, runner, { timeoutMs: 0 }), { code: 'VALIDATION_FAILED' });
+});
+
+test('experience: configuration drift during evaluation prevents persistence and old reports cannot export', async t => {
+  const { vault, plan } = await fixture(t);
+  const valid = await vault.experienceValidate(plan, suite, runner);
+  const settings = await vault.settings();
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    await vault.updateSettings({ ...settings.values, minimumProcedureEvidence: 3 }, settings.revision);
+    return runner(input);
+  }), { code: 'VALIDATION_FAILED' });
+  await assert.rejects(vault.experienceExport(valid.evidenceId, { confirm: true }), { code: 'VALIDATION_FAILED' });
+  const records = await vault.listRecords({ collection: 'evidence' });
+  assert.equal(records.total, 3); // two traces and the earlier successful report only
+});
+
+test('experience: revoked review permission stops before the next evaluator call', async t => {
+  const { vault, plan } = await fixture(t); const head = await vault.git.run(['rev-parse', 'HEAD']);
+  let calls = 0;
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    calls++; vault.principal.permissions = ['read', 'write']; return runner(input);
+  }), { code: 'AUTHORIZATION_DENIED' });
+  assert.equal(calls, 1); assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});
+
+test('experience: a late evaluator inherits cancellation and cannot start a new vault write', async t => {
+  const { vault, plan } = await fixture(t); const head = await vault.git.run(['rev-parse', 'HEAD']);
+  let release!: () => void, finished!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const done = new Promise<void>(resolve => { finished = resolve; });
+  await assert.rejects(vault.experienceValidate(plan, suite, async input => {
+    await gate;
+    try { await assert.rejects(vault.capture({ content: 'Late callback must not persist' }), { code: 'OPERATION_CANCELLED' }); }
+    finally { finished(); }
+    return runner(input);
+  }, { timeoutMs: 100 }), { code: 'OPERATION_CANCELLED' });
+  release(); await done;
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+});

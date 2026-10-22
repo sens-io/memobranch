@@ -126,6 +126,8 @@ flowchart LR
 
 > **Web date selection (development source):** [Choose a timestamp in the merge workbench, inspect its resolved commit, then review separately](docs/web-dated-wiki-views.md). Preparation stays pinned to that hash; switching mode/date cancels old reads and invalidates approval without silently discarding your draft. Not yet published to npm.
 
+> **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Trusted host code evaluates actual behavior; selected passing checks are not proof of general effectiveness. No automatic installation or execution. Library and CLI only; not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

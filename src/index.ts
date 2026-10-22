@@ -28,3 +28,4 @@ export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOpt
 export type { WikiJobInput, WikiJobRunOptions, WikiJobStatus } from './wiki-jobs.js';
 export type { WikiSnapshot, WikiSnapshotOptions, WikiDatedSnapshotOptions } from './wiki-snapshot.js';
 export type { WikiMergeOptions, WikiMergeOrigin } from './wiki-merge.js';
+export type { ExperienceTraceInput, ExperiencePrepareOptions, ExperiencePlan, ExperienceSuite, ExperienceRunner, ExperienceSelection, ExperienceValidation } from './experience.js';
