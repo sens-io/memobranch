@@ -450,7 +450,8 @@ export class MemoryVault {
     return { ...result.value, commit: result.commit };
   }
 
-  async listRecords(options: { collection: 'evidence' | 'candidates' | 'memories'; offset?: number; limit?: number; query?: string; status?: string }) {
+  async listRecords(options: { collection: 'evidence' | 'candidates' | 'memories'; offset?: number; limit?: number; query?: string; status?: string;
+    selection?: ExperienceSelection }) {
     authorize(this.principal, 'read');
     const { collection, offset = 0, limit = 30, query = '', status = '' } = options;
     if (!['evidence', 'candidates', 'memories'].includes(collection) || !Number.isInteger(offset) || offset < 0 ||
@@ -458,7 +459,12 @@ export class MemoryVault {
       throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid record listing options');
     }
     const kind = collection === 'memories' ? 'memory' : collection === 'candidates' ? 'memory-candidate' : 'evidence';
-    const docs = (await this.readDirectory<Record<string, unknown>>(collection === 'memories' ? 'wiki' : collection))
+    if (options.selection && (Object.keys(options.selection).some(key => !['includeSensitive', 'includeSecret'].includes(key)) ||
+        Object.values(options.selection).some(value => value !== undefined && typeof value !== 'boolean'))) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid confidential record selection');
+    }
+    const selection = options.selection ? { includeSensitive: options.selection.includeSensitive === true, includeSecret: options.selection.includeSecret === true } : undefined;
+    const docs = (await this.readDirectory<Record<string, unknown>>(collection === 'memories' ? 'wiki' : collection, 'read', selection))
       .filter(doc => doc.meta.type === kind && (!status || doc.meta.status === status) &&
         (!query || `${String(doc.meta.key ?? '')}\n${doc.body}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())))
       .sort((a, b) => String(b.meta.createdAt).localeCompare(String(a.meta.createdAt)) || a.path.localeCompare(b.path));

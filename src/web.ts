@@ -11,6 +11,8 @@ import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
 import { wikiSnapshotToolSchema } from './wiki-tool.js';
+import { experiencePlanSchema, experienceSuiteSchema, type ExperienceRunner } from './experience.js';
+import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema } from './experience-tool.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -36,6 +38,27 @@ function route<T>(permission: Permission, schema: z.ZodType<T>, action: (vault: 
 }
 
 const routes: Record<string, Route> = {
+  'experience-capture': route('write', experienceCaptureToolSchema, (vault, { trace, scope, sensitivity }) => vault.experienceCapture(trace, {
+    ...(scope === undefined ? {} : { scope }), ...(sensitivity === undefined ? {} : { sensitivity }),
+  })),
+  'experience-prepare': route('write', experiencePrepareToolSchema, (vault, { proposal }) => vault.experiencePrepare(proposal)),
+  'experience-export': route('review', experienceExportToolSchema, (vault, { validationId, ...selection }) => vault.experienceExport(validationId, selection)),
+  'experience-records': route('read', z.object({ kind: z.enum(['trace', 'validation']),
+    offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(20),
+    includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
+  }).strict(), async (vault, { kind, offset, limit, ...selection }) => {
+    const identity = JSON.stringify(vault.principal); let tenantId = '';
+    const result = await settledRead(vault, async () => {
+      tenantId = (await vault.config()).tenantId;
+      return vault.listRecords({ collection: 'evidence', offset, limit, selection,
+        query: kind === 'trace' ? 'MEMOBRANCH_EXPERIENCE_TRACE_V1' : 'MEMOBRANCH_EXPERIENCE_VALIDATION_V1' });
+    });
+    authorize(vault.principal, 'read', { tenantId });
+    if (JSON.stringify(vault.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Experience listing authority changed');
+    for (const item of result.items) authorize(vault.principal, 'read', { tenantId,
+      scope: item.scope as typeof scopes[number], sensitivity: item.sensitivity as typeof sensitivities[number] });
+    return result;
+  }),
   session: route('read', empty, async vault => ({ principal: vault.principal, name: (await vault.settings()).values.name })),
   records: route('read', z.object({ collection: z.enum(['evidence', 'candidates', 'memories']),
     offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30),
@@ -110,10 +133,12 @@ export interface WebHandle {
 }
 
 /** Local single-operator adapter. Credentials are never accepted through request bodies. */
-export async function startWebServer(root: string, options: MemoryVaultOptions & { port?: number } = {}): Promise<WebHandle> {
+export interface WebOptions extends MemoryVaultOptions { port?: number; experienceRunner?: ExperienceRunner }
+export async function startWebServer(root: string, options: WebOptions = {}): Promise<WebHandle> {
   const port = options.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new AgentMemoryError('CONFIG_INVALID', 'Web port must be between 0 and 65535');
-  const { port: _port, ...vaultOptions } = options;
+  const { port: _port, experienceRunner, ...vaultOptions } = options;
+  if (experienceRunner !== undefined && typeof experienceRunner !== 'function') throw new AgentMemoryError('CONFIG_INVALID', 'Experience evaluator must be trusted application code');
   const initial = new MemoryVault(root, vaultOptions);
   await settledRead(initial, () => initial.settings(), true); // Recovery diagnostics remain reachable.
   const logo = await readFile(new URL('../assets/logo.png', import.meta.url));
@@ -123,6 +148,14 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
   const pending = new Set<Promise<void>>();
   const workers = new Set<AbortController>();
   const operations: Record<string, Route> = { ...routes,
+    'experience-status': route('read', empty, async () => ({ evaluatorAvailable: typeof experienceRunner === 'function' })),
+    'experience-validate': route('review', z.object({ plan: experiencePlanSchema, suite: experienceSuiteSchema,
+      includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(), ...confirmed,
+    }).strict(), (vault, { plan, suite, confirm: _confirm, timeoutMs, ...selection }) => {
+      if (!experienceRunner) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'No trusted experience evaluator is configured');
+      return vault.experienceValidate(plan, suite, experienceRunner, { ...selection, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    }),
     'jobs-run': route('write', z.object({ id: jobId, ...confirmed }).strict(), async (vault, data) => {
       if (stopping || workers.size) throw new AgentMemoryError('LOCK_TIMEOUT', 'A Web attempt is active or stopping');
       // Reserve before awaiting, including preflight, so simultaneous requests
@@ -195,7 +228,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     try {
       const chunks: Buffer[] = [];
       let size = 0;
-      const maximum = name === 'apply' || name === 'file' || name === 'preview' ? reviewRequestBytes : smallRequestBytes;
+      const maximum = name === 'apply' || name === 'file' || name === 'preview' || name === 'experience-validate' ? reviewRequestBytes : smallRequestBytes;
       for await (const chunk of req) {
         size += Buffer.byteLength(chunk);
         if (size > maximum) {
@@ -224,6 +257,8 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       if (name === 'jobs-review') assertReviewBytes(result);
       if (name === 'wiki-snapshot' || name === 'merge-prepare') assertReviewBytes({ result });
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
+      if (name === 'experience-prepare') assertReviewBytes({ plan: result, suite: { name: '', cases: [] }, confirm: true });
+      if (name === 'experience-export' || name === 'experience-validate') assertReviewBytes(result);
       send(res, 200, { result });
     } catch (error) {
       const normalized = toAgentMemoryError(error);
@@ -232,6 +267,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       send(res, status, { error: { code: normalized.code,
         message: normalized.code === 'VALIDATION_FAILED' ? 'Invalid input or stale state; reload and check the form' : normalized.code,
         ...(normalized.code === 'OPERATION_CANCELLED' && normalized.safeDetails?.committed ? { committed: normalized.safeDetails.committed } : {}),
+        ...(name === 'experience-validate' ? safeCompletedValidation(normalized.safeDetails?.completedValidation) : {}),
       } });
     } finally {
       clearTimeout(timeout);
@@ -264,6 +300,11 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     })();
     return stopped;
   } };
+}
+
+function safeCompletedValidation(value: unknown): { completedValidation?: { evidenceId: string; commit: string | null } } {
+  const parsed = z.object({ evidenceId: z.string().regex(/^ev-[a-f0-9]{12}$/), commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable() }).strict().safeParse(value);
+  return parsed.success ? { completedValidation: parsed.data } : {};
 }
 
 function assertReviewBytes(value: unknown): void {

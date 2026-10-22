@@ -61,3 +61,22 @@ combined grants; MCP retains its existing visible-tool/runtime-denial convention
 Harness capture defaults come from its existing server configuration. Existing
 invocation/shutdown cancellation and safe error behavior apply. Complete returned
 JSON is bounded below the default MCP stdio allowance and is never truncated.
+
+## Local management
+
+The experience page separates immutable observations, proposal preparation,
+trusted-host validation and separately confirmed plaintext export. A host may
+pass an `experienceRunner` function to `startWebServer`; this is application code,
+never a request/config executable path. The default server has no evaluator and
+does not pretend to validate. HTTP callers provide cases, not passing results.
+Existing core coverage, current-source, deadline and cancellation rules apply.
+
+The page's evidence listing searches experience markers, not proof of authenticity
+or a passing status. Sensitive/secret records require explicit selection before
+decryption. The core validates signed records when preparing/exporting. No new
+persistent entity, vault migration or required configuration is introduced.
+The page owns cancellation and discards stale results on edits/navigation/logout.
+Files are downloaded only after separate confirmation and explicit download clicks;
+editing the proposal or confidential selection invalidates prior export controls.
+Uncertain saves are not retried automatically. Safe completed-validation identifiers
+may be reported without returning report or source plaintext.

@@ -3,8 +3,9 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { Script } from 'node:vm';
 import { parse } from 'yaml';
-import { MemoryVault } from 'memobranch';
+import { MemoryVault, startWebServer } from 'memobranch';
 import { Context } from '@deepseek-ai/cordis';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
@@ -66,6 +67,34 @@ try {
   for (const [path, content] of Object.entries(exported.files)) await writeFile(join(folder, path), content, { flag: 'wx' });
   assert.equal(await readFile(join(folder, 'SKILL.md'), 'utf8'), skill);
   if (!keepSkill) {
+    const callWeb = async (handle, operation, data = {}) => {
+      const response = await fetch(handle.url + '/api/' + operation, { method: 'POST', headers: {
+        Origin: handle.url, Authorization: 'Bearer ' + handle.token, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(data) });
+      const json = await response.json(); if (!response.ok) throw new Error(json.error.code); return json.result;
+    };
+    const plain = await startWebServer(vault.root);
+    try {
+      assert.equal((await callWeb(plain, 'experience-status')).evaluatorAvailable, false);
+      await assert.rejects(callWeb(plain, 'experience-validate', { plan, suite, confirm: true }), /DEPENDENCY_UNAVAILABLE/);
+      const script = await (await fetch(plain.url + '/app.js')).text(); new Script(script);
+      assert.match(script, /经验与技能/); assert.match(script, /async function experiences/); assert.match(script, /showModal/);
+    } finally { await plain.stop(); }
+    const web = await startWebServer(vault.root, { experienceRunner: evaluate });
+    try {
+      const listed = await callWeb(web, 'experience-records', { kind: 'trace' }); assert.ok(listed.total >= 2);
+      const before = await readFile(join(vault.root, first.evidencePath), 'utf8');
+      const captured = await callWeb(web, 'experience-capture', { trace: trace('installed-web'), scope: 'project' }); assert.ok(captured.evidenceId);
+      const prepared = await callWeb(web, 'experience-prepare', { proposal: input });
+      await assert.rejects(callWeb(web, 'experience-validate', { plan: prepared, suite, confirm: true, runner: '/never/execute' }), /VALIDATION_FAILED/);
+      const checked = await callWeb(web, 'experience-validate', { plan: prepared, suite, confirm: true }); assert.equal(checked.passed, true);
+      const head = await vault.git.run(['rev-parse', 'HEAD']);
+      await assert.rejects(callWeb(web, 'experience-export', { validationId: checked.evidenceId }), /VALIDATION_FAILED/);
+      const output = await callWeb(web, 'experience-export', { validationId: checked.evidenceId, confirm: true });
+      assert.match(output.files['SKILL.md'], /current authorization/); assert.match(output.files['references/validation.md'], /cannot be recalled/);
+      assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head); assert.equal(await readFile(join(vault.root, first.evidencePath), 'utf8'), before);
+      console.log('Installed Web experience: bundled page, strict APIs, absent/default and trusted host evaluator, separate export and unchanged sources passed.');
+    } finally { await web.stop(); }
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));
     Object.assign(env, { AMEM_TENANT_ID: (await vault.config()).tenantId, AMEM_PERMISSIONS: 'read,write,review',
       AMEM_ALLOWED_SCOPES: 'user', AMEM_MAX_SENSITIVITY: 'internal' });

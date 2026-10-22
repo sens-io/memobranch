@@ -126,7 +126,7 @@ flowchart LR
 
 > **Web date selection (development source):** [Choose a timestamp in the merge workbench, inspect its resolved commit, then review separately](docs/web-dated-wiki-views.md). Preparation stays pinned to that hash; switching mode/date cancels old reads and invalidates approval without silently discarding your draft. Not yet published to npm.
 
-> **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Trusted host code evaluates actual behavior; selected passing checks are not proof of general effectiveness. Library, CLI and explicit MCP/Harness tools; no automatic installation or execution. Web workflow pending; not yet published to npm.
+> **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Library, CLI, MCP/Harness and local Web management; trusted host code evaluates actual behavior, not prefilled passing results. The default Web host has no evaluator. Selected passing checks are not proof of general effectiveness; no automatic installation or execution. Not yet published to npm.
 
 ### Requirements
 
@@ -434,7 +434,7 @@ Maintainers: [one-command npm release and recovery guide](docs/releasing.md).
 
 The Chinese-language UI is bundled locally with no CDN dependencies. It binds only to `127.0.0.1`, requires a token plus exact Host/Origin checks, and inherits the launching process's `AMEM_*` identity and access restrictions. Keep the token private; it is held only in page memory and rotates on restart. Desktop/browser refresh requires entering it again. Do not expose this console through a public proxy. Irreversible key erasure remains CLI-only in the Web workflow.
 
-Web requests are capped at 1 MiB, except explicit Wiki plan approval and answer filing (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
+Web requests are capped at 1 MiB, except explicit Wiki plan approval, answer filing and host-supplied experience validation (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
 
 Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and synchronous planning hold the cross-process vault lock so active writes settle before their results become visible. Durable jobs instead release it during model calls and validate again before storing results. Lock waits are bounded and cancellable; long synchronous planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
 

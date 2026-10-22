@@ -1,7 +1,8 @@
 # Experience checks and explicit skill export
 
-Development feature: library, CLI and explicit MCP/Harness tools. Not yet a Web workflow or a claim about
-real-world agent effectiveness. No model or external service is used by this path.
+Development feature: library, CLI, explicit MCP/Harness tools and local Web management.
+Not a claim about real-world agent effectiveness. Core management does not call a
+model or external service; any trusted evaluator's effects are the host's responsibility.
 
 An execution trace records `family`, `taskId`, `runId`, `context`, `actions`,
 `observedResult`, `outcome` (`success`, `failure` or `partial`) and `limitations`.
@@ -120,3 +121,38 @@ escaped-JSON allowance, failing rather than truncating skill instructions.
 Private selection, current source/key access, tenant and expiry checks still
 apply. Returning skill strings does not authorize sharing private material or
 performing the actions described by the skill.
+
+## Local Web workflow
+
+Open **经验与技能** in the local console. Capture is separately confirmed; enter
+source trace IDs and applicability/limitations to prepare the exact proposal.
+The list searches raw markers, not verified passing status. Sensitive and secret
+records are excluded before decryption until explicitly selected. Broken keys
+in opted-in records produce an error rather than silent partial results.
+
+The ordinary `amem web` server intentionally has no evaluator. Application hosts
+can call `startWebServer(root, { experienceRunner })` with their own trusted
+`ExperienceRunner` function. This is optional code, not a vault setting, script
+upload or CLI module path. It must actually exercise the proposed procedure and
+evaluate meaningful independent expectations; no universal evaluator is bundled.
+The host remains responsible for that callback's external effects and access.
+
+The page provides structured 4–32 checks with task IDs, input, category and named
+criteria. Running them requires read/write/review plus separate confirmation;
+it uses the core's deadline, cancellation, source checks and immutable reports.
+Failed checks are shown, not promoted. A stored validation ID can also be supplied
+after validating separately through the library.
+
+Export requires another confirmation and current source/key checks. The page
+shows complete plaintext and separate **下载 SKILL.md** / **下载 references/validation.md**
+buttons; it never downloads automatically, installs or executes. Browsers save the
+second file as `validation.md`: place it in `references/` yourself. No offline copy
+can be recalled. Editing the proposal/private selection removes old validation
+and download controls. Leaving/logout cancels owned requests and clears drafts;
+drafts are not browser-persisted. Stopping a save does not undo a completed commit.
+Uncertain saves are not automatically retried; inspect records and Git history.
+
+HTTP has strict bounded inputs. The validation request alone may use the existing
+16 MiB review allowance; capture/prepare/list/export requests remain at 1 MiB.
+The normal local token, Host/Origin, operation and resource grants apply. No new
+vault schema, cloud account, database, permission grant or required configuration.

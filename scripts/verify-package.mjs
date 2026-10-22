@@ -44,6 +44,7 @@ try {
     'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
     'dist/experience.js', 'dist/experience.d.ts', 'docs/validated-experience.md', 'docs/validated-experience_CN.md',
     'dist/experience-tool.js', 'dist/experience-tool.d.ts',
+    'dist/web-experience-ui.js', 'dist/web-experience-ui.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -126,10 +127,12 @@ try {
       previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
       type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
       type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
-      type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+      startWebServer, type WebOptions, type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
     export async function publicExperience(vault: MemoryVault, trace: ExperienceTraceInput,
       options: ExperiencePrepareOptions, suite: ExperienceSuite, runner: ExperienceRunner) {
       const selection: ExperienceSelection = { includeSensitive: false, includeSecret: false };
+      const webOptions: WebOptions = { port: 0, experienceRunner: runner };
+      const web = await startWebServer(vault.root, webOptions); await web.stop();
       const recorded = await vault.experienceCapture(trace, { scope: 'project', sensitivity: 'internal' });
       const plan: ExperiencePlan = await vault.experiencePrepare({ ...options, traceIds: [recorded.evidenceId] });
       const result = await vault.experienceValidate(plan, suite, runner, { ...selection, timeoutMs: 30000, signal: new AbortController().signal });

@@ -23,7 +23,7 @@ export type { WebImportPlan, WebImportOptions, WebImportProgress, WebPreviewOpti
 export { previewPdfImport, applyPdfImport, readPdfImportPlan, serializePdfImportPlan, readPdfOriginal } from './pdf-import.js';
 export type { PdfImportPlan, PdfImportOptions, PdfPreviewOptions } from './pdf-import.js';
 export { startWebServer } from './web.js';
-export type { WebHandle } from './web.js';
+export type { WebHandle, WebOptions } from './web.js';
 export type { CaptureOptions, CaptureResult, ConsolidationResult, MemoryVaultOptions, RecallResult } from './vault.js';
 export type { WikiJobInput, WikiJobRunOptions, WikiJobStatus } from './wiki-jobs.js';
 export type { WikiSnapshot, WikiSnapshotOptions, WikiDatedSnapshotOptions } from './wiki-snapshot.js';

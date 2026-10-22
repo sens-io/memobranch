@@ -44,9 +44,10 @@ class Element {
   addEventListener(type: string, listener: Listener) { this.listeners.set(type, [...this.listeners.get(type) ?? [], listener]); }
   async fire(type: string) { if (type === 'click' && this.disabled) return; for (const listener of this.listeners.get(type) ?? []) await listener({ preventDefault() {}, stopPropagation() {} }); }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
-  querySelectorAll(selector: string): Element[] { return nodes(this).slice(1).filter(node => selector.startsWith('.') ? node.className.split(' ').includes(selector.slice(1)) : node.tagName === selector); }
+  querySelectorAll(selector: string): Element[] { return nodes(this).slice(1).filter(node => selector.split(',').some(part => part.trim().startsWith('.') ? node.className.split(' ').includes(part.trim().slice(1)) : node.tagName === part.trim())); }
   closest(selector: string): Element | null { return this.tagName === selector ? this : this.parent?.closest(selector) ?? null; }
   focus() {}
+  click() { void this.fire('click'); }
   showModal() { this.open = true; }
   close() { this.open = false; for (const listener of this.listeners.get('close') ?? []) listener({ preventDefault() {}, stopPropagation() {} }); }
 }
@@ -779,4 +780,91 @@ test('Web jobs UI: cancellation state, retry limits, filtering and safe list err
   const target = await failed.run('jobs()') as Element; failed.app.append(target);
   assert.match(target.textContent, /未提供解密密钥/); assert.ok(button(target, '重新读取任务'));
   failed.run('pageCleanup()');
+});
+
+const experiencePlan = { name: 'normalize-ascii-labels', scope: 'user', sensitivity: 'internal',
+  expiresAt: '2099-01-01T00:00:00.000Z', procedure: 'Trim and uppercase <script>untrusted()</script>', proof: 'signed', sources: [] };
+const experienceValidation = { evidenceId: 'ev-123456789abc', passed: true, report: { results: [
+  { caseId: 'case-1', status: 'completed', observed: '<script>observed()</script>', checks: [{ criterion: 'equal', passed: true }] },
+] } };
+const experienceFiles = { files: { 'SKILL.md': '---\nname: normalize-ascii-labels\n---\nPrivate body', 'references/validation.md': 'Exact selected checks.' } };
+async function experienceView(ui: ReturnType<typeof harness>) { const output=await ui.run('experiences()') as Element;ui.app.append(output);return output; }
+async function prepareExperience(output: Element) {
+  const form=named(output,'traceIds').closest('form')!;
+  for(const name of ['traceIds','name','description','procedure','conditions','limitations'])named(form,name).value=name==='traceIds'?'ev-111111111111\nev-222222222222':name;
+  await form.fire('submit');await settle();
+}
+async function submitExperience(ui: ReturnType<typeof harness>, form: Element, accept=true) {
+  const submitted=form.fire('submit');await settle();
+  await button(ui.body,accept?'确认继续':'取消').fire('click');await submitted;await settle();
+}
+
+test('experience UI: no default evaluator, honest raw marker listing, opt-in and separate capture confirmation', async () => {
+  const ui=harness(request=>request.operation==='experience-status'?success({evaluatorAvailable:false}):request.operation==='experience-records'?success({total:1,offset:0,limit:20,items:[{id:'ev-111111111111',scope:'user',sensitivity:'internal',snippet:'<script>notExecutable()</script>'}]}):success({evidenceId:'ev-222222222222'}));
+  const output=await experienceView(ui);assert.match(output.textContent,/当前宿主未提供验证程序/);assert.equal(button(output,'确认运行宿主验证').disabled,true);
+  assert.equal(ui.requests.length,1,'opening must not capture, validate, list private data or export');
+  await button(output,'读取记录').fire('click');
+  assert.deepEqual(ui.requests[1]!.data,{kind:'trace',offset:0,includeSensitive:false,includeSecret:false});assert.match(output.textContent,/列表标记不代表验证通过/);
+  assert.match(output.textContent,/<script>notExecutable\(\)<\/script>/);
+  await button(output,'加入候选来源').fire('click');assert.equal(named(output,'traceIds').value,'ev-111111111111');
+  const capture=named(output,'family').closest('form')!;await submitExperience(ui,capture,false);assert.equal(ui.requests.length,2);
+  await submitExperience(ui,capture);assert.equal(ui.requests[2]!.operation,'experience-capture');assert.match(output.textContent,/已保存经历：ev-222222222222/);
+});
+
+test('experience UI: exact candidate and case inputs, separate export, explicit downloads and edit invalidation', async () => {
+  const ui=harness(request=>success(request.operation==='experience-status'?{evaluatorAvailable:true}:request.operation==='experience-prepare'?experiencePlan:request.operation==='experience-validate'?experienceValidation:experienceFiles));
+  let downloads=0;ui.context.Blob=Blob;ui.context.URL={createObjectURL:()=>{downloads++;return 'blob:synthetic';},revokeObjectURL:()=>{}};
+  const output=await experienceView(ui);await prepareExperience(output);
+  assert.equal(button(output,'确认运行宿主验证').disabled,false);assert.match(output.textContent,/Trim and uppercase <script>untrusted\(\)<\/script>/);
+  const form=named(output,'suiteName').closest('form')!;named(form,'suiteName').value='Independent checks';
+  const checkFields=nodes(form).filter(node=>node.tagName==='fieldset');assert.equal(checkFields.length,4);
+  assert.deepEqual(checkFields.map(item=>named(item,'category').value),['transfer','transfer','retention','safety']);
+  for(const item of checkFields){named(item,'input').value='Input';named(item,'criteria').value='first criterion\nsecond criterion';}
+  await submitExperience(ui,form,false);assert.equal(ui.requests.length,2);
+  await submitExperience(ui,form);
+  const validation=ui.requests.find(request=>request.operation==='experience-validate')!;
+  assert.deepEqual(validation.data.plan,experiencePlan);assert.equal(validation.data.confirm,true);assert.equal(validation.data.suite.cases.length,4);
+  assert.deepEqual(validation.data.suite.cases[0].criteria,['first criterion','second criterion']);assert.equal('runner' in validation.data,false);assert.equal('passed' in validation.data,false);
+  assert.equal(named(output,'validationId').value,experienceValidation.evidenceId);assert.match(output.textContent,/不是通用能力保证/);
+  assert.equal(ui.requests.some(request=>request.operation==='experience-export'),false,'validation never auto exports');
+  const exportForm=named(output,'validationId').closest('form')!;await submitExperience(ui,exportForm,false);assert.equal(ui.requests.length,3);
+  await submitExperience(ui,exportForm);assert.equal(downloads,0,'export is not automatic download');
+  const download=button(output,'下载 SKILL.md');await download.fire('click');assert.equal(downloads,1);
+  const proposal=named(output,'traceIds').closest('form')!;named(proposal,'procedure').value='Edited';await proposal.fire('input');
+  assert.equal(button(output,'确认运行宿主验证').disabled,true);assert.equal(named(output,'validationId').value,'');assert.equal(nodes(output).includes(download),false);
+  await download.fire('click');assert.equal(downloads,1,'detached old download cannot export a stale copy');
+});
+
+test('experience UI: stopped or navigation-late work cannot revive a plan or export controls, drafts stay intact', async () => {
+  const pending=deferred<Response>();
+  const ui=harness(request=>request.operation==='experience-status'?success({evaluatorAvailable:true}):pending.promise);
+  const output=await experienceView(ui);await prepareExperience(output);
+  const request=ui.requests.find(item=>item.operation==='experience-prepare')!;assert.equal(named(output,'procedure').disabled,true);
+  await button(output,'停止当前操作').fire('click');assert.equal(request.signal?.aborted,true);assert.equal(named(output,'procedure').value,'procedure');
+  pending.resolve(success(experiencePlan));await settle();assert.equal(button(output,'确认运行宿主验证').disabled,true);assert.doesNotMatch(output.textContent,/候选已生成/);
+  const delayed=deferred<Response>();const other=harness(request=>request.operation==='experience-status'?success({evaluatorAvailable:true}):delayed.promise);
+  const view=await experienceView(other);await prepareExperience(view);other.run('pageCleanup(); generation++');
+  delayed.resolve(success(experiencePlan));await settle();assert.equal(button(view,'确认运行宿主验证').disabled,true);
+});
+
+test('experience UI: read-only identities, confidential selection and failures never offer installation or implicit retry', async () => {
+  const reader=harness(request=>request.operation==='experience-status'?success({evaluatorAvailable:true}):failure('ENCRYPTION_KEY_UNAVAILABLE'),['read']);
+  const output=await experienceView(reader);assert.equal(nodes(output).some(node=>node.name==='traceIds'),false);
+  assert.equal(button(output,'确认运行宿主验证').disabled,true);assert.equal(button(output,'确认读取技能文件').disabled,true);
+  await button(output,'读取记录').fire('click');assert.match(output.textContent,/未提供解密密钥/);assert.equal(reader.requests.length,2);
+  const ui=harness(request=>success(request.operation==='experience-status'?{evaluatorAvailable:true}:request.operation==='experience-prepare'?experiencePlan:experienceFiles));
+  ui.run("principal.maxSensitivity='secret'");const view=await experienceView(ui);await prepareExperience(view);
+  named(view,'validationId').value='ev-123456789abc';await named(view,'validationId').fire('input');await submitExperience(ui,named(view,'validationId').closest('form')!);assert.ok(button(view,'下载 SKILL.md'));
+  named(view,'includeSecret').checked=true;await named(view,'includeSecret').fire('change');assert.equal(named(view,'validationId').value,'');assert.equal(button(view,'确认运行宿主验证').disabled,true);
+  assert.equal(nodes(view).some(node=>node.tagName==='button'&&node.textContent==='下载 SKILL.md'),false);
+  assert.equal(ui.requests.some(request=>/install|execute/.test(request.operation)),false);
+});
+
+test('experience UI: navigation closes an unconfirmed dialog without starting validation', async () => {
+  const ui=harness(request=>success(request.operation==='experience-status'?{evaluatorAvailable:true}:experiencePlan));
+  const output=await experienceView(ui);await prepareExperience(output);
+  const pending=named(output,'suiteName').closest('form')!.fire('submit');await settle();
+  const dialog=find(ui.body,node=>node.tagName==='dialog');assert.equal(dialog.open,true);assert.match(dialog.textContent,/候选：normalize-ascii-labels/);
+  ui.run('pageCleanup(); generation++');await pending;await settle();
+  assert.equal(dialog.isConnected,false);assert.equal(ui.requests.some(request=>request.operation==='experience-validate'),false);
 });
