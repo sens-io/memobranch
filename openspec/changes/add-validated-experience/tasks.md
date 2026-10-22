@@ -12,7 +12,7 @@
 - [x] Cover single anecdotes, duplicate training tasks, missing held-out/retention/safety cases and forged reports.
 - [x] Cover failed checks, timeout, cancellation, concurrent mutations and immutable raw evidence.
 - [x] Validate generated skill format and exercise an isolated synthetic workflow.
-- [ ] Run retained checks under both Git defaults and installed Node 20/22 package consumers.
-- [ ] Independently review fixed commits and resolve confirmed findings.
+- [x] Run core/CLI retained checks under both Git defaults and installed Node 20/22 package consumers; repeat for adapter changes.
+- [x] Independently review fixed core/CLI commits and resolve confirmed findings; review subsequent adapters separately.
 
 Core/CLI checkpoint and exact remaining scope: [verification record](../../../docs/validated-experience-core-verification-2026-10-22.md).

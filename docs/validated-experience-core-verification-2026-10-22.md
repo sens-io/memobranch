@@ -2,6 +2,7 @@
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Baseline: `601efb2ef5291a339bc6d575d12c48df3e201477`.
+Work began on 2026-10-22; final local checks completed on 2026-10-23.
 
 This is a **core and CLI checkpoint**, not completion of the remaining roadmap.
 MCP/Harness/Web experience management, historical availability reconstruction,
@@ -16,8 +17,9 @@ chosen local/Git approach, without a new cloud account service.
 | `e6275126b300082e8470ef6a6981d520eb1a7958` | Immutable experience evidence, signed proposal, trusted-host validation, explicit skill files, CLI, package checks and OpenSpec | Not pushed |
 | `431ec569d0e7c8e4c589b8f3f79bb89833c35c19` | R1/R2: synchronous final authority/time check, source selection before decryption, regression tests | Not pushed |
 | `fb9a9973f08a0b07a2e7c68f659d27964c56731d` | R3/R4: final tenant checks and safe saved-record identifiers on post-commit refusal | Not pushed |
+| `db1014f833a54357b7ca2a1008221c5ea06e628f` | Checkpoint scope, progress and P3 English wording correction; runtime unchanged | Not pushed |
 
-No database change, data migration, new required configuration, model service,
+No database change, data migration, configuration change, model service,
 real vault grant, deployment, push or npm publication. The optional trusted-host
 callback is application code, not an agent-selected executable. No generated
 skill is installed or automatically executed.
@@ -28,10 +30,10 @@ skill is installed or automatically executed.
 | --- | --- |
 | Build and test types | Passed at `fb9a9973` |
 | Targeted core boundary tests | 19/19, zero failure/cancellation/skip; `.scratch/experience-targeted-fix-tenants.log` |
-| Full retained suite, Node 22 / Git main | Pending final-candidate rerun |
-| Full retained suite, Node 22 / Git master | Pending final-candidate rerun |
-| Strict OpenSpec 1.0.2 | 27/27 at the runtime candidate; `.scratch/experience-specs.log`; final acceptance text to be rechecked |
-| Production dependency audit | Pending |
+| Full retained suite, Node 22 / Git main | 769 functional + 14 release + 10 evaluation = 793 passed; zero failure/cancellation/skip; `.scratch/experience-final-full-main.log` |
+| Full retained suite, Node 22 / Git master | 769 functional + 14 release + 10 evaluation = 793 passed; zero failure/cancellation/skip; `.scratch/experience-final-full-master.log` |
+| Strict OpenSpec 1.0.2 | 27/27; `.scratch/experience-final-specs.log`; acceptance checkbox text recheck recorded separately |
+| Production dependency audit | Zero known production vulnerabilities; `.scratch/experience-final-audit.json` |
 | Same installed tar, Node 22.17.0 / Git main | Passed, 359 packed entries; `.scratch/experience-package-node22.log` |
 | Same installed tar, exact minimum Node 20.0.0 / Git master | Passed, 359 packed entries; `.scratch/experience-package-node20.log`; before/after SHA-256 files compare equal |
 | Skill format validator | `Skill is valid!`; `.scratch/experience-skill-format.log` |
@@ -72,7 +74,7 @@ in full, skipped 0, against their fixed commits.
 | R2 | P2 | `kevin/knowledge-expansion` | Whole-directory materialization decrypted unrelated private evidence before explicit selection and let an unrelated erased key block reads | Closed in `431ec56`; unique target envelope, authorization/opt-in before target decryption; real private decrypt-count and unrelated-key regressions |
 | R3 | P2 | `kevin/knowledge-expansion` | Final return/persistence authorization omitted current tenant after async cleanup | Closed in `fb9a9973`; tenant-bound final checks, source-read and cleanup regressions |
 | R4 | P2 | `kevin/knowledge-expansion` | A completed save could be reported as an unidentified failure or return report plaintext after access withdrawal | Closed in `fb9a9973`; original error code plus only saved evidence ID/commit; real completed-transaction regressions |
-| R5 | P3 | `kevin/knowledge-expansion` | English explanation ambiguously described normal pre-expiry commit completion as an error condition | Wording corrected in the checkpoint documentation change; final text review pending |
+| R5 | P3 | `kevin/knowledge-expansion` | English explanation ambiguously described normal pre-expiry commit completion as an error condition | Closed in `db1014f`, independently confirmed by the document reviewer |
 
 The core reviewer independently replayed ten final lifecycle scenarios with real
 engine code and in-memory ports, confirming R3/R4 closure and no other confirmed
@@ -80,6 +82,14 @@ runtime issue in its reviewed scope. Its port/lock/materializer substitutes do
 not prove real disk, encryption or OS-lock behavior; those are separately covered
 by the executing test suite. The other reviewer read the generated skill and
 validation reference and performed only a text exercise, not command execution.
+The four-file checkpoint `db1014f` was then independently reviewed, 4/4 and
+skipped 0, confirming R5 closed and that pending adapters/roadmap items were not
+misrepresented as complete. Final numerical/status text below is not runtime code.
+
+The `agent-engineering` memory and evaluation guides informed the separation of
+caller observations, held-out checks and reusable procedures. `skill-creator`
+informed applicability/authority limits and the format check. Neither skill
+authorized installation, external evaluation, account grants or publication.
 
 ## Limits and next step
 
@@ -91,5 +101,6 @@ Plaintext exports cannot be recalled. Current access/key checks stop new exports
 not offline copies. No Linux/hosted CI, real provider quality or production rollout
 is claimed by this local checkpoint.
 
-Finish final retained/package/audit/text checks, then continue the adapter and
-management portion of batch 1. Do not close the overall goal at this checkpoint.
+Core/CLI retained, package, audit and fixed-runtime review checks are complete.
+Continue the adapter and management portion of batch 1. Re-run relevant retained
+checks for those changes; do not close the overall goal at this checkpoint.

@@ -11,7 +11,7 @@ features, arbitrary documents, or real-world skill effectiveness are proven.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
-| 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Core/CLI implemented; final retained verification running. MCP/Harness and Web remain pending. See [checkpoint](validated-experience-core-verification-2026-10-22.md). |
+| 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Core/CLI accepted locally on 2026-10-23; MCP/Harness and Web remain pending. See [checkpoint](validated-experience-core-verification-2026-10-22.md). |
 | 2 | As-known-at reconstruction with explicit availability evidence; never infer knowledge from mutable Git dates | Pending |
 | 3 | Local / Git pinned, read-only sharing under explicitly configured identities, current access and source checks | Pending |
 | 4 | Cross-vault / branch import and merge preview, separate approval, preserved origin and classification | Pending |
