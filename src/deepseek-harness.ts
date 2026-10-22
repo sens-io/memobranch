@@ -105,9 +105,10 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   if (granted(principal, 'read')) {
     ctx.tools.register(defineTool({
       name: 'memory_wiki_snapshot',
-      description: 'Read 1–25 complete Wiki pages and historical dependencies at a full local ancestor commit. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model, import or historical-truth claim. Complete escaped review is limited to 9 MiB.',
+      description: 'Read 1–25 complete Wiki pages and dependencies using exactly one full local ancestor commit OR at ISO timestamp. Date lookup scans at most 2000 current first-parent commits by committer time, not as-known-at truth. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model or import. Complete escaped review is limited to 9 MiB.',
       parameters: {
-        commit: { type: 'string', required: true, description: 'Full lowercase 40/64-character local ancestor commit hash; no symbolic refs or fetching.' },
+        commit: { type: 'string', description: 'Full lowercase 40/64-character local ancestor hash; exactly one of commit/at. No symbolic refs or fetching.' },
+        at: { type: 'string', description: 'ISO timestamp with timezone and at most millisecond precision; exactly one of at/commit. Uses Git committer time, not fact-effective dates.' },
         pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
         includeSensitive: { type: 'boolean', description: 'Explicitly select sensitive content; current authority is still required.' },
         includeSecret: { type: 'boolean', description: 'Explicitly select secret content; current authority and keys are still required.' },

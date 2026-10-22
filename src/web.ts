@@ -10,6 +10,7 @@ import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
+import { wikiSnapshotToolSchema } from './wiki-tool.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -57,9 +58,7 @@ const routes: Record<string, Route> = {
   'settings-save': route('admin', z.object({ values: settingsSchema, revision: z.string().regex(/^[a-f0-9]{64}$/), ...confirmed }).strict(),
     (vault, data) => vault.updateSettings(data.values, data.revision)),
   catalog: route('read', empty, vault => vault.wikiCatalog()),
-  'wiki-snapshot': route('read', z.object({ commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
-    pageKeys: z.array(z.string().min(1).max(200)).min(1).max(25), includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
-  }).strict(), (vault, data) => vault.wikiSnapshot(data)),
+  'wiki-snapshot': route('read', wikiSnapshotToolSchema, (vault, data) => vault.wikiSnapshot(data)),
   'merge-prepare': route('write', mergeOptionsSchema.omit({ signal: true }), (vault, data) => vault.wikiMergePrepare(data)),
   'jobs-list': route('read', empty, vault => vault.wikiJobs()),
   'jobs-show': route('read', jobReference, (vault, data) => vault.wikiJob(data.id)),

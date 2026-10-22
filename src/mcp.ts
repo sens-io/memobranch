@@ -132,7 +132,7 @@ function createServer(): McpServer {
 
   server.registerTool('memory_wiki_snapshot', {
     title: 'Read a committed Wiki revision',
-    description: 'Read 1–25 complete Wiki pages and historical dependencies from a full local ancestor commit. Current authority, withdrawal, expiry and explicit confidential selection still apply. No checkout, model call, import or historical-truth claim. Complete escaped review is limited to 9 MiB.',
+    description: 'Read 1–25 complete Wiki pages and historical dependencies. Select exactly one full local ancestor commit OR at ISO timestamp (first matching committer time in at most 2000 current first-parent commits, not as-known-at truth). Current authority, withdrawal, expiry and explicit confidential selection apply. No checkout, model call or import. Complete escaped review is limited to 9 MiB.',
     inputSchema: wikiSnapshotToolSchema,
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => wikiToolResult(await vault.wikiSnapshot(input))));

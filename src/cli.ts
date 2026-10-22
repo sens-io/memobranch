@@ -273,10 +273,12 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
     case 'snapshot': {
+      if (args.flags.has('commit') === args.flags.has('at')) throw new Error('Use exactly one of --commit or --at');
+      const selector = args.flags.has('at') ? { at: requiredFlag(args, 'at') } : { commit: requiredFlag(args, 'commit') };
       const controller = new AbortController(), stop = () => controller.abort();
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
       try { await withOperation(controller.signal, async () => print(await vault.wikiSnapshot({
-        commit: requiredFlag(args, 'commit'), pageKeys: input.positionals,
+        ...selector, pageKeys: input.positionals,
         includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
       }))); } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
@@ -593,7 +595,7 @@ Usage:
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove
   amem wiki catalog | rules | migrate
-  amem wiki snapshot <page-key...> --commit FULL_HASH [--include-sensitive] [--include-secret]
+  amem wiki snapshot <page-key...> (--commit FULL_HASH | --at ISO_TIMESTAMP) [--include-sensitive] [--include-secret]
   amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]

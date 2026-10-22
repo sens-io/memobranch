@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { AgentMemoryError } from './errors.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
-import { snapshotOptionsSchema } from './wiki-snapshot.js';
+import { datedSnapshotOptionsSchema, snapshotOptionsSchema } from './wiki-snapshot.js';
 
 // Both protocols use the core's strict inputs, but cancellation belongs to the host.
-export const wikiSnapshotToolSchema = snapshotOptionsSchema.omit({ signal: true })
+export const wikiSnapshotToolSchema = z.union([snapshotOptionsSchema.omit({ signal: true }), datedSnapshotOptionsSchema.omit({ signal: true })])
   .refine(value => new Set(value.pageKeys).size === value.pageKeys.length, 'Use distinct page keys');
 export const wikiMergeToolSchema = mergeOptionsSchema.omit({ signal: true });
 
