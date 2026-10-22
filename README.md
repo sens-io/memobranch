@@ -124,6 +124,8 @@ flowchart LR
 
 > **Recorded-time Wiki views (development source):** [Select a retained local version by explicit date](docs/dated-wiki-views.md), using first-parent Git committer time and current access checks. Returns the actual hash and complete content; not as-known-at truth or a historical model answer. Not yet published to npm.
 
+> **Web date selection (development source):** [Choose a timestamp in the merge workbench, inspect its resolved commit, then review separately](docs/web-dated-wiki-views.md). Preparation stays pinned to that hash; switching mode/date cancels old reads and invalidates approval without silently discarding your draft. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later

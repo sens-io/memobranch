@@ -11,6 +11,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { LlmClient, MemoryVault, startWebServer } from 'memobranch';
 import * as plugin from 'memobranch/deepseek-harness';
+import { verifyInstalledWebDatedWiki } from './verify-installed-web-dated-wiki.mjs';
 
 const exec = promisify(execFile), pageKey = 'entity:installed-dated-wiki', masterKey = '86'.repeat(32);
 const at = '2026-01-15T08:00:00+08:00';
@@ -84,6 +85,7 @@ try {
     Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
   }, body: JSON.stringify({ at, pageKeys: [pageKey] }) });
   assert.equal(response.status, 200); check((await response.json()).result, example);
+  await verifyInstalledWebDatedWiki(web, example, at);
 } finally { await web.stop(); }
 assert.equal(example.calls(), count); assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
 assert.deepEqual(await readFile(join(vault.git.gitDir, 'index')), index);

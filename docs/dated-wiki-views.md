@@ -17,7 +17,7 @@ const view = await vault.wikiSnapshot(options);
 
 Use **exactly one** selector: existing `commit` or new `at` (CLI `--commit` or `--at`). Both/neither are errors. `at` requires a valid ISO timestamp with timezone and at most three fractional-second digits; it normalizes to UTC. A date without time/timezone is rejected rather than guessed as local midnight. Old explicit-hash calls retain their result shape and do not acquire a `selection` field.
 
-MCP and Harness use the existing `memory_wiki_snapshot` with `{ "at": "2026-01-15T12:00:00+08:00", "pageKeys": ["entity:atlas"] }`. The authenticated HTTP route is still POST `/api/wiki-snapshot` with the same body, existing token and Origin checks. There is no new automatic tool, date control in the Web interface or server-side filesystem reader. `signal` belongs to the local library or enclosing host request, never JSON tool/HTTP arguments. The existing Web merge workbench still reads explicit hashes.
+MCP and Harness use the existing `memory_wiki_snapshot` with `{ "at": "2026-01-15T12:00:00+08:00", "pageKeys": ["entity:atlas"] }`. The authenticated HTTP route is still POST `/api/wiki-snapshot` with the same body, existing token and Origin checks. There is no new automatic tool or server-side filesystem reader. `signal` belongs to the local library or enclosing host request, never JSON tool/HTTP arguments. The [Web merge workbench](web-dated-wiki-views.md) additionally offers explicit commit/date selection, displays the resolved hash and prepares only against that hash; no date-based automatic merge is added.
 
 ## Exact selection rule
 

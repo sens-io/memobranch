@@ -41,7 +41,7 @@ try {
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
-    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md',
+    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -244,6 +244,7 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(merge.stdout);
+  await writeFile(join(consumer, 'verify-installed-web-dated-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-web-dated-wiki.mjs')));
   await writeFile(join(consumer, 'verify-installed-dated-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-dated-wiki.mjs')));
   const datedWiki = await exec(process.execPath, ['verify-installed-dated-wiki.mjs'], {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
