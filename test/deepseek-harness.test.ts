@@ -40,6 +40,7 @@ test('plugin exposes only principal-granted categories and executes real vault c
     const tools = loadPlugin(defaultConfig(''), disposers);
     assert.deepEqual([...tools.keys()].sort(), [
       'memory_at', 'memory_capture', 'memory_config', 'memory_consolidate', 'memory_context', 'memory_doctor',
+      'memory_experience_capture', 'memory_experience_export', 'memory_experience_prepare',
       'memory_explain', 'memory_forget', 'memory_get', 'memory_history', 'memory_maintenance', 'memory_policy',
       'memory_propose', 'memory_recall', 'memory_recover', 'memory_reindex', 'memory_review', 'memory_search', 'memory_source_timeline', 'memory_version',
       'memory_wiki_apply', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_lint',
