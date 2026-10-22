@@ -41,7 +41,7 @@ import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInpu
 import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
 import { WikiProof } from './wiki-proof.js';
 import type { WikiPageMeta } from './wiki-types.js';
-import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions } from './wiki-snapshot.js';
+import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
 import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
 import { reviewDiff } from './review-diff.js';
@@ -133,7 +133,7 @@ export class MemoryVault {
   }
 
   async wikiCatalog() { return this.wikiEngine().catalog(); }
-  async wikiSnapshot(options: WikiSnapshotOptions): Promise<WikiSnapshot> {
+  async wikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<WikiSnapshot> {
     authorize(this.principal, 'read');
     const input = snapshotOptions(options);
     let validateTime = () => {};
@@ -146,7 +146,7 @@ export class MemoryVault {
           throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending erasure before reading a Wiki snapshot');
         }
       }
-      const reader = await snapshotReader(this.git, input.commit, config);
+      const reader = await snapshotReader(this.git, input.at === undefined ? input.commit : { at: input.at }, config);
       const selection = { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true };
       const available = (await this.wikiEngine().referencePages(selection)).filter(page => page.meta.type !== 'memory' || factEffectiveAt(page.meta));
       const keyOf = (page: MarkdownDocument<MemoryMeta | WikiPageMeta>) => page.meta.type === 'memory' ? `legacy:${page.meta.id}` : page.meta.key;
@@ -208,13 +208,15 @@ export class MemoryVault {
         }
       };
       validateTime();
-      return { version: 1, kind: 'wiki-revision-view', commit: input.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
+      return { version: 1, kind: 'wiki-revision-view', commit: reader.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
+        ...(reader.selection ? { selection: reader.selection } : {}),
         pages: pages.sort((a, b) => a.path.localeCompare(b.path)).map(page => ({ ...page, currentRevision: current.get(keyOf(page))!.meta.revision })),
         sources: [...documents.values()].filter(document => document.meta.type === 'evidence').map(document => ({ id: String(document.meta.id), path: document.path, sha256: String(document.meta.sha256) })).sort((a, b) => a.path.localeCompare(b.path)),
         rules: [...documents.values()].filter(document => document.meta.type === 'wiki-rules').map(document => ({ id: String(document.meta.id), revision: Number(document.meta.revision) }))
           .concat(pages.some(page => page.meta.type === 'wiki-page' && page.meta.rules[builtinWikiRuleId] === 1) ? [{ id: builtinWikiRuleId, revision: 1 }] : []).sort((a, b) => a.id.localeCompare(b.id)),
         warnings: ['Historical committed content, not current advice or fact-effective history. Current access and lifecycle checks apply on every read.',
-          'This result is a local read-only view, not a share token, revocable offline export, backup or approval. Previously copied content cannot be recalled.'] };
+          'This result is a local read-only view, not a share token, revocable offline export, backup or approval. Previously copied content cannot be recalled.',
+          ...(reader.selection ? ['Selected by mutable Git committer timestamps along current HEAD first-parent ancestry, not author time, page dates or what an agent actually knew. Backdated commits and non-monotonic clocks can change this selection.'] : [])] };
     });
     const finish = async () => {
       const result = await action();
