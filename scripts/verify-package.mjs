@@ -43,6 +43,7 @@ try {
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
     'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
     'dist/experience.js', 'dist/experience.d.ts', 'docs/validated-experience.md', 'docs/validated-experience_CN.md',
+    'dist/experience-tool.js', 'dist/experience-tool.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -123,7 +124,19 @@ try {
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
       type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
       previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
-      type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin } from 'memobranch';
+      type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
+      type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
+      type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+    export async function publicExperience(vault: MemoryVault, trace: ExperienceTraceInput,
+      options: ExperiencePrepareOptions, suite: ExperienceSuite, runner: ExperienceRunner) {
+      const selection: ExperienceSelection = { includeSensitive: false, includeSecret: false };
+      const recorded = await vault.experienceCapture(trace, { scope: 'project', sensitivity: 'internal' });
+      const plan: ExperiencePlan = await vault.experiencePrepare({ ...options, traceIds: [recorded.evidenceId] });
+      const result = await vault.experienceValidate(plan, suite, runner, { ...selection, timeoutMs: 30000, signal: new AbortController().signal });
+      const report: ExperienceValidation = result.report;
+      const exported = await vault.experienceExport(result.evidenceId, { ...selection, confirm: true });
+      return { report, skill: exported.files['SKILL.md'] };
+    }
     export async function publicManualMerge(vault: MemoryVault, options: WikiMergeOptions) {
       const prepared = await vault.wikiMergePrepare(options);
       const origin: WikiMergeOrigin | undefined = prepared.plan.merge;

@@ -11,6 +11,7 @@ import { authorize, principalFromEnv, type Permission, type Principal } from './
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
 import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
+import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema, experienceToolInput, experienceToolResult } from './experience-tool.js';
 import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
@@ -93,12 +94,60 @@ export function apply(ctx: Context, config: Config): void {
   if (granted(principal, 'maintain')) registerMaintenanceTools(ctx, vault);
   if (granted(principal, 'sync')) registerSyncTools(ctx, vault);
   registerWikiTools(ctx, vault, principal, resolved);
+  registerExperienceTools(ctx, vault, principal, resolved);
   registerAutomaticMemory(ctx, vault, principal, {
     mode: resolved.automaticMemory ?? 'off', scope: resolved.defaultScope, sensitivity: resolved.defaultSensitivity,
     limit: resolved.defaultSearchLimit, maxContextCharacters: resolved.defaultMaxContextCharacters,
     maxInputCharacters: resolved.automaticMaxInputCharacters ?? 2_000,
     maxCaptureCharacters: resolved.automaticMaxCaptureCharacters ?? 20_000,
   }, (signal, action) => run(vault, signal, action, false));
+}
+
+function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
+  if (granted(principal, 'write')) ctx.tools.register(defineTool({
+    name: 'memory_experience_capture',
+    description: 'Record an unverified execution trace as immutable evidence. Fields: family, taskId, runId, context, actions, observedResult, outcome (success/failure/partial), limitations. No extraction, automatic validation, promotion or execution.',
+    parameters: {
+      trace: { type: 'object', additionalProperties: true, required: true, description: 'Complete structured experience trace. Observations are not independently verified facts.' },
+      scope: { type: 'string', enum: scopes, description: 'Optional classification; defaults to the server configuration.' },
+      sensitivity: { type: 'string', enum: sensitivities, description: 'Optional sensitivity; defaults to the server configuration.' },
+    }, output: jsonOutput,
+    async execute(args, exec) {
+      return runJson(vault, exec.signal, async () => {
+        const input = experienceToolInput(experienceCaptureToolSchema, args);
+        return experienceToolResult(await vault.experienceCapture(input.trace, {
+          scope: input.scope ?? config.defaultScope, sensitivity: input.sensitivity ?? config.defaultSensitivity,
+        }));
+      });
+    },
+  }));
+  if (granted(principal, 'read') && granted(principal, 'write')) ctx.tools.register(defineTool({
+    name: 'memory_experience_prepare',
+    description: 'Prepare a signed expiring proposal with traceIds, name, description, procedure, conditions, limitations and optional confidential selection. Not approval or validation. Only trusted host library code may supply an evaluator; no runner/module path is accepted.',
+    parameters: { proposal: { type: 'object', additionalProperties: true, required: true, description: 'Complete source-backed proposal input; current read/write authority still applies.' } }, output: jsonOutput,
+    async execute(args, exec) {
+      return runJson(vault, exec.signal, async () => {
+        const input = experienceToolInput(experiencePrepareToolSchema, args);
+        return experienceToolResult(await vault.experiencePrepare(input.proposal));
+      });
+    },
+  }));
+  if (granted(principal, 'read') && granted(principal, 'review')) ctx.tools.register(defineTool({
+    name: 'memory_experience_export',
+    description: 'Explicitly return complete skill file strings for a stored passing host-run validation. Current sources, tenant, keys, expiry and private selection still apply. Plaintext copies cannot be recalled. No installation, execution, publication or new grants.',
+    parameters: {
+      validationId: { type: 'string', required: true, description: 'Stored validation evidence ID (ev- plus 12 lowercase hex digits).' },
+      confirm: { type: 'boolean', required: true, description: 'Must be true after explicit review of this export.' },
+      includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive material.' },
+      includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret material; keys remain required.' },
+    }, output: jsonOutput,
+    async execute(args, exec) {
+      return runJson(vault, exec.signal, async () => {
+        const { validationId, ...options } = experienceToolInput(experienceExportToolSchema, args);
+        return experienceToolResult(await vault.experienceExport(validationId, options));
+      });
+    },
+  }));
 }
 
 function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {

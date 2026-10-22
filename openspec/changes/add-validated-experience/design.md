@@ -43,3 +43,21 @@ Source key erasure prevents a new export but cannot recall an existing copy.
 Schemas reject unknown fields, malformed dates, ambiguous IDs and oversized data.
 Old ordinary procedure approvals do not qualify for this export path. No database
 or vault schema migration and no new required configuration.
+
+## Agent adapters
+
+MCP and Harness expose only `memory_experience_capture`,
+`memory_experience_prepare` and `memory_experience_export`. Capture accepts a
+structured `trace` plus optional classification; prepare accepts a `proposal`
+using the core schema; export accepts a stored `validationId`, explicit
+`confirm:true` and optional confidential selection. The server owns the vault,
+identity and evaluator. No runner, executable, module, filesystem path, tenant,
+permission override, automatic validation, approval or installation input exists.
+The host may validate through the library separately.
+
+Strict shared schemas reject unknown fields before use. Capture requires write;
+prepare read/write; export read/review. Harness registration follows these
+combined grants; MCP retains its existing visible-tool/runtime-denial convention.
+Harness capture defaults come from its existing server configuration. Existing
+invocation/shutdown cancellation and safe error behavior apply. Complete returned
+JSON is bounded below the default MCP stdio allowance and is never truncated.

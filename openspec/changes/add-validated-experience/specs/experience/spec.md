@@ -27,3 +27,16 @@ configuration, classification and key availability before returning skill files.
 #### Scenario: Successful explicit export
 - **WHEN** current authorized sources and complete passing validation are confirmed
 - **THEN** skill files are returned with applicability, limits and validation references, without installation, execution or permission changes
+
+### Requirement: Agent tools preserve host-owned execution authority
+The system SHALL expose capture, proposal preparation and confirmed export with
+the core's current permissions and strict input schemas, without accepting an
+agent-selected evaluator or prefilled passing validation.
+
+#### Scenario: An agent supplies execution or identity overrides
+- **WHEN** a tool input includes a runner, module path, tenant or permission override
+- **THEN** the input is refused before canonical mutation and no evaluator is executed
+
+#### Scenario: A permitted agent exports a host-validated procedure
+- **WHEN** the caller has current read/review authority and explicitly confirms a valid stored validation ID
+- **THEN** complete bounded skill files are returned, with no installation or execution

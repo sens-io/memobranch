@@ -1,6 +1,6 @@
 # Experience checks and explicit skill export
 
-Development feature: library and CLI. Not yet a Web workflow or a claim about
+Development feature: library, CLI and explicit MCP/Harness tools. Not yet a Web workflow or a claim about
 real-world agent effectiveness. No model or external service is used by this path.
 
 An execution trace records `family`, `taskId`, `runId`, `context`, `actions`,
@@ -92,3 +92,31 @@ An exported plaintext skill may contain private material and cannot be recalled.
 Removing access or a source encryption key stops **new** exports, not copied
 files. A passing synthetic suite proves only those checks; separately measure
 real transfer quality before relying on it in production.
+
+## MCP and DeepSeek Harness
+
+| Tool | Input | Current permission |
+| --- | --- | --- |
+| `memory_experience_capture` | `{trace, scope?, sensitivity?}` | write |
+| `memory_experience_prepare` | `{proposal}` with the preparation fields above | read + write |
+| `memory_experience_export` | `{validationId, confirm:true, includeSensitive?, includeSecret?}` | read + review |
+
+Capture records observations only. Prepare returns a signed proposal without
+running validation or approving a memory. A trusted host validates through the
+library separately. Export returns file strings, never saves them to an agent's
+filesystem or installs/executes them.
+
+No validation, evaluator-selection or installation tool is registered. Inputs
+cannot override the server's root, tenant, principal or permissions, choose a
+runner/module, supply prefilled validation results, or pass a JSON cancellation
+signal. Unknown fields are rejected at both the outer and structured-input levels.
+The existing host invocation and shutdown signals own cancellation.
+
+Harness registers only tools for which the combined grants are present; capture
+defaults use its existing server `defaultScope` / `defaultSensitivity`. MCP keeps
+the existing convention of visible tools with runtime permission checks: listing
+a tool is not a grant. Both adapters return complete results within a 9 MiB
+escaped-JSON allowance, failing rather than truncating skill instructions.
+Private selection, current source/key access, tenant and expiry checks still
+apply. Returning skill strings does not authorize sharing private material or
+performing the actions described by the skill.
