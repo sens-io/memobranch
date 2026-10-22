@@ -98,7 +98,7 @@ export class ExperienceEngine {
       revalidate: async () => {
         if (sha256(stableWikiJson(await this.port.config())) !== sha256(stableWikiJson(config))) fail('Vault configuration changed; record again');
       },
-      validate: () => authorize(this.port.principal, 'write', { scope: labels.scope ?? 'user', sensitivity: labels.sensitivity ?? 'internal' }),
+      validate: () => authorize(this.port.principal, 'write', { scope: labels.scope ?? 'user', sensitivity: labels.sensitivity ?? 'internal', tenantId: config.tenantId }),
     });
   }
 
@@ -106,7 +106,7 @@ export class ExperienceEngine {
     authorize(this.port.principal, 'write');
     const options = parsed(experiencePrepareSchema, input);
     const result = await this.port.read(async () => {
-      const config = await this.port.config(), docs = await this.sources(options.traceIds, options);
+      const config = await this.port.config(), docs = await this.sources(options.traceIds, options, config.tenantId);
       const traces = docs.map(doc => decoded(experienceTraceSchema, doc, TRACE));
       if (new Set(traces.map(trace => trace.family)).size !== 1) fail('Experience families must match');
       const privateScopes = new Set(docs.map(doc => doc.meta.scope).filter(scope => scope !== 'public'));
@@ -115,7 +115,7 @@ export class ExperienceEngine {
       const minimum = Math.max(...docs.map(doc => sensitivities.indexOf(doc.meta.sensitivity)));
       const sensitivity = options.sensitivity ?? sensitivities[minimum]!;
       if (sensitivities.indexOf(sensitivity) < minimum) fail('Procedure sensitivity cannot be lower than its sources');
-      this.access(scope, sensitivity, options);
+      this.access(scope, sensitivity, options, config.tenantId);
       const unsigned = {
         kind: 'experience-plan' as const, version: 1 as const, vaultId: config.vaultId, tenantId: config.tenantId,
         configHash: sha256(stableWikiJson(config)), createdAt: new Date().toISOString(),
@@ -126,7 +126,8 @@ export class ExperienceEngine {
       };
       return parsed(experiencePlanSchema, { ...unsigned, proof: await this.port.sign(unsigned) });
     });
-    throwIfCancelled(); timeCheck(result); authorize(this.port.principal, 'write'); this.access(result.scope, result.sensitivity, options);
+    throwIfCancelled(); timeCheck(result); authorize(this.port.principal, 'write', { tenantId: result.tenantId });
+    this.access(result.scope, result.sensitivity, options, result.tenantId);
     return result;
   }
 
@@ -147,8 +148,8 @@ export class ExperienceEngine {
       await this.checkPlan(plan, opts);
     };
     const finalCheck = () => {
-      authorize(this.port.principal, 'write'); authorize(this.port.principal, 'review');
-      this.access(plan.scope, plan.sensitivity, opts); timeCheck(plan);
+      authorize(this.port.principal, 'write', { tenantId: plan.tenantId }); authorize(this.port.principal, 'review', { tenantId: plan.tenantId });
+      this.access(plan.scope, plan.sensitivity, opts, plan.tenantId); timeCheck(plan);
     };
     try {
       return await withOperation(combined.signal, async () => {
@@ -175,7 +176,12 @@ export class ExperienceEngine {
         const content = REPORT + stableWikiJson(report); bounded(content, 900_000);
         const captured = await this.port.capture({ content, scope: plan.scope, sensitivity: plan.sensitivity,
           sourceUri: `urn:memobranch:experience-validation:${report.runId}` }, { revalidate: check, validate: finalCheck });
-        throwIfCancelled(); timeCheck(plan);
+        try { throwIfCancelled(); finalCheck(); }
+        catch (error) {
+          if (!(error instanceof AgentMemoryError)) throw error;
+          throw new AgentMemoryError(error.code, error.message, { ...error.safeDetails,
+            completedValidation: { evidenceId: captured.evidenceId, commit: captured.commit } }, error.exitCode);
+        }
         return { ...captured, passed: passing(report), report };
       });
     } finally {
@@ -189,9 +195,11 @@ export class ExperienceEngine {
     authorize(this.port.principal, 'review');
     const options = parsed(selectionSchema.extend({ confirm: z.literal(true) }).strict(), input);
     parsed(evidenceId, validationId);
+    let tenantId = '';
     const result = await this.port.read(async () => {
+      tenantId = (await this.port.config()).tenantId;
       const doc = await this.port.evidence(validationId, options);
-      this.access(doc.meta.scope, doc.meta.sensitivity, options);
+      this.access(doc.meta.scope, doc.meta.sensitivity, options, tenantId);
       const report = decoded(reportSchema, doc, REPORT);
       await this.verify(report);
       await this.checkPlan(report.plan, options); await this.coverage(report.plan, report.suite);
@@ -205,23 +213,23 @@ export class ExperienceEngine {
         warnings: ['Selected host-evaluated cases are not proof of general effectiveness.', 'Plaintext copies cannot be revoked after export.'] };
     });
     throwIfCancelled();
-    authorize(this.port.principal, 'review'); this.access(result.scope, result.sensitivity, options);
+    authorize(this.port.principal, 'review', { tenantId }); this.access(result.scope, result.sensitivity, options, tenantId);
     if (Date.parse(result.proposalExpiresAt) <= Date.now()) fail('Procedure proposal expired while exporting; prepare again');
     return result;
   }
 
-  private access(scope: Scope, sensitivity: Sensitivity, options: ExperienceSelection): void {
-    authorize(this.port.principal, 'read', { scope, sensitivity });
+  private access(scope: Scope, sensitivity: Sensitivity, options: ExperienceSelection, tenantId: string): void {
+    authorize(this.port.principal, 'read', { scope, sensitivity, tenantId });
     if (sensitivity === 'secret' && options.includeSecret !== true || sensitivity === 'sensitive' && options.includeSensitive !== true) {
       throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Explicit confidential selection is required');
     }
   }
 
-  private async sources(ids: string[], options: ExperienceSelection) {
+  private async sources(ids: string[], options: ExperienceSelection, tenantId: string) {
     const docs = [];
     for (const id of ids) {
       const doc = await this.port.evidence(id, options);
-      this.access(doc.meta.scope, doc.meta.sensitivity, options);
+      this.access(doc.meta.scope, doc.meta.sensitivity, options, tenantId);
       docs.push(doc);
     }
     return docs;
@@ -238,12 +246,12 @@ export class ExperienceEngine {
     if (plan.vaultId !== config.vaultId || plan.tenantId !== config.tenantId || plan.configHash !== sha256(stableWikiJson(config))) {
       fail('Procedure proposal no longer matches this vault configuration; prepare again');
     }
-    this.access(plan.scope, plan.sensitivity, options);
-    const docs = await this.sources(plan.sources.map(source => source.id), options);
+    this.access(plan.scope, plan.sensitivity, options, plan.tenantId);
+    const docs = await this.sources(plan.sources.map(source => source.id), options, plan.tenantId);
     for (const [i, doc] of docs.entries()) {
       if (documentHash(doc) !== plan.sources[i]!.hash) fail('Experience source changed; prepare again');
     }
-    timeCheck(plan); this.access(plan.scope, plan.sensitivity, options);
+    timeCheck(plan); this.access(plan.scope, plan.sensitivity, options, plan.tenantId);
   }
 
   private async coverage(plan: ExperiencePlan, suite: ExperienceSuite) {

@@ -25,6 +25,14 @@ rechecks operation/read permissions and proposal time with no intervening await
 before the ready transition. Existing Wiki final callbacks remain synchronous.
 No nested read-to-write lock upgrade.
 
+Final synchronous checks include the principal's current tenant, not only its
+operation permission, scope and sensitivity. A completed ready transaction is not
+rolled back because authority or proposal time changes during commit settlement.
+The post-capture check refuses plaintext and attaches only `completedValidation`
+(evidence ID and commit) to the normal error, so callers can distinguish a saved
+validation from one never committed. Prepare/export repeat tenant checks after
+actual asynchronous read cleanup.
+
 Export requires review permission, explicit confirmation, complete passing checks,
 current source readability, unchanged config and explicit confidential selection.
 It returns `SKILL.md` and `references/validation.md`; it writes nothing and never

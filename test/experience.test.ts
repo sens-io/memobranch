@@ -4,13 +4,13 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { parseMarkdown } from '../src/markdown.js';
-import { MemoryVault } from '../src/vault.js';
-import { localAdminPrincipal } from '../src/policy.js';
+import { MemoryVault, type CaptureOptions, type CaptureResult } from '../src/vault.js';
+import { assertTenant, localAdminPrincipal } from '../src/policy.js';
 import { withOperation } from '../src/operation.js';
 import { EncryptionManager, type EncryptedEnvelopeMeta } from '../src/encryption.js';
 import { asEvidenceDocument } from '../src/evidence.js';
 import { ExperienceEngine } from '../src/experience.js';
-import { stableWikiJson } from '../src/wiki-proof.js';
+import { stableWikiJson, WikiProof } from '../src/wiki-proof.js';
 import { VaultTransaction } from '../src/transaction.js';
 import type { ExperienceRunner, ExperienceSuite, ExperienceTraceInput } from '../src/experience.js';
 import type { Scope, Sensitivity } from '../src/types.js';
@@ -225,10 +225,11 @@ test('experience: a late evaluator inherits cancellation and cannot start a new 
 });
 
 test('experience: final-source async waits cannot save a report after review withdrawal or expiry', async t => {
-  for (const mode of ['permission', 'expiry'] as const) {
+  for (const mode of ['permission', 'expiry', 'tenant'] as const) {
     const { vault, plan, first, second } = await fixture(t);
     const docs = new Map(await Promise.all([first.evidenceId, second.evidenceId].map(async id => [id, asEvidenceDocument(await vault.get(id))] as const)));
-    const config = await vault.config(), principal = { ...localAdminPrincipal(), permissions: ['read', 'write', 'review'] as Array<'read' | 'write' | 'review'> };
+    const config = await vault.config(), principal = { ...localAdminPrincipal(), tenantId: config.tenantId,
+      permissions: ['read', 'write', 'review'] as Array<'read' | 'write' | 'review'> };
     let saving = false, savedReports = 0, changed = false, controlledNow: number | undefined;
     const realNow = Date.now;
     const mocked = t.mock.method(Date, 'now', () => controlledNow ?? realNow());
@@ -239,7 +240,8 @@ test('experience: final-source async waits cannot save a report after review wit
         if (saving && !changed && id === second.evidenceId) {
           changed = true;
           if (mode === 'permission') principal.permissions = ['read', 'write'];
-          else controlledNow = Date.parse(proposal.expiresAt) + 1;
+          else if (mode === 'expiry') controlledNow = Date.parse(proposal.expiresAt) + 1;
+          else principal.tenantId = 'foreign';
         }
         const doc = docs.get(id); assert.ok(doc); return structuredClone(doc);
       },
@@ -257,7 +259,7 @@ test('experience: final-source async waits cannot save a report after review wit
     });
     const proposal = await engine.prepare({ traceIds: [first.evidenceId, second.evidenceId], name: plan.name,
       description: plan.description, procedure: plan.procedure, conditions: plan.conditions, limitations: plan.limitations });
-    await assert.rejects(engine.validate(proposal, suite, runner), { code: mode === 'permission' ? 'AUTHORIZATION_DENIED' : 'VALIDATION_FAILED' });
+    await assert.rejects(engine.validate(proposal, suite, runner), { code: mode === 'expiry' ? 'VALIDATION_FAILED' : 'AUTHORIZATION_DENIED' });
     assert.equal(changed, true); assert.equal(savedReports, 0);
     mocked.mock.restore();
   }
@@ -301,4 +303,50 @@ test('experience: existing synchronous final transaction guards have no new micr
     validateBeforeCommit: () => { queueMicrotask(() => { changedAfterDecision = true; }); },
   });
   assert.equal(called, true); assert.equal(changedAfterDecision, true);
+});
+
+test('experience: completed commits are identified when expiry or authority changes before returning', async t => {
+  for (const mode of ['expiry', 'read', 'review', 'tenant'] as const) {
+    const { vault, plan } = await fixture(t); const initial = structuredClone(vault.principal);
+    type Guard = { revalidate(): Promise<void>; validate(): void };
+    const internal = vault as unknown as { captureGuarded(options: CaptureOptions, guard?: Guard): Promise<CaptureResult> };
+    const capture = internal.captureGuarded.bind(vault);
+    let saved: CaptureResult | undefined;
+    t.mock.method(internal, 'captureGuarded', async (options: CaptureOptions, guard?: Guard) => {
+      const result = await capture(options, guard); saved = result;
+      if (mode === 'expiry') t.mock.method(Date, 'now', () => Date.parse(plan.expiresAt) + 1);
+      else if (mode === 'tenant') vault.principal.tenantId = 'foreign';
+      else vault.principal.permissions = mode === 'read' ? ['write', 'review'] : ['read', 'write'];
+      return result;
+    });
+    await assert.rejects(vault.experienceValidate(plan, suite, runner), (error: unknown) => {
+      const failure = error as { code: string; safeDetails: { completedValidation: unknown } };
+      assert.equal(failure.code, mode === 'expiry' ? 'VALIDATION_FAILED' : 'AUTHORIZATION_DENIED');
+      assert.ok(saved?.commit);
+      assert.deepEqual(failure.safeDetails.completedValidation, { evidenceId: saved.evidenceId, commit: saved.commit });
+      assert.doesNotMatch(JSON.stringify(failure), /observedResult|Normalize one label|observed.*ALPHA/);
+      return true;
+    });
+    t.mock.restoreAll(); Object.assign(vault.principal, initial);
+    if (initial.tenantId === undefined) delete vault.principal.tenantId;
+    assert.equal((await vault.git.run(['rev-parse', 'HEAD'])).trim(), saved!.commit);
+  }
+});
+
+test('experience: tenant changes during asynchronous read-lock cleanup prevent proposal and skill plaintext returns', async t => {
+  const { vault, root, first, second, plan } = await fixture(t);
+  const valid = await vault.experienceValidate(plan, suite, runner), config = await vault.config(), proof = new WikiProof(root);
+  const docs = new Map(await Promise.all([first.evidenceId, second.evidenceId, valid.evidenceId].map(async id => [id, asEvidenceDocument(await vault.get(id))] as const)));
+  const principal = { ...localAdminPrincipal(), tenantId: config.tenantId, permissions: ['read', 'write', 'review'] as Array<'read' | 'write' | 'review'> };
+  const engine = new ExperienceEngine({
+    principal, config: async () => { assertTenant(principal, config.tenantId); return structuredClone(config); },
+    read: async action => { const result = await action(); principal.tenantId = 'foreign'; return result; },
+    evidence: async id => { const doc = docs.get(id); assert.ok(doc); return structuredClone(doc); },
+    sign: value => proof.sign(value), verify: (value, signature) => proof.verify(value, signature),
+    capture: async () => { throw new Error('read-only scenario'); },
+  });
+  await assert.rejects(engine.prepare({ traceIds: [first.evidenceId, second.evidenceId], name: plan.name,
+    description: plan.description, procedure: plan.procedure, conditions: plan.conditions, limitations: plan.limitations }), { code: 'AUTHORIZATION_DENIED' });
+  principal.tenantId = config.tenantId;
+  await assert.rejects(engine.export(valid.evidenceId, { confirm: true }), { code: 'AUTHORIZATION_DENIED' });
 });

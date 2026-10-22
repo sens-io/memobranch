@@ -72,6 +72,13 @@ at export. Changed config requires preparing and validating again. No formal
 memory is promoted, even after passing tests. Existing manual procedure approvals
 alone do not qualify for this export path.
 
+Final permission checks include the current principal's tenant after asynchronous
+reads and lock cleanup. If an already-ready commit completes before expiry or an
+authority change is detected on return, the error preserves its normal code and
+adds `completedValidation` with the saved evidence ID and commit. It does not
+return report plaintext. Inspect that record with current authority; do not assume
+the error means nothing was saved or blindly repeat the evaluator.
+
 ## Export is data, not installation
 
 `vault.experienceExport(validationId, { confirm: true })` returns JSON with
