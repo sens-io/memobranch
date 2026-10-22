@@ -11,7 +11,7 @@ features, arbitrary documents, or real-world skill effectiveness are proven.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
-| 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Core/CLI and MCP/Harness accepted locally on 2026-10-23. Web remains pending. See [core checkpoint](validated-experience-core-verification-2026-10-22.md) and [agent adapter checkpoint](validated-experience-agent-verification-2026-10-23.md). |
+| 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Core/CLI and MCP/Harness accepted locally on 2026-10-23. Web candidate `d329b3c` passed 83 targeted checks, 813 retained checks under each Git default, the same installed package on Node 20/22 and independent review of all 15 files. Current native-browser end-to-end/responsive verification remains pending; do not close this batch yet. See [core checkpoint](validated-experience-core-verification-2026-10-22.md), [agent adapter checkpoint](validated-experience-agent-verification-2026-10-23.md) and [Web work record](validated-experience-web-verification-2026-10-23.md). |
 | 2 | As-known-at reconstruction with explicit availability evidence; never infer knowledge from mutable Git dates | Pending |
 | 3 | Local / Git pinned, read-only sharing under explicitly configured identities, current access and source checks | Pending |
 | 4 | Cross-vault / branch import and merge preview, separate approval, preserved origin and classification | Pending |
