@@ -3,8 +3,10 @@
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Baseline: `6b9223bb3fab1c2fc3ed86f4aca9aafa85a81865`.
 Runtime candidate: `d329b3c1887d542d4a0da43e374aae8b2a15987e`.
-Runtime, retained, installed and fixed-commit review checks passed. **Native-browser
-end-to-end/responsive verification is still pending; this batch is not closed.**
+Runtime, retained, installed and fixed-commit review checks passed. Native-browser
+checks were subsequently completed on **2026-10-24** as recorded below. Combined
+retained/installed checks after the later Zod security update remain pending;
+this batch is not closed solely by the browser result.
 The overall roadmap remains open.
 
 The local page separates immutable observations, expiring signed procedure
@@ -34,7 +36,7 @@ be recalled, and stopping a save cannot undo an already completed transaction.
 | Same installed artifact on Node 22.17.0 / Git main | Passed, 368 packed entries; `.scratch/web-experience-package-node22.log` |
 | Same installed artifact on exact minimum Node 20.0.0 / Git master | Passed, same 368-entry tar; `.scratch/web-experience-package-node20.log`; before/after SHA-256 files compare equal |
 | Fixed-commit independent review | All 15 files reviewed, skipped 0, no confirmed open issue; includes eight excluded by OCR defaults |
-| Current native-browser end-to-end and responsive verification | Pending; see limitation below |
+| Native-browser workflow and responsive verification | Completed on 2026-10-24 in a fresh synthetic vault; see supplemental evidence below |
 
 The backend tests use real local HTTP, vault transactions and encryption with
 synthetic data. They cover absent evaluators, strict unknown-field rejection,
@@ -69,7 +71,7 @@ small DOM; both reviewers used substitutes, not independent real browser, TCP,
 encryption or package installations. Those limits do not replace the executing
 retained/HTTP/installed checks above.
 
-## Browser limitation
+## Earlier browser limitation
 
 An earlier, uncommitted UI build in the in-app browser successfully generated a
 real signed proposal against a synthetic vault. Its native JavaScript confirmation
@@ -81,23 +83,62 @@ obtained from that blocked target.
 The new candidate uses accessible page-contained `dialog.showModal()` confirmations
 instead. Its cancellation/navigation checks passed. A fresh synthetic page rendered,
 but interaction remained blocked by the old browser confirmation; the operator was
-asked asynchronously to close it. Do not claim the current native workflow,
-mobile layout or browser downloads passed until they are actually rechecked.
+asked asynchronously to close it. At that checkpoint the native workflow,
+mobile layout and browser downloads remained unverified; the later actual checks
+are recorded below.
 These tests never target the operator's real vault or modify its grants.
+
+## Supplemental native-browser evidence — 2026-10-24
+
+The old temporary browser targets and test process were confirmed gone, so a fresh
+synthetic vault was started on local Node 22.17.0. The served script's SHA-256 is
+`3fa4bc0d095a6c3de3775cd15e6dd2e2c375032a7bb4d06b60488806aedd7ef9`.
+It equals the current compiled asset; `src/web.ts`, `src/web-ui.ts` and
+`src/web-experience-ui.ts` are unchanged from `d329b3c`. The host process began before
+the later local Zod update; patched-dependency retained/installed checks are separate.
+
+Actual browser actions confirmed capture (`ev-79180fdd4e1b`), signed proposal,
+four host-evaluated synthetic checks, independently cancelled/confirmed export,
+both explicit file downloads, editing invalidation and disconnect back to login.
+Validation evidence: `ev-3ff9de275dcc`. The host actually trimmed/uppercased selected
+ASCII inputs against independent expected labels and required the named criterion;
+this is not a universal evaluator or real task-effectiveness claim. Capture retained
+the form contents. No canonical memory/candidate, installation or execution occurred.
+
+The actual browser downloads were compared byte-for-byte with a fresh authorized
+library export: `SKILL.md` 708 bytes, SHA-256
+`402fbe006f768f776c4e067537940c29dc2142928728b02a2373bfa237af0cf2`;
+`references/validation.md` 979 bytes, SHA-256
+`04e23dd27960ab971b67dc090ee073daadf62c566e988e12a68b9decc3b1068c`.
+The verification itself left HEAD unchanged. The browser saved synthetic files in
+its ordinary Downloads folder; no preexisting files were removed. Evidence log:
+`.scratch/web-experience-browser-verification-2026-10-24.log`.
+
+At the default 833×868 content viewport, document client/scroll widths were both
+833. With the browser set to 375×812, client/scroll widths were both 360 (the
+remaining width is its scrollbar), no document-wide horizontal overflow. The
+small-screen preview and controls were usable; editing cleared the validation ID,
+disabled old validation/export and left zero skill-download controls. The viewport
+override was reset, console errors were empty, and the temporary tab was closed.
+
+![Actual local export page, default viewport](assets/experience-web-desktop-2026-10-24.png)
+
+![Actual local skill preview, 375px browser viewport](assets/experience-web-mobile-2026-10-24.png)
 
 ## Changes and remaining work
 
 Push/publication/deployment: none. Database change: none. Data migration: none.
 Required or persisted configuration change: none. Optional host API: the trusted
 evaluator callback above; default behavior remains no evaluator. No real service
-configuration or permission was changed. Manifests/lockfile are unchanged.
+configuration or permission was changed. The Web implementation itself did not
+change manifests/lockfile; the later dependency security update is tracked separately.
 
 `frontend-design` informed reuse of the existing dark workbench, logo-derived
 cobalt/violet/teal palette, offline fonts, readable form stages and explicit state
 controls. No remote font, CDN, generic redesign or new frontend dependency was added.
 
-Finish native-browser checks and review the final checkpoint text; fix and recheck
-any confirmed finding. Record browser results honestly. Do not close batch 1
+Complete combined patched-dependency checks and review the final checkpoint text;
+fix and recheck any confirmed finding. Record browser results honestly. Do not close batch 1
 or the overall goal at this intermediate checkpoint. Time availability, pinned
 local/Git sharing, cross-vault import/merge and local OCR remain in
 [remaining work](remaining-roadmap.md).
