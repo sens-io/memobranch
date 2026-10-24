@@ -81,7 +81,9 @@ still apply. CLI input is a bounded regular UTF-8 local JSON file. MCP/Harness/W
 do not add a filesystem reader, grant editor or upload endpoint. Every UI edit,
 source change, cancel, navigation or logout invalidates the review/confirmation.
 
-No subprocess, shell, network, evaluator or model runs for import/manual merge.
+No request/source-selected subprocess, shell, evaluator or model runs for import/
+manual merge. Only the existing bounded, controlled local Git read/write commands
+are retained; network fetch/push and arbitrary command execution remain forbidden.
 Tests use synthetic vaults and existing fixture compilers only. No real host
 binding is modified by development. Fixed-candidate independent review, both Git
 defaults, same-package Node 20/22, native Web and bilingual records are required
