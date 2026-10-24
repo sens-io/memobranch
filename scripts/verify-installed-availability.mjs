@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { LlmClient, MemoryVault } from 'memobranch';
+import { LlmClient, MemoryVault, startWebServer } from 'memobranch';
 import { Context } from '@deepseek-ai/cordis';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
@@ -97,6 +97,26 @@ try {
   }
   assert.equal(calls, count); assert.equal(await readFile(join(vault.root, first.evidencePath), 'utf8'), raw);
   console.log('Installed CLI availability: confirmation, exact observed history and unchanged read state passed.');
+  const web = await startWebServer(vault.root);
+  try {
+    const script = await (await fetch(web.url + '/app.js')).text(); assert.match(script, /async function availability\(/); assert.match(script, /知识可用时间/);
+    const http = async (name, input) => {
+      const response = await fetch(web.url + '/api/' + name, { method: 'POST', headers: {
+        Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(input) });
+      const value = await response.json(); if (!response.ok) throw new Error(value.error.code); return value.result;
+    };
+    const before = await vault.git.run(['rev-parse', 'HEAD']);
+    await assert.rejects(http('wiki-observe', { pageKeys: [key] }), /VALIDATION_FAILED/);
+    assert.equal(await vault.git.run(['rev-parse', 'HEAD']), before);
+    const saved = await http('wiki-observe', { pageKeys: [key], confirm: true }); assert.ok(saved.evidenceId);
+    const savedHead = await vault.git.run(['rev-parse', 'HEAD']);
+    const read = await http('wiki-as-known-at', { pageKeys: [key], at: observed.observedAt, observationIds: [observed.evidenceId] });
+    assert.equal(read.items[0].snapshot.commit, observed.observedCommit); assert.match(read.items[0].snapshot.pages.find(page => page.meta.key === key).body, /version 1/);
+    await assert.rejects(http('wiki-as-known-at', { pageKeys: [key], at: observed.observedAt, root: '/foreign' }), /VALIDATION_FAILED/);
+    assert.equal(await vault.git.run(['rev-parse', 'HEAD']), savedHead); assert.equal(calls, count);
+    console.log('Installed Web availability: bundled page, strict confirmed observation and exact read-only history passed.');
+  } finally { await web.stop(); }
   await vault.wikiRevoke(key, 'Withdraw installed fixture');
   await assert.rejects(vault.wikiAsKnownAt({ pageKeys: [key], at: observed.observedAt }), { code: 'NOT_FOUND' });
   console.log('Installed availability core: explicit immutable observations, real version change, exact old reconstruction, unknown legacy, subset limits, cancellation and current revocation passed; no model-quality or first-learning claim.');

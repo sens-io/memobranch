@@ -41,7 +41,7 @@ tenant and key availability when returning historical observed content.
 - **THEN** exact verified committed content and observation limits are returned without new writes, model calls or automatic observation
 
 ### Requirement: Adapters preserve explicit observation and host authority
-The CLI, MCP and Harness adapters SHALL reuse strict core selection and current
+The CLI, MCP, Harness and local Web adapters SHALL reuse strict core selection and current
 authority, keep cancellation host-owned and distinguish writes from historical reads.
 
 #### Scenario: An agent records an observation
@@ -55,3 +55,11 @@ authority, keep cancellation host-owned and distinguish writes from historical r
 #### Scenario: Cancellation overlaps an already-decided commit
 - **WHEN** cancellation or authority loss is reported after the transaction has entered commit settlement
 - **THEN** the caller can distinguish a saved observation by safe evidence/commit identifiers, without assuming cancellation recalls an already-completed save
+
+#### Scenario: An operator changes or leaves a Web selection
+- **WHEN** the page's selection changes, a request is stopped, or the operator navigates away or disconnects
+- **THEN** stale results and unconfirmed writes cannot revive through late responses, and no automatic observation or retry occurs
+
+#### Scenario: Complete adapter results exceed the transport budget
+- **WHEN** complete escaped content exceeds the adapter's result limit
+- **THEN** the operation reports an error rather than silently truncating content or showing an incomplete historical view

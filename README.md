@@ -126,7 +126,7 @@ flowchart LR
 
 > **Web date selection (development source):** [Choose a timestamp in the merge workbench, inspect its resolved commit, then review separately](docs/web-dated-wiki-views.md). Preparation stays pinned to that hash; switching mode/date cancels old reads and invalidates approval without silently discarding your draft. Not yet published to npm.
 
-> **Explicit knowledge availability (development source):** [Record selected committed knowledge as immutable observations, then reconstruct only observed content at a time](docs/knowledge-availability.md). Missing or conflicting history stays unknown; current authority and source keys still apply. Library core accepted locally; CLI/agent adapters are undergoing verification and Web management is pending. Not yet published to npm.
+> **Explicit knowledge availability (development source):** [Record selected committed knowledge as immutable observations, then reconstruct only observed content at a time](docs/knowledge-availability.md). Missing or conflicting history stays unknown; current authority and source keys still apply. Library core accepted locally; CLI, agent and Web adapters are undergoing verification. Not yet published to npm.
 
 > **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Library, CLI, MCP/Harness and local Web management; trusted host code evaluates actual behavior, not prefilled passing results. The default Web host has no evaluator. Selected passing checks are not proof of general effectiveness; no automatic installation or execution. Not yet published to npm.
 

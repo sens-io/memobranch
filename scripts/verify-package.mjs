@@ -46,6 +46,7 @@ try {
     'dist/experience-tool.js', 'dist/experience-tool.d.ts',
     'dist/web-experience-ui.js', 'dist/web-experience-ui.d.ts',
     'dist/knowledge-availability.js', 'dist/knowledge-availability.d.ts', 'docs/knowledge-availability.md', 'docs/knowledge-availability_CN.md',
+    'dist/web-availability-ui.js', 'dist/web-availability-ui.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }

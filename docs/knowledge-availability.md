@@ -1,7 +1,8 @@
 # Explicit knowledge availability (development source)
 
 Library core accepted locally; CLI/MCP/Harness adapters are implemented in development
-source, with their final retained/installed review pending. Web management is pending.
+source, with their final retained/installed review pending. Web management is also
+implemented in development source and undergoing verification.
 This is separate from Git-date revision views and fact-effective time queries.
 No npm publication or real-world model knowledge measurement is implied.
 See the [core verification and limits](knowledge-availability-verification-2026-10-24.md).
@@ -89,3 +90,25 @@ are host-owned. Harness registers observation only with both read/write grants a
 the historical reader only with read; MCP still rejects unauthorized execution.
 Agent results must fit 9 MiB including escaping; over-budget complete results fail,
 never silently truncate. No automatic observation, model evaluation or approval.
+
+## Local Web management (development source)
+
+Open **知识可用时间** (Knowledge availability) in the authenticated local console.
+Enter 1–25 keys, one per line, and select authorized confidential material explicitly.
+Recording current content requires a separate cancel-first confirmation dialog and
+current read/write access. The receipt shows the saved evidence ID, host-generated
+observation time and observed content commit. Recording does not automatically query.
+
+To read, enter an ISO timestamp with timezone; optionally restrict observation IDs
+one per line. The explicit “only this observation” receipt action selects that ID
+and time and then performs a read. Results distinguish observed/unknown, display the
+actual commit, complete page/source/rule JSON and coverage warnings. Source content
+is plain text, never executed HTML. Web output must fit 16 MiB including its JSON
+envelope; over-budget complete results fail rather than truncate.
+
+Edits clear old results. Stop cancels this page's operation without automatic retry;
+an already-decided save may still complete, so inspect evidence/history first.
+Valid post-save errors show only saved evidence/commit IDs. Navigation/disconnect
+closes an unconfirmed dialog, aborts pending reads and clears the page's form/results;
+late responses cannot restore them. No browser persistence, new credentials, model
+call, automatic knowledge approval or permission changes are introduced.

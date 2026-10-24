@@ -868,3 +868,54 @@ test('experience UI: navigation closes an unconfirmed dialog without starting va
   ui.run('pageCleanup(); generation++');await pending;await settle();
   assert.equal(dialog.isConnected,false);assert.equal(ui.requests.some(request=>request.operation==='experience-validate'),false);
 });
+
+const availabilityReceipt = { evidenceId:'ev-0123456789ab', observedAt:'2030-01-01T00:00:00.123Z', observedCommit:'a'.repeat(40), pageKeys:['concept:labels'] };
+const availabilityView = (body='Observed body <script>untrusted()</script>') => ({ at:availabilityReceipt.observedAt,coverage:{mode:'explicit-observation-ids'},warnings:['Partial observations only.'],items:[
+  {key:'concept:labels',status:'observed',observationId:availabilityReceipt.evidenceId,observedAt:availabilityReceipt.observedAt,snapshot:{commit:availabilityReceipt.observedCommit,pages:[{body}],sources:[],rules:[]}},
+  {key:'concept:unknown',status:'unknown',reason:'No observation.',snapshot:{body:'MUST_NOT_RENDER_UNKNOWN_BODY'}},
+] });
+async function availabilityPage(ui:ReturnType<typeof harness>){const output=await ui.run('availability()') as Element;ui.app.append(output);named(output,'availabilityKeys').value='concept:labels';return output;}
+async function saveAvailability(ui:ReturnType<typeof harness>,output:Element,accept=true){const pending=button(output,'确认记录当前知识').fire('click');await settle();await button(ui.body,accept?'确认保存观察':'取消').fire('click');await pending;await settle();}
+
+test('availability UI: no automatic observation, cancel-first confirmation and separate exact historical read',async()=>{
+  const ui=harness(request=>success(request.operation==='wiki-observe'?availabilityReceipt:availabilityView()));const output=await availabilityPage(ui);
+  assert.equal(ui.requests.length,0);await saveAvailability(ui,output,false);assert.equal(ui.requests.length,0);
+  await saveAvailability(ui,output);assert.equal(ui.requests.length,1);assert.deepEqual(ui.requests[0]!.data,{pageKeys:['concept:labels'],includeSensitive:false,includeSecret:false,confirm:true});
+  assert.match(output.textContent,/已保存观察/);assert.equal(ui.requests.some(request=>request.operation==='wiki-as-known-at'),false);
+  await button(output,'只查本次观察').fire('click');await settle();
+  assert.deepEqual(ui.requests[1]!.data,{pageKeys:['concept:labels'],includeSensitive:false,includeSecret:false,at:availabilityReceipt.observedAt,observationIds:[availabilityReceipt.evidenceId]});
+  assert.match(output.textContent,/集合外的更新或冲突未排除/);assert.match(output.textContent,/<script>untrusted\(\)<\/script>/);assert.doesNotMatch(output.textContent,/MUST_NOT_RENDER_UNKNOWN_BODY/);
+  assert.equal(nodes(output).some(node=>node.tagName==='script'),false);
+  named(output,'availabilityAt').value='2031-01-01T00:00:00Z';await named(output,'availabilityAt').fire('input');
+  assert.doesNotMatch(output.textContent,/Observed body/);assert.equal(nodes(output).some(node=>node.textContent==='只查本次观察'),false);assert.equal(ui.requests.length,2);
+});
+
+test('availability UI: stop and a newer read suppress old responses while keeping the current selection',async()=>{
+  const pending=deferred<Response>();let reads=0;
+  const ui=harness(()=>++reads===1?pending.promise:success(availabilityView('FRESH_RESULT'))),output=await availabilityPage(ui),keys=named(output,'availabilityKeys'),form=named(output,'availabilityAt').closest('form')!;
+  await form.fire('submit');await settle();assert.equal(keys.disabled,true);const old=ui.requests[0]!;
+  await button(output,'停止当前操作').fire('click');assert.equal(old.signal?.aborted,true);assert.equal(keys.value,'concept:labels');
+  await form.fire('submit');await settle();assert.match(output.textContent,/FRESH_RESULT/);
+  pending.resolve(success(availabilityView('STALE_RESULT')));await settle();assert.match(output.textContent,/FRESH_RESULT/);assert.doesNotMatch(output.textContent,/STALE_RESULT/);
+  ui.run('pageCleanup();generation++');assert.equal(keys.value,'');assert.equal(output.children.length,0);
+});
+
+test('availability UI: navigation cancels an unconfirmed observation and no late read revives removed content',async()=>{
+  const ui=harness(()=>success(availabilityReceipt)),output=await availabilityPage(ui),keys=named(output,'availabilityKeys');
+  const unconfirmed=button(output,'确认记录当前知识').fire('click');await settle();const dialog=find(ui.body,node=>node.tagName==='dialog');assert.equal(dialog.open,true);
+  ui.run('pageCleanup();generation++');await unconfirmed;await settle();assert.equal(dialog.isConnected,false);assert.equal(ui.requests.length,0);assert.equal(keys.value,'');
+  const delayed=deferred<Response>(),other=harness(()=>delayed.promise),view=await availabilityPage(other);
+  await named(view,'availabilityAt').closest('form')!.fire('submit');await settle();const request=other.requests[0]!;other.run('pageCleanup();session++;generation++');assert.equal(request.signal?.aborted,true);
+  delayed.resolve(success(availabilityView('LATE_PRIVATE_RESULT')));await settle();assert.equal(view.children.length,0);assert.doesNotMatch(other.body.textContent,/LATE_PRIVATE_RESULT/);
+});
+
+test('availability UI: read-only selection, confidential flags and safe errors never auto-observe or retry',async()=>{
+  const ui=harness(()=>failure('ENCRYPTION_KEY_UNAVAILABLE'),['read']);ui.run("principal.maxSensitivity='secret'");const output=await availabilityPage(ui);
+  assert.equal(nodes(output).some(node=>node.tagName==='button'&&node.textContent==='确认记录当前知识'),false);
+  named(output,'availabilitySecret').checked=true;await named(output,'availabilitySecret').fire('change');
+  await named(output,'availabilityAt').closest('form')!.fire('submit');await settle();assert.equal(ui.requests.length,1);assert.equal(ui.requests[0]!.data.includeSecret,true);
+  assert.equal(ui.requests[0]!.operation,'wiki-as-known-at');assert.match(output.textContent,/未提供解密密钥/);
+  const saved=harness(()=>({ok:false,json:async()=>({error:{code:'AUTHORIZATION_DENIED',completedAvailability:{evidenceId:availabilityReceipt.evidenceId,commit:availabilityReceipt.observedCommit}}})}));
+  const view=await availabilityPage(saved);await saveAvailability(saved,view);assert.match(view.textContent,/已保存观察（请先核查，勿重复提交）/);assert.equal(saved.requests.length,1);
+  named(view,'availabilityKeys').value='concept:labels\nconcept:labels';await named(view,'availabilityKeys').fire('input');await named(view,'availabilityAt').closest('form')!.fire('submit');await settle();assert.equal(saved.requests.length,1);assert.match(view.textContent,/不同的页面名称/);
+});

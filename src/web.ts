@@ -13,6 +13,7 @@ import { mergeOptionsSchema } from './wiki-merge.js';
 import { wikiSnapshotToolSchema } from './wiki-tool.js';
 import { experiencePlanSchema, experienceSuiteSchema, type ExperienceRunner } from './experience.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema } from './experience-tool.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -82,6 +83,8 @@ const routes: Record<string, Route> = {
     (vault, data) => vault.updateSettings(data.values, data.revision)),
   catalog: route('read', empty, vault => vault.wikiCatalog()),
   'wiki-snapshot': route('read', wikiSnapshotToolSchema, (vault, data) => vault.wikiSnapshot(data)),
+  'wiki-observe': route('write', availabilityObserveSchema, (vault, data) => vault.wikiObserveAvailability(data)),
+  'wiki-as-known-at': route('read', availabilityAtSchema, (vault, data) => vault.wikiAsKnownAt(data)),
   'merge-prepare': route('write', mergeOptionsSchema.omit({ signal: true }), (vault, data) => vault.wikiMergePrepare(data)),
   'jobs-list': route('read', empty, vault => vault.wikiJobs()),
   'jobs-show': route('read', jobReference, (vault, data) => vault.wikiJob(data.id)),
@@ -255,7 +258,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
       }
       if (name === 'preview') assertReviewBytes(result);
       if (name === 'jobs-review') assertReviewBytes(result);
-      if (name === 'wiki-snapshot' || name === 'merge-prepare') assertReviewBytes({ result });
+      if (name === 'wiki-snapshot' || name === 'merge-prepare' || name === 'wiki-as-known-at') assertReviewBytes({ result });
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       if (name === 'experience-prepare') assertReviewBytes({ plan: result, suite: { name: '', cases: [] }, confirm: true });
       if (name === 'experience-export' || name === 'experience-validate') assertReviewBytes(result);
@@ -268,6 +271,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
         message: normalized.code === 'VALIDATION_FAILED' ? 'Invalid input or stale state; reload and check the form' : normalized.code,
         ...(normalized.code === 'OPERATION_CANCELLED' && normalized.safeDetails?.committed ? { committed: normalized.safeDetails.committed } : {}),
         ...(name === 'experience-validate' ? safeCompletedValidation(normalized.safeDetails?.completedValidation) : {}),
+        ...(name === 'wiki-observe' ? safeCompletedAvailability(normalized.safeDetails?.completedAvailability) : {}),
       } });
     } finally {
       clearTimeout(timeout);
@@ -305,6 +309,11 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
 function safeCompletedValidation(value: unknown): { completedValidation?: { evidenceId: string; commit: string | null } } {
   const parsed = z.object({ evidenceId: z.string().regex(/^ev-[a-f0-9]{12}$/), commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable() }).strict().safeParse(value);
   return parsed.success ? { completedValidation: parsed.data } : {};
+}
+
+function safeCompletedAvailability(value: unknown): { completedAvailability?: { evidenceId: string; commit: string | null } } {
+  const result = safeCompletedValidation(value).completedValidation;
+  return result ? { completedAvailability: result } : {};
 }
 
 function assertReviewBytes(value: unknown): void {
