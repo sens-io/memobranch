@@ -15,7 +15,7 @@ import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityCo
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
-import { combineSignals, operationSignal, recordCommit, throwIfCancelled, withOperation, withoutCancellation } from './operation.js';
+import { cancellationError, combineSignals, operationSignal, recordCommit, throwIfCancelled, withOperation, withoutCancellation } from './operation.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
 import { publicSettings, settingsRevision, settingsSchema } from './settings.js';
@@ -38,9 +38,10 @@ import type {
 import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
 import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInput, type WikiJobRunOptions } from './wiki-jobs.js';
-import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
-import { WikiProof } from './wiki-proof.js';
+import { defaultWikiInstructions, defaultWikiPurpose, WikiEngine, renderPublicWikiCatalog } from './wiki.js';
+import { stableWikiJson, WikiProof } from './wiki-proof.js';
 import { ExperienceEngine, type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite, type ExperienceRunner, type ExperienceSelection } from './experience.js';
+import { AvailabilityEngine, type AvailabilityObserveOptions, type AvailabilityAtOptions, type AvailabilitySnapshot } from './knowledge-availability.js';
 import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
@@ -135,9 +136,15 @@ export class MemoryVault {
 
   async wikiCatalog() { return this.wikiEngine().catalog(); }
   async wikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<WikiSnapshot> {
+    const result = await this.readWikiSnapshot(options); result.validate(); return result.snapshot;
+  }
+
+  private async readWikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<AvailabilitySnapshot> {
     authorize(this.principal, 'read');
     const input = snapshotOptions(options);
     let validateTime = () => {};
+    let documentHashes: Array<{ path: string; hash: string }> = [];
+    let builtinRulesHash: string | null = null;
     const action = () => this.settledRead<WikiSnapshot>(async () => {
       const config = await this.config();
       const erasures = join(this.root, '.amem', 'erasures');
@@ -209,6 +216,9 @@ export class MemoryVault {
         }
       };
       validateTime();
+      documentHashes = [...documents.values()].map(doc => ({ path: doc.path, hash: sha256(stableWikiJson({ meta: doc.meta, body: doc.body })) }));
+      builtinRulesHash = pages.some(page => page.meta.type === 'wiki-page' && page.meta.rules[builtinWikiRuleId] === 1)
+        ? sha256(stableWikiJson({ id: builtinWikiRuleId, revision: 1, purpose: defaultWikiPurpose, instructions: defaultWikiInstructions })) : null;
       return { version: 1, kind: 'wiki-revision-view', commit: reader.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
         ...(reader.selection ? { selection: reader.selection } : {}),
         pages: pages.sort((a, b) => a.path.localeCompare(b.path)).map(page => ({ ...page, currentRevision: current.get(keyOf(page))!.meta.revision })),
@@ -224,7 +234,9 @@ export class MemoryVault {
       // Releasing the lock performs asynchronous cleanup after the inner checks.
       throwIfCancelled();
       validateTime();
-      return result;
+      return { snapshot: result, documentHashes, builtinRulesHash, validate: () => {
+        throwIfCancelled(); if (input.signal?.aborted) throw cancellationError(); validateTime();
+      } };
     };
     if (!input.signal) return finish();
     const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
@@ -641,6 +653,39 @@ export class MemoryVault {
   async experienceExport(validationId: string, options: ExperienceSelection & { confirm: boolean }) {
     return this.experienceEngine().export(validationId, options);
   }
+
+  private availabilityEngine() {
+    return new AvailabilityEngine({
+      principal: this.principal, config: () => this.config(), read: action => this.settledRead(action),
+      snapshot: async (pageKeys, { includeSensitive, includeSecret }, commit) => this.readWikiSnapshot({ pageKeys, includeSensitive, includeSecret,
+        commit: commit ?? await this.git.run(['rev-parse', 'HEAD']) }),
+      document: (path, selection) => this.readDocument<Record<string, unknown>>(path, 'read', selection),
+      records: async (selection, ids) => {
+        if (ids) {
+          const documents = [];
+          for (const id of ids) documents.push(await this.experienceEvidence(id, selection) as unknown as MarkdownDocument<Record<string, unknown>>);
+          return documents;
+        }
+        const documents: Array<MarkdownDocument<Record<string, unknown>>> = []; let bytes = 0;
+        for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+          throwIfCancelled();
+          let document;
+          try { document = await this.readDocument<Record<string, unknown>>(toPosix(relative(this.root, file)), 'read', selection); }
+          catch (error) { if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') continue; throw error; }
+          bytes += Buffer.byteLength(stableWikiJson(document), 'utf8');
+          if (documents.length >= 2000 || bytes > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Availability scan exceeds 2000 selected records or 20 MB; supply observationIds');
+          documents.push(document);
+        }
+        return documents;
+      },
+      head: () => this.git.run(['rev-parse', 'HEAD']), sign: value => new WikiProof(this.root).sign(value),
+      verify: (value, proof) => new WikiProof(this.root).verify(value, proof),
+      capture: (options, guard) => this.captureGuarded(options, guard),
+    });
+  }
+
+  async wikiObserveAvailability(options: AvailabilityObserveOptions) { return this.availabilityEngine().observe(options); }
+  async wikiAsKnownAt(options: AvailabilityAtOptions) { return this.availabilityEngine().at(options); }
 
   async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
     this.assertInitialized();
@@ -1858,7 +1903,7 @@ export class MemoryVault {
     await this.writeManaged(document.path, serialized);
   }
 
-  private async readDocument<T extends object>(rootPath: string, permission: Permission = 'read'): Promise<MarkdownDocument<T>> {
+  private async readDocument<T extends object>(rootPath: string, permission: Permission = 'read', selection?: ExperienceSelection): Promise<MarkdownDocument<T>> {
     throwIfCancelled();
     const config = await readVaultConfig(this.root);
     authorize(this.principal, permission, { tenantId: config.tenantId });
@@ -1867,6 +1912,9 @@ export class MemoryVault {
     const scope = scopeOf(parsed.meta);
     const sensitivity = sensitivityOf(parsed.meta);
     authorize(this.principal, permission, { scope, sensitivity, tenantId: config.tenantId });
+    if (selection && (sensitivity === 'sensitive' && selection.includeSensitive !== true || sensitivity === 'secret' && selection.includeSecret !== true)) {
+      throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Explicit confidential document selection is required');
+    }
     const document = await this.materializeDocument<T>(normalized, parsed, { config });
     const logicalMeta = document.meta as Record<string, unknown>;
     authorize(this.principal, permission, { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta), tenantId: config.tenantId });

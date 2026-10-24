@@ -45,6 +45,7 @@ try {
     'dist/experience.js', 'dist/experience.d.ts', 'docs/validated-experience.md', 'docs/validated-experience_CN.md',
     'dist/experience-tool.js', 'dist/experience-tool.d.ts',
     'dist/web-experience-ui.js', 'dist/web-experience-ui.d.ts',
+    'dist/knowledge-availability.js', 'dist/knowledge-availability.d.ts', 'docs/knowledge-availability.md', 'docs/knowledge-availability_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -127,7 +128,13 @@ try {
       previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
       type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
       type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
-      startWebServer, type WebOptions, type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+      startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
+      type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+    export async function publicAvailability(vault: MemoryVault, observe: AvailabilityObserveOptions, query: AvailabilityAtOptions) {
+      const recorded = await vault.wikiObserveAvailability(observe);
+      const view = await vault.wikiAsKnownAt({ ...query, signal: new AbortController().signal });
+      return { recorded, view, coverage: view.coverage.mode };
+    }
     export async function publicExperience(vault: MemoryVault, trace: ExperienceTraceInput,
       options: ExperiencePrepareOptions, suite: ExperienceSuite, runner: ExperienceRunner) {
       const selection: ExperienceSelection = { includeSensitive: false, includeSecret: false };
@@ -272,6 +279,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(experience.stdout);
+  await writeFile(join(consumer, 'verify-installed-availability.mjs'), await readFile(join(root, 'scripts/verify-installed-availability.mjs')));
+  const availability = await exec(process.execPath, ['verify-installed-availability.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(availability.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
