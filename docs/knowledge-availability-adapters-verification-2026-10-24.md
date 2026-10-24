@@ -6,8 +6,9 @@ CLI confirmation fix: `71e568d3f93d19f0adca979398e674a81d1b0c4d`.
 Web candidate: `fd6eba9a43411b27fd7ff5b3f6597c4b008ec97e`.
 The library core was accepted separately; this record covers its CLI, MCP,
 DeepSeek Harness and authenticated local Web adapters. Runtime, retained, installed,
-native-browser and fixed-candidate review checks passed locally. Final checkpoint
-text review follows. The overall roadmap remains open.
+native-browser and fixed-candidate review checks passed locally. Independent review
+of checkpoint `224f13e` also passed: 9/9 files, skipped 0, no confirmed omission.
+This acknowledgement changes no runtime. The overall roadmap remains open.
 
 Adapters reuse the signed immutable observation and historical reconstruction
 methods. Observation requires current read/write access and explicit confirmation;
@@ -47,7 +48,7 @@ text adjustment. Do not attribute a later wording change to the earlier full run
 | Strict cached OpenSpec 1.0.2 | 28 passed, 0 failed; `.scratch/web-availability-specs.log` |
 | Production dependency audit | 0 known vulnerabilities; `.scratch/availability-adapters-audit.json` |
 | Same installed artifact on Node 22.17.0/main and exact minimum Node 20.0.0/master | Both passed, same 387-entry package; `.scratch/availability-adapters-package-node22.log`, `-node20.log`; before/after SHA-256 records compare equal |
-| Fixed-candidate independent review | CLI/agent 12/12, parser fix 4/4, Web 12/12 and text correction 3/3; no skipped file and no confirmed open finding. Final checkpoint text review follows |
+| Fixed-candidate independent review | CLI/agent 12/12, parser fix 4/4, Web 12/12, text correction 3/3 and checkpoint `224f13e` 9/9; no skipped file and no confirmed open finding |
 
 Installed artifact: `.scratch/availability-adapters-package.qOfo1r/memobranch-1.1.0.tgz`.
 SHA-256: `c4212d32f0ba1a8bd913c51b723731f1c87c262aa440a84a252477ece502db09`.
@@ -117,6 +118,8 @@ mockups.
 
 ![Actual small-screen selection and result](assets/availability-web-mobile-2026-10-24.jpg)
 
+Queue counts were observed during browser control, then recorded in the post-run
+JSON; the post-run program does not reconstruct the earlier queue state.
 The first deliberately blocked native read reached the existing lock timeout
 without retrying. In the subsequent immediate-stop check, the real queue had two
 entries before stop and only its independent owner afterward; that owner then
@@ -128,6 +131,5 @@ These fixture failures are not passing native actions or product regressions.
 
 Push/publication/deployment: none. Database change: none. Data migration: none.
 Required/persisted configuration change: none. No real vault grants or external
-model calls. Finish independent review of this final checkpoint text, then continue
-local/Git pinned sharing, cross-vault imports,
+model calls. Continue local/Git pinned sharing, cross-vault imports,
 local OCR and the final roadmap review.
