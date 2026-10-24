@@ -21,6 +21,12 @@ unknown, not resolved by filename order. Exact committed content is reconstructe
 through current snapshot/source/key/lifecycle checks and matched against the signed
 manifest. Do not fall back to an older version after current access is withdrawn.
 
+Each requested page records its own complete dependency membership and built-in
+rule fingerprint. Shared document bodies are not duplicated; bounded indices point
+into the manifest. Conflict checks normalize only that page's required documents,
+not unrelated requested pages or their order. A mixed legacy/Wiki observation must
+not attach another page's built-in rules to a legacy-only reconstruction.
+
 Missing legacy evidence, a lost local proof key or forged markers must not be
 reinterpreted as when the system first knew a fact. Local clock correctness is not
 externally guaranteed. This is partial observation coverage, not a complete model

@@ -24,6 +24,10 @@ to select explicitly observed content at a requested time.
 - **WHEN** different observed content for a key has the same latest eligible recorded instant
 - **THEN** the result is explicitly ambiguous rather than choosing by filesystem order
 
+#### Scenario: Unchanged page observed with different companions
+- **WHEN** repeated observations at one recorded instant include different companion pages or request orders but the requested page and its dependencies are identical
+- **THEN** it remains reconstructible and unrelated documents or built-in rules are not mistaken for a conflict or rule change
+
 ### Requirement: Current authority constrains observed historical reads
 The system SHALL recheck current source readability, lifecycle, classification,
 tenant and key availability when returning historical observed content.

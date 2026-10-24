@@ -81,7 +81,11 @@ test('availability: old Git dates and forged markers cannot establish prior avai
   const observed = await vault.wikiObserveAvailability(observe(key)), record = await vault.get(observed.evidenceId);
   const prefix = 'MEMOBRANCH_KNOWLEDGE_AVAILABILITY_V1\n', copied = JSON.parse(record.body.slice((`# Evidence ${observed.evidenceId}\n\n` + prefix).length));
   await vault.capture({ content: prefix + JSON.stringify({ ...copied, observedAt: '2001-01-01T00:00:00.000Z' }), extract: false });
+  for (const documentIndices of [[-1], [999], [0.5]]) {
+    await vault.capture({ content: prefix + JSON.stringify({ ...copied, pages: [{ ...copied.pages[0], documentIndices }] }), extract: false });
+  }
   assert.equal((await vault.wikiAsKnownAt({ pageKeys: [key], at: '2002-01-01T00:00:00Z' })).items[0]!.status, 'unknown');
+  assert.equal((await vault.wikiAsKnownAt({ pageKeys: [key], at: new Date().toISOString() })).items[0]!.status, 'observed');
   await rm(join(root, '.amem/wiki-proof-key'));
   assert.equal((await vault.wikiAsKnownAt({ pageKeys: [key], at: new Date().toISOString() })).items[0]!.status, 'unknown');
   await assert.rejects(readFile(join(root, '.amem/wiki-proof-key')), { code: 'ENOENT' });
@@ -206,4 +210,28 @@ test('availability: runtime rule attestation mismatch cannot silently reconstruc
   const engine = engineOf(vault), port = portOf(engine), snapshot = port.snapshot;
   port.snapshot = async (...args) => ({ ...await snapshot(...args), builtinRulesHash: 'f'.repeat(64) });
   await assert.rejects(engine.at({ pageKeys: [key], at: observed.observedAt }), { code: 'VALIDATION_FAILED' });
+});
+
+test('availability: unrelated observed pages and request order do not manufacture a conflict for unchanged knowledge', async t => {
+  const { vault, key, source } = await fixture(t);
+  const proposed = await vault.propose({ key: 'independent-memory', statement: 'Independent approved memory.', kind: 'fact',
+    scope: 'user', sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [] }, [source.evidencePath]);
+  const approved = await vault.approve(proposed.id), legacy = `legacy:${approved.memoryId}`;
+  const before = await vault.wikiSnapshot({ commit: await vault.git.run(['rev-parse', 'HEAD']), pageKeys: [key] });
+  assert.ok(before.rules.some(rule => rule.id === 'builtin-wiki-rules-v1'), 'real fixture includes built-in rules');
+  const RealDate = Date, instant = Date.now();
+  globalThis.Date = new Proxy(RealDate, { construct(target, args, newTarget) { return Reflect.construct(target, args.length ? args : [instant], newTarget); } });
+  try {
+    const one = await vault.wikiObserveAvailability(observe(key));
+    const mixed = await vault.wikiObserveAvailability({ pageKeys: [key, legacy], confirm: true });
+    const reversed = await vault.wikiObserveAvailability({ pageKeys: [legacy, key], confirm: true });
+    assert.equal(one.observedAt, mixed.observedAt); assert.equal(one.observedAt, reversed.observedAt);
+    const result = await vault.wikiAsKnownAt({ pageKeys: [key], at: one.observedAt });
+    assert.equal(result.items[0]!.status, 'observed'); assert.ok(result.items[0]!.snapshot!.pages.some(page => page.meta.key === key));
+    const memory = await vault.wikiAsKnownAt({ pageKeys: [legacy], at: one.observedAt });
+    assert.equal(memory.items[0]!.status, 'observed');
+    assert.equal(memory.items[0]!.snapshot!.rules.some(rule => rule.id === 'builtin-wiki-rules-v1'), false);
+    const together = await vault.wikiAsKnownAt({ pageKeys: [legacy, key], at: one.observedAt });
+    assert.deepEqual(together.items.map(item => item.status), ['observed', 'observed']);
+  } finally { globalThis.Date = RealDate; }
 });

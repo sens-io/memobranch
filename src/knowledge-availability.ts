@@ -25,10 +25,17 @@ const documentSchema = z.object({ path: z.string().min(1).max(1000), hash, id: t
 const observationSchema = z.object({ kind: z.literal('knowledge-availability'), version: z.literal(1),
   eventId: z.string().uuid(), vaultId: text, tenantId: text, actorId: text, configHash: hash,
   observedAt: z.string().datetime(), commit, requestedKeys: keys,
-  builtinRulesHash: hash.nullable(),
-  pages: z.array(z.object({ key: text, path: documentSchema.shape.path }).strict()).min(1).max(50),
+  pages: z.array(z.object({ key: text, path: documentSchema.shape.path, builtinRulesHash: hash.nullable(),
+    documentIndices: z.array(z.number().int().min(0).max(199)).min(1).max(200)
+      .refine(values => new Set(values).size === values.length),
+  }).strict()).min(1).max(25),
   documents: z.array(documentSchema).min(1).max(200), scope: z.enum(scopes), sensitivity: z.enum(sensitivities), proof: hash,
-}).strict();
+}).strict().refine(value => value.pages.length === value.requestedKeys.length
+  && new Set(value.documents.map(document => document.path)).size === value.documents.length
+  && new Set(value.pages.map(page => page.key)).size === value.pages.length
+  && value.pages.every(page => value.requestedKeys.includes(page.key)
+    && page.documentIndices.every(index => Number.isInteger(index) && index >= 0 && index < value.documents.length)
+    && page.documentIndices.some(index => value.documents[index]?.path === page.path)));
 
 export type AvailabilityObserveOptions = z.input<typeof availabilityObserveSchema> & { signal?: AbortSignal | undefined };
 export type AvailabilityAtOptions = z.input<typeof availabilityAtSchema> & { signal?: AbortSignal | undefined };
@@ -81,8 +88,7 @@ export class AvailabilityEngine {
       const unsigned = { kind: 'knowledge-availability' as const, version: 1 as const, eventId: randomUUID(),
         vaultId: config.vaultId, tenantId: config.tenantId, actorId: this.port.principal.id, configHash: digest(config),
         observedAt: new Date().toISOString(), commit: snapshot.commit, requestedKeys: options.pageKeys,
-        builtinRulesHash: state.builtinRulesHash,
-        pages: snapshot.pages.map(page => ({ key: page.meta.type === 'memory' ? `legacy:${page.meta.id}` : String(page.meta.key), path: page.path })),
+        pages: requestedClosures(snapshot, documents, options.pageKeys, state.builtinRulesHash),
         documents: documents.map(doc => ({ path: doc.path, id: String(doc.meta.id), hash: documentHash(doc),
           scope: doc.meta.scope as Scope, sensitivity: doc.meta.sensitivity as Sensitivity })), scope, sensitivity };
       const observation = parse(observationSchema, { ...unsigned, proof: await this.port.sign(unsigned) });
@@ -160,15 +166,19 @@ export class AvailabilityEngine {
         const latest = matches[0];
         if (!latest) { items.push({ key, status: 'unknown', reason: 'No readable verifiable local availability observation supports this key and time.' }); continue; }
         const tied = matches.filter(match => match.observation.observedAt === latest.observation.observedAt);
-        if (new Set(tied.map(match => digest(match.observation.documents))).size > 1) {
+        if (new Set(tied.map(match => closureFingerprint(match.observation, key))).size > 1) {
           items.push({ key, status: 'unknown', reason: 'Conflicting observations at the same recorded instant.' }); continue;
         }
         const state = await this.port.snapshot([key], options, latest.observation.commit), snapshot = state.snapshot;
         finalChecks.push(state.validate);
-        if (state.builtinRulesHash !== latest.observation.builtinRulesHash) fail('Built-in rules no longer match the observed implementation');
+        const required = requestedPage(latest.observation, key);
+        if (state.builtinRulesHash !== required.builtinRulesHash) fail('Built-in rules no longer match the observed implementation');
         resultBytes += Buffer.byteLength(stableWikiJson(snapshot), 'utf8');
         if (resultBytes > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete observed knowledge view exceeds 20 MB; request fewer keys');
-        const expected = new Map(latest.observation.documents.map(doc => [doc.path, doc.hash]));
+        const expected = new Map(required.documentIndices.map(index => {
+          const doc = latest.observation.documents[index]!; return [doc.path, doc.hash] as const;
+        }));
+        if (state.documentHashes.length !== expected.size) fail('Historical dependency membership does not match observed content');
         for (const document of state.documentHashes) if (expected.get(document.path) !== document.hash) fail('Historical dependency does not match observed content');
         items.push({ key, status: 'observed', observedAt: latest.observation.observedAt, observationId: latest.evidenceId, snapshot });
       }
@@ -202,6 +212,37 @@ export class AvailabilityEngine {
 }
 
 function digest(value: unknown) { return sha256(stableWikiJson(value)); }
+function requestedPage(observation: Observation, key: string) {
+  const page = observation.pages.find(page => page.key === key);
+  if (!page) fail('Requested page was not observed'); return page;
+}
+function closureFingerprint(observation: Observation, key: string) {
+  const page = requestedPage(observation, key);
+  return digest({ builtinRulesHash: page.builtinRulesHash, documents: page.documentIndices
+    .map(index => observation.documents[index]!).sort((a, b) => a.path.localeCompare(b.path)) });
+}
+function requestedClosures(snapshot: WikiSnapshot, documents: Document[], requestedKeys: string[], builtinRulesHash: string | null) {
+  const keyOf = (page: WikiSnapshot['pages'][number]) => page.meta.type === 'memory' ? `legacy:${page.meta.id}` : page.meta.key;
+  const pages = new Map(snapshot.pages.map(page => [keyOf(page), page]));
+  const indices = new Map(documents.map((document, index) => [document.path, index]));
+  return requestedKeys.map(key => {
+    const pending = [key], seen = new Set<string>(), required = new Set<number>(); let builtin = false;
+    const add = (path: string) => { const index = indices.get(path); if (index === undefined) fail('Observed dependency is missing'); required.add(index); };
+    while (pending.length) {
+      const next = pending.pop()!; if (seen.has(next)) continue; seen.add(next);
+      const page = pages.get(next); if (!page) fail('Observed linked page is missing');
+      add(page.path); page.meta.evidence.forEach(add);
+      if (page.meta.type === 'wiki-page') {
+        pending.push(...page.meta.links, ...Object.keys(page.meta.dependencies));
+        for (const id of Object.keys(page.meta.rules)) {
+          if (id === 'builtin-wiki-rules-v1') builtin = true; else add(`wiki/.meta/${id}.md`);
+        }
+      }
+    }
+    if (builtin && !builtinRulesHash) fail('Observed built-in rule implementation is missing');
+    return { key, path: pages.get(key)!.path, documentIndices: [...required].sort((a, b) => a - b), builtinRulesHash: builtin ? builtinRulesHash : null };
+  });
+}
 function documentHash(doc: MarkdownDocument<object>) { return digest({ meta: doc.meta, body: doc.body }); }
 function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('Invalid availability input or observation'); return result.data; }
 function fail(message: string): never { throw new AgentMemoryError('VALIDATION_FAILED', message); }

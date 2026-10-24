@@ -42,6 +42,11 @@ are checked through the existing local snapshot mechanism; local proof keys are
 not Git-shared or exported. Offline plaintext copies cannot be recalled.
 The active built-in rule implementation is also hashed; a changed implementation
 cannot silently substitute for the observed one.
+Each requested key binds only its own complete dependencies; unrelated companion
+pages, request order and their built-in rules cannot manufacture a conflict.
+Reads use one consistent locked snapshot. An already-started read overlapping a
+later withdrawal can complete from that snapshot; a subsequent read must honor
+the withdrawal. This is not a promise to recall plaintext already read or copied.
 
 Bounds: 1–25 selected keys, existing snapshot dependency limits, at most 200 manifest
 documents and 160,000 manifest characters, and at most 20 MB of complete query
