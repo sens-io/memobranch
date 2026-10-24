@@ -1,7 +1,7 @@
 # Pinned local / Git Wiki sharing (development source)
 
-The library, CLI/MCP/Harness and Web adapters are implemented and undergoing
-retained/installed verification. This is not a published npm feature, cloud
+The library, CLI/MCP/Harness and Web adapters passed [local verification](pinned-shared-wiki-verification-2026-10-24.md),
+including both Git defaults, the same installed package on Node 20/22 and actual browser checks. This is not a published npm feature, cloud
 account service, import, merge or offline revocation mechanism.
 
 ```ts

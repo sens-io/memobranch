@@ -128,7 +128,7 @@ flowchart LR
 
 > **Explicit knowledge availability (development source):** [Record selected committed knowledge as immutable observations, then reconstruct only observed content at a time](docs/knowledge-availability.md). Missing or conflicting history stays unknown; current authority and source keys still apply. Library, CLI, agent and Web adapters passed local verification. Not yet published to npm.
 
-> **Pinned shared Wiki (development source):** [Read an explicitly configured local/Git source at a fixed commit](docs/pinned-shared-wiki.md), under current reader grants and source/key/lifecycle checks. Library, CLI, MCP/Harness and Web candidates are being verified. No cloud accounts, import/merge or offline plaintext revocation. Not yet published to npm.
+> **Pinned shared Wiki (development source):** [Read an explicitly configured local/Git source at a fixed commit](docs/pinned-shared-wiki.md), under current reader grants and source/key/lifecycle checks. Library, CLI, MCP/Harness and Web passed local verification. No cloud accounts, import/merge or offline plaintext revocation. Not yet published to npm.
 
 > **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Library, CLI, MCP/Harness and local Web management; trusted host code evaluates actual behavior, not prefilled passing results. The default Web host has no evaluator. Selected passing checks are not proof of general effectiveness; no automatic installation or execution. Not yet published to npm.
 
