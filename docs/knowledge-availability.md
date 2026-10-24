@@ -1,8 +1,7 @@
 # Explicit knowledge availability (development source)
 
-Library core accepted locally; CLI/MCP/Harness adapters are implemented in development
-source, with their final retained/installed review pending. Web management is also
-implemented in development source and undergoing verification.
+Library core and CLI/MCP/Harness/Web adapters are accepted locally in development
+source. See the [adapter verification and limits](knowledge-availability-adapters-verification-2026-10-24.md).
 This is separate from Git-date revision views and fact-effective time queries.
 No npm publication or real-world model knowledge measurement is implied.
 See the [core verification and limits](knowledge-availability-verification-2026-10-24.md).

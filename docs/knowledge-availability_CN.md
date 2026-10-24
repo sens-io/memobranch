@@ -1,7 +1,7 @@
 # 明确记录知识何时可用（开发源码）
 
-库接口核心已通过本地验收，命令行、MCP/Harness 已在开发源码实现，仍待各入口的
-完整保留检查、安装验证和复审；网页入口也已在开发源码实现，正在验证。它与按 Git 日期查看
+库核心以及命令行、MCP/Harness、网页入口均已通过开发源码的本地验收，
+检查和限制见[入口验收记录](knowledge-availability-adapters-verification-2026-10-24.md)。它与按 Git 日期查看
 版本、按事实生效时间筛选不同；不表示已发布 npm，也不证明真实模型何时理解了知识。
 实际检查和限制见[核心验收记录](knowledge-availability-verification-2026-10-24.md)。
 
