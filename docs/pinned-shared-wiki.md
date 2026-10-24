@@ -11,8 +11,10 @@ const shared = new SharedWikiReader(caller, {
   configPath: '/absolute/caller-vault/.amem/shared-wiki.json',
 });
 const sources = await shared.catalog();
+const selected = sources.sources.find(source => source.id === 'team-wiki');
+if (!selected) throw new Error('No readable configured source');
 const view = await shared.snapshot({
-  sourceId: 'team-wiki', pageKeys: ['concept:deployment'],
+  sourceId: selected.id, pageKeys: ['concept:deployment'], expectedCommit: selected.commit,
   // includeSensitive: true, includeSecret: true,
   signal: new AbortController().signal,
 });
@@ -63,6 +65,9 @@ fetch, check out a branch, modify refs/indexes, call a model or approve knowledg
 Missing objects, dirty content and pending transactions/erasures fail explicitly;
 recovery remains a separate existing operation. Advancing source HEAD never silently
 changes the configured pin, and an unreadable old page never falls back to another.
+Optional `expectedCommit` binds the catalog version just reviewed: a changed host
+pin is refused before source access. It cannot select or override a commit. Omitting
+the precondition reads the currently configured pin; Web always sends the displayed pin.
 
 Caller and source locks are not held together. Final caller/grant/key-selection
 revalidation and a last synchronous current/historical time check prevent extra
@@ -102,6 +107,8 @@ only when a host path is configured. Harness additionally registers them only wi
 read permission and supports the host plugin option `sharedWikiConfig`; MCP still
 denies execution without read authority. The plugin option takes precedence over
 the environment fallback. No request selects the pin, root, key variable or identity.
+Optional `expectedCommit` (CLI `--expected-commit FULL_CATALOG_HASH`) is only the
+stale-catalog precondition above; a plain `commit` override remains rejected.
 
 Both tools are read-only; complete escaped results must fit 9 MiB. CLI stop signals
 and per-tool cancellation own only their operation. No import/merge/apply/grant

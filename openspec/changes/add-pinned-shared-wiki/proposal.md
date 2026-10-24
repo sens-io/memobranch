@@ -3,7 +3,8 @@
 Add explicit host-configured, read-only access to selected Wiki pages from another
 local full Git vault at a pinned commit. This follows the user's selected local /
 Git deployment, without a cloud account service. Agent and HTTP arguments choose
-only a configured source ID and page keys, never a path, commit or identity.
+only a configured source ID and page keys, never a path, commit selector or identity.
+A catalog-pin precondition can reject a stale choice but cannot choose another commit.
 
 Every read must honor current caller and source authority, classification ceilings,
 explicit confidential selection, source integrity, encryption keys, withdrawal and

@@ -6,6 +6,12 @@ application options or `AMEM_SHARED_WIKI_CONFIG`. No request body can set that p
 The file is versioned as a format, not a new identity database: at most 20 sources
 and 100,000 UTF-8 bytes. Refuse symlink/non-regular files and unstable/oversized reads.
 
+An optional `expectedCommit` is a stale-selection precondition, never a commit
+selector. Compare it to the current host binding before any source access; mismatch
+refuses the read. Web always sends the catalog pin it displayed and also refuses
+an inconsistent response. Operators changing a pin cannot silently replace the
+version just reviewed in the page. Plain `commit` overrides remain rejected.
+
 Each strict source binding names a stable ID/title, absolute local root, complete
 40/64-character pinned commit, expected source vault/tenant IDs, explicit reader
 tuples (caller tenant and actor ID), allowed scopes and maximum sensitivity. Reader

@@ -314,7 +314,7 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
     case 'shared-list':
     case 'shared-snapshot': {
       const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
-        ...(action === 'shared-snapshot' ? ['include-sensitive', 'include-secret'] : [])]);
+        ...(action === 'shared-snapshot' ? ['include-sensitive', 'include-secret', 'expected-commit'] : [])]);
       for (const flag of args.flags.keys()) if (!allowed.has(flag)) throw new Error(`Unsupported shared Wiki flag: --${flag}`);
       for (const flag of ['include-sensitive', 'include-secret']) {
         const value = args.flags.get(flag);
@@ -328,6 +328,7 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
       try { await withOperation(controller.signal, async () => {
         print(action === 'shared-list' ? await reader.catalog() : await reader.snapshot({
           sourceId: requiredPositional(input, 0, 'configured shared source ID'), pageKeys: input.positionals.slice(1),
+          ...(args.flags.has('expected-commit') ? { expectedCommit: requiredFlag(args, 'expected-commit') } : {}),
           includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
         }));
       }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
@@ -688,7 +689,7 @@ Usage:
   amem wiki observe <page-key...> --confirm [--include-sensitive] [--include-secret]
   amem wiki as-known-at <page-key...> --at ISO_TIMESTAMP [--observations ev-ID,ev-ID] [--include-sensitive] [--include-secret]
   amem wiki shared-list --root CALLER_VAULT
-  amem wiki shared-snapshot <configured-source-id> <page-key...> --root CALLER_VAULT [--include-sensitive] [--include-secret]
+  amem wiki shared-snapshot <configured-source-id> <page-key...> --root CALLER_VAULT [--expected-commit CATALOG_PIN] [--include-sensitive] [--include-secret]
   amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]

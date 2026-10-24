@@ -56,14 +56,16 @@ try {
   const cli = async args => JSON.parse((await exec(process.execPath,
     [resolve('node_modules/memobranch/dist/cli.js'), 'wiki', ...args, '--root', caller.root], { env })).stdout);
   const catalog = await cli(['shared-list']); assert.equal(catalog.sources[0].id, binding.id);
-  assert.equal((await cli(['shared-snapshot', binding.id, key])).snapshot.commit, pin);
+  assert.equal((await cli(['shared-snapshot', binding.id, key, '--expected-commit', pin])).snapshot.commit, pin);
+  await assert.rejects(cli(['shared-snapshot', binding.id, key, '--expected-commit', sourceHead]));
   await assert.rejects(cli(['shared-snapshot', binding.id, key, '--commit', sourceHead]));
   await assert.rejects(cli(['shared-snapshot', binding.id, key, '--include-secret=true=garbage']));
   const exercise = async (adapter, call) => {
     assert.equal((await call('memory_shared_wiki_catalog', {})).sources[0].id, binding.id);
-    const view = await call('memory_shared_wiki_snapshot', input); assert.equal(view.snapshot.commit, pin);
+    const view = await call('memory_shared_wiki_snapshot', { ...input, expectedCommit: pin }); assert.equal(view.snapshot.commit, pin);
     assert.match(view.snapshot.pages.find(page => page.meta.key === key).body, /version 1/);
     await assert.rejects(call('memory_shared_wiki_snapshot', { ...input, root: source.root }));
+    await assert.rejects(call('memory_shared_wiki_snapshot', { ...input, expectedCommit: sourceHead }));
     await assert.rejects(call('memory_shared_wiki_snapshot', { ...input, permissions: ['admin'] }));
     assert.equal((await call('memory_shared_wiki_snapshot', input)).snapshot.commit, pin);
     console.log(`Installed ${adapter} shared Wiki: host-configured source, exact old pin, strict authority refusal and unchanged read state passed.`);

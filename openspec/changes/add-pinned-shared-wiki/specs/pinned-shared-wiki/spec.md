@@ -20,6 +20,10 @@ both current caller limits and current source integrity, lifecycle and keys.
 - **WHEN** an authorized reader requests selected pages and all current checks pass
 - **THEN** the complete result contains the configured committed version and origin, not silently newer content
 
+#### Scenario: A displayed catalog pin becomes stale before reading
+- **WHEN** the caller supplies the catalog pin as a precondition and the host has since changed that source's configured pin
+- **THEN** the read is refused before source access, without treating the precondition as a commit selector
+
 #### Scenario: Selected source content becomes unreadable
 - **WHEN** current scope, sensitivity, keys, withdrawal, expiry or source identity no longer permits the read
 - **THEN** no old plaintext or fallback revision is returned

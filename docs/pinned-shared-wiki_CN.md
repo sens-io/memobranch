@@ -10,8 +10,10 @@ const shared = new SharedWikiReader(caller, {
   configPath: '/absolute/caller-vault/.amem/shared-wiki.json',
 });
 const sources = await shared.catalog();
+const selected = sources.sources.find(source => source.id === 'team-wiki');
+if (!selected) throw new Error('No readable configured source');
 const view = await shared.snapshot({
-  sourceId: 'team-wiki', pageKeys: ['concept:deployment'],
+  sourceId: selected.id, pageKeys: ['concept:deployment'], expectedCommit: selected.commit,
   // includeSensitive: true, includeSecret: true,
   signal: new AbortController().signal,
 });
@@ -55,6 +57,9 @@ const view = await shared.snapshot({
 撤回与到期。不会抓取、切换分支、修改引用或索引、调用模型或批准知识。对象缺失、
 受管文件未提交、待处理事务／擦除均明确报错；恢复仍要单独执行。来源 HEAD 更新
 不会悄悄改变固定提交，旧版本不可读时也不会退回其他版本绕过限制。
+可选 `expectedCommit` 用来核对刚才列表中的版本：宿主已修改固定提交时，在访问来源
+前拒绝读取；它不能选择或覆盖提交。省略时读取宿主当前配置的版本；网页始终发送
+刚才显示的提交作为条件。
 
 两份资料库的锁不会同时持有。返回前重新检查调用方、共享授权与密钥选择，最后
 再检查当前／历史内容的到期和事实有效期，避免额外等待后返回已失效内容。
@@ -88,6 +93,8 @@ memobranch wiki shared-snapshot team-wiki concept:deployment --include-secret --
 `memory_shared_wiki_snapshot`（`sourceId`、`pageKeys`、可选私密标志）。Harness
 还要求读权限才注册，插件宿主可用 `sharedWikiConfig` 指定路径，优先于环境变量；
 MCP 在执行时仍检查读权限。请求不能选择提交、来源路径、密钥变量或身份。
+可选 `expectedCommit`（命令行 `--expected-commit FULL_CATALOG_HASH`）只作上述
+过期选择检查，仍拒绝普通 `commit` 覆盖字段。
 
 两个工具均只读，包含转义的完整结果最多 9 MiB。命令行停止信号与工具取消只控制
 本次操作；这里没有导入、合并、应用或增加授权的确认选项，这些属于之后单独实现

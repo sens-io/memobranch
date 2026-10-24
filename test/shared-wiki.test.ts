@@ -45,6 +45,19 @@ test('shared Wiki: matching actor and tenant grant is required even for admins, 
   principal.tenantId = 'foreign'; await assert.rejects(reader.catalog(), { code: 'AUTHORIZATION_DENIED' });
 });
 
+test('shared Wiki: a stale catalog pin precondition refuses before source access and cannot select another commit', async t => {
+  const { source, reader, input, binding, saveBindings } = await sharedFixture(t), pin = (await reader.catalog()).sources[0]!.commit;
+  const original = MemoryVault.prototype.wikiSnapshotWithValidation; let sourceReads = 0;
+  t.mock.method(MemoryVault.prototype, 'wikiSnapshotWithValidation', async function(this: MemoryVault, options: Parameters<typeof original>[0]) {
+    if (this.root === source.root) sourceReads++; return original.call(this, options);
+  });
+  binding.commit = await source.git.run(['rev-parse', 'HEAD']); assert.notEqual(binding.commit, pin); await saveBindings();
+  await assert.rejects(reader.snapshot({ ...input, expectedCommit: pin }), { code: 'VALIDATION_FAILED' }); assert.equal(sourceReads, 0);
+  const current = await reader.snapshot({ ...input, expectedCommit: binding.commit }); assert.equal(sourceReads, 1);
+  assert.match(current.snapshot.pages.find(page => page.meta.type === 'wiki-page' && page.meta.key === pageKey)!.body, /DATED_WIKI_CURRENT_CANARY/);
+  await assert.rejects(reader.snapshot({ ...input, expectedCommit: 'HEAD' }), { code: 'VALIDATION_FAILED' }); assert.equal(sourceReads, 1);
+});
+
 test('shared Wiki: caller scope and sensitivity cap configured grants; private opt-out precedes decryption', async t => {
   const { reader, input, principal } = await sharedFixture(t, 'secret'), decrypt = EncryptionManager.prototype.decrypt;
   const seen: string[] = [];

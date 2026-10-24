@@ -30,6 +30,7 @@ const principalSchema = z.object({ id: text, name: z.string().min(1).max(500), e
 
 export const sharedWikiSnapshotSchema = z.object({ sourceId,
   pageKeys: z.array(text).min(1).max(25).refine(values => new Set(values).size === values.length),
+  expectedCommit: commit.optional(),
   includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
 }).strict();
 export type SharedWikiSnapshotOptions = z.input<typeof sharedWikiSnapshotSchema> & { signal?: AbortSignal | undefined };
@@ -78,6 +79,7 @@ export class SharedWikiReader {
     const { signal, ...input } = parse(sharedWikiSnapshotSchema.extend({ signal: z.instanceof(AbortSignal).optional() }).strict(), options);
     return this.scoped(signal, async () => {
       const before = await this.state(), binding = this.binding(before, input.sourceId), principal = this.sourcePrincipal(before, binding);
+      if (input.expectedCommit !== undefined && input.expectedCommit !== binding.commit) throw new AgentMemoryError('VALIDATION_FAILED', 'Shared Wiki pin changed; reload the configured source catalog');
       const key = this.key(binding), keyHash = sha256(key);
       // Explicit empty key prevents MemoryVault's normal AMEM_MASTER_KEY fallback.
       let retained: Awaited<ReturnType<MemoryVault['wikiSnapshotWithValidation']>>;

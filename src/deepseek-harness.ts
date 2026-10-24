@@ -121,6 +121,7 @@ function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Pr
     parameters: {
       sourceId: { type: 'string', required: true, description: 'Configured source name from the shared catalog.' },
       pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
+      expectedCommit: { type: 'string', description: 'Optional full commit hash from the catalog. Rejects a changed host pin; never selects or overrides it.' },
       includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive content.' },
       includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret content; source keys remain required.' },
     }, output: jsonOutput,

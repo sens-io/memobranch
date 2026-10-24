@@ -59,10 +59,10 @@ test('shared Wiki CLI: configured catalog and fixed old content; no path/pin/gra
     [join(process.cwd(), 'dist/cli.js'), 'wiki', action, ...args, '--root', caller.root], { env: { ...env, ...overrides } });
   const beforeSource = await integrity(source), beforeCaller = await integrity(caller);
   const catalog = JSON.parse((await run('shared-list', [])).stdout); assert.equal(catalog.sources[0].id, binding.id);
-  const result = JSON.parse((await run('shared-snapshot', [binding.id, pageKey])).stdout);
+  const result = JSON.parse((await run('shared-snapshot', [binding.id, pageKey, '--expected-commit', binding.commit])).stdout);
   assert.equal(result.snapshot.commit, binding.commit); assert.match(result.snapshot.pages.find((page: any) => page.meta.key === pageKey).body, /DATED_WIKI_OLD_CANARY/);
   assert.doesNotMatch(JSON.stringify(result), /DATED_WIKI_CURRENT_CANARY/);
-  for (const args of [[binding.id, pageKey, '--commit', beforeSource.head], [binding.id, pageKey, '--file', fixture.configPath],
+  for (const args of [[binding.id, pageKey, '--commit', beforeSource.head], [binding.id, pageKey, '--expected-commit', beforeSource.head], [binding.id, pageKey, '--file', fixture.configPath],
     [binding.id, pageKey, '--confirm'], [binding.id, pageKey, '--include-secret=true=garbage'], [source.root, pageKey], [binding.id, pageKey, pageKey]]) await assert.rejects(run('shared-snapshot', args));
   await assert.rejects(run('shared-list', [binding.id])); await assert.rejects(run('shared-list', [], { AMEM_SHARED_WIKI_CONFIG: '' }));
   await assert.rejects(run('shared-snapshot', [binding.id, pageKey], { AMEM_ACTOR_ID: 'foreign' }));
@@ -91,10 +91,10 @@ for (const kind of ['MCP', 'Harness'] as const) {
       assert.deepEqual(names.filter(name => name.startsWith('memory_shared_wiki_')).sort(), [catalogName, snapshotName]);
       const catalog = await invoke(catalogName, {}); assert.equal(catalog.sources[0].id, binding.id); assert.equal('root' in catalog.sources[0], false);
       await assert.rejects(invoke(snapshotName, { ...input, includeSecret: false }));
-      const result = await invoke(snapshotName, input); assert.equal(result.snapshot.commit, binding.commit);
+      const result = await invoke(snapshotName, { ...input, expectedCommit: binding.commit }); assert.equal(result.snapshot.commit, binding.commit);
       assert.match(result.snapshot.pages.find((page: any) => page.meta.key === pageKey).body, /DATED_WIKI_OLD_CANARY/);
       for (const extra of [{ root: source.root }, { commit: beforeSource.head }, { tenantId: fixture.sourceConfig.tenantId }, { principal: caller.principal },
-        { permissions: ['admin'] }, { masterKeyEnv: 'SHARED_TEST_MASTER_KEY' }, { signal: {} }, { apply: true }, { pageKeys: [pageKey, pageKey] }]) await assert.rejects(invoke(snapshotName, { ...input, ...extra }));
+        { permissions: ['admin'] }, { masterKeyEnv: 'SHARED_TEST_MASTER_KEY' }, { signal: {} }, { apply: true }, { expectedCommit: beforeSource.head }, { pageKeys: [pageKey, pageKey] }]) await assert.rejects(invoke(snapshotName, { ...input, ...extra }));
       await assert.rejects(invoke(catalogName, { sourceId: binding.id }));
       assert.equal((await invoke(snapshotName, input)).snapshot.commit, binding.commit);
       assert.deepEqual(await integrity(source), beforeSource); assert.deepEqual(await integrity(caller), beforeCaller);
