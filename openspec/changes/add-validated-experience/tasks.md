@@ -4,7 +4,7 @@
 - [x] Implement explicit skill export without installation or execution.
 - [x] Add CLI capture/prepare/export without arbitrary evaluator execution.
 - [x] Add applicable MCP/Harness adapters without agent-selected evaluators.
-- [ ] Add the management workflow with explicit review and no server-side arbitrary execution.
+- [x] Add the management workflow with explicit review and no server-side arbitrary execution.
 - [x] Document core/CLI claims and confidential export limits in both languages.
 
 ## Verification
@@ -19,3 +19,6 @@ Core/CLI checkpoint and exact remaining scope: [verification record](../../../do
 
 MCP/Harness retained, installed Node 20/22 and independent review checks:
 [agent adapter checkpoint](../../../docs/validated-experience-agent-verification-2026-10-23.md).
+
+Web retained/installed checks, native-browser workflow and responsive evidence:
+[Web verification record](../../../docs/validated-experience-web-verification-2026-10-23.md).

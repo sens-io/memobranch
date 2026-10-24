@@ -1,8 +1,9 @@
 # Explicit knowledge availability (development source)
 
-Library core candidate; CLI, agent tools and Web adapters are not yet implemented.
+Library core accepted locally; CLI, agent tools and Web adapters remain in development.
 This is separate from Git-date revision views and fact-effective time queries.
 No npm publication or real-world model knowledge measurement is implied.
+See the [core verification and limits](knowledge-availability-verification-2026-10-24.md).
 
 ```ts
 const recorded = await vault.wikiObserveAvailability({

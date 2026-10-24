@@ -5,8 +5,8 @@ Baseline: `6b9223bb3fab1c2fc3ed86f4aca9aafa85a81865`.
 Runtime candidate: `d329b3c1887d542d4a0da43e374aae8b2a15987e`.
 Runtime, retained, installed and fixed-commit review checks passed. Native-browser
 checks were subsequently completed on **2026-10-24** as recorded below. Combined
-retained/installed checks after the later Zod security update remain pending;
-this batch is not closed solely by the browser result.
+retained/installed checks after the later Zod security update subsequently passed
+as described below; the experience batch is accepted locally.
 The overall roadmap remains open.
 
 The local page separates immutable observations, expiring signed procedure
@@ -129,6 +129,15 @@ these output dimensions differ from the measured viewport dimensions above.
 
 ## Changes and remaining work
 
+Combined follow-up on 2026-10-24 passed after the availability fixes and Zod update:
+828 retained checks under each Git default, strict OpenSpec 28/28, production audit
+zero known vulnerabilities and the same 381-entry artifact installed on Node
+22.17.0/main and exact minimum 20.0.0/master. Failure/cancellation/skip counts were
+zero; package SHA-256 before/after matched. See the exact artifact, logs and limits
+in [combined verification](knowledge-availability-verification-2026-10-24.md).
+This later evidence replaces the pending combined checks, not the historical
+browser-host dependency limitation above. No model-quality claim is added.
+
 Push/publication/deployment: none. Database change: none. Data migration: none.
 Required or persisted configuration change: none. Optional host API: the trusted
 evaluator callback above; default behavior remains no evaluator. No real service
@@ -139,8 +148,7 @@ change manifests/lockfile; the later dependency security update is tracked separ
 cobalt/violet/teal palette, offline fonts, readable form stages and explicit state
 controls. No remote font, CDN, generic redesign or new frontend dependency was added.
 
-Complete combined patched-dependency checks and review the final checkpoint text;
-fix and recheck any confirmed finding. Record browser results honestly. Do not close batch 1
-or the overall goal at this intermediate checkpoint. Time availability, pinned
+Final checkpoint-text review remains required. Do not close the overall goal at
+this intermediate checkpoint. Availability adapters, pinned
 local/Git sharing, cross-vault import/merge and local OCR remain in
 [remaining work](remaining-roadmap.md).

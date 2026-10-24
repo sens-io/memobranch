@@ -19,8 +19,10 @@ that a deployed service has been upgraded.
 | Build and test types | Passed on Node 22.17.0 |
 | Oversized-collection regressions | 2/2; real experience/availability schemas reject 20,000 invalid members without per-member error accumulation; `.scratch/zod-security-targeted.log` |
 | Production dependency audit | 0 known vulnerabilities; `.scratch/zod-security-audit.json` |
-| Full retained, installed Node 20/22 and independent fixed-commit review | Pending combined verification after the availability review fixes |
+| Full retained after combined fixes | 828/828 under each Git default, failure/cancellation/skip 0; `.scratch/availability-fixed-full-main.log`, `-master.log` |
+| Same installed artifact on Node 20.0.0/22.17.0 | Passed, 381 packed entries; before/after SHA-256 identical; see [combined core verification](knowledge-availability-verification-2026-10-24.md) |
+| Independent fixed-commit review | 4/4 security files reviewed, skipped 0, no confirmed open security issue; static review, not a separate runtime execution |
 
 Retain all old assertions and transport/content limits. This patch does not make
-arbitrary unbounded schemas safe or establish model effectiveness. Complete the
-pending combined checks before accepting the current implementation batch.
+arbitrary unbounded schemas safe or establish model effectiveness. Overall roadmap
+work continues; this security change is accepted locally, not deployed or published.

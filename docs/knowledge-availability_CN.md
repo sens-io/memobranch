@@ -1,7 +1,8 @@
 # 明确记录知识何时可用（开发源码）
 
-目前是库接口核心候选，命令行、Agent 工具和网页入口尚未实现。它与按 Git 日期查看
+库接口核心已通过本地验收，命令行、Agent 工具和网页入口仍在开发。它与按 Git 日期查看
 版本、按事实生效时间筛选不同；不表示已发布 npm，也不证明真实模型何时理解了知识。
+实际检查和限制见[核心验收记录](knowledge-availability-verification-2026-10-24.md)。
 
 ```ts
 const recorded = await vault.wikiObserveAvailability({
