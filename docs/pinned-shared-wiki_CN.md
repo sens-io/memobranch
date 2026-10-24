@@ -1,6 +1,6 @@
 # 本机／Git 固定版本 Wiki 共享（开发源码）
 
-库核心已实现，正在验证和独立审查；命令行、MCP、Harness 与网页入口待实现。
+库核心及命令行、MCP、Harness 已实现，仍在完整保留检查和安装验证中；网页入口待实现。
 尚未发布 npm，不新增云端账号，不导入、合并或批准知识，也不能追回离线明文。
 
 ```ts
@@ -70,3 +70,25 @@ const view = await shared.snapshot({
 
 数据库变更：无。数据迁移：无。可选配置：上述明确共享文件及来源密钥变量；
 开发和测试不会配置真实共享，执行测试仅使用合成资料库。
+
+## 命令行与 Agent（开发源码）
+
+启动者把 `AMEM_SHARED_WIKI_CONFIG` 设置为上述文件的绝对路径；请求不能提供
+这个路径。调用者身份、所属资料库、读权限、作用域和敏感等级仍使用原有宿主环境
+配置，不新增账号服务。
+
+```sh
+memobranch wiki shared-list --root /absolute/caller-vault
+memobranch wiki shared-snapshot team-wiki concept:deployment --root /absolute/caller-vault
+# 仍需当前权限及来源自己的密钥选择：
+memobranch wiki shared-snapshot team-wiki concept:deployment --include-secret --root /absolute/caller-vault
+```
+
+宿主配置路径后，MCP/Harness 提供 `memory_shared_wiki_catalog`（无参数）和
+`memory_shared_wiki_snapshot`（`sourceId`、`pageKeys`、可选私密标志）。Harness
+还要求读权限才注册，插件宿主可用 `sharedWikiConfig` 指定路径，优先于环境变量；
+MCP 在执行时仍检查读权限。请求不能选择提交、来源路径、密钥变量或身份。
+
+两个工具均只读，包含转义的完整结果最多 9 MiB。命令行停止信号与工具取消只控制
+本次操作；这里没有导入、合并、应用或增加授权的确认选项，这些属于之后单独实现
+和审核的功能。

@@ -1,7 +1,7 @@
 # Pinned local / Git Wiki sharing (development source)
 
-The library core is implemented and undergoing verification/review. CLI, MCP,
-Harness and Web adapters are pending. This is not a published npm feature, cloud
+The library core and CLI/MCP/Harness adapters are implemented and undergoing
+retained/installed verification. Web management is pending. This is not a published npm feature, cloud
 account service, import, merge or offline revocation mechanism.
 
 ```ts
@@ -82,3 +82,27 @@ overrides. Complete results are returned or refused, never silently truncated.
 Database change: none. Data migration: none. Optional configuration: the explicit
 host file and optional source-key variable above; no real configuration is applied
 by development or tests. All executing fixtures use synthetic vaults.
+
+## CLI and agents (development source)
+
+The operator sets `AMEM_SHARED_WIKI_CONFIG` to the absolute host file above. It is
+never accepted as a tool argument. Configure the caller's existing actor, tenant,
+read permission, scopes and clearance in its ordinary host environment.
+
+```sh
+memobranch wiki shared-list --root /absolute/caller-vault
+memobranch wiki shared-snapshot team-wiki concept:deployment --root /absolute/caller-vault
+# With current authorization and the source's own key selection:
+memobranch wiki shared-snapshot team-wiki concept:deployment --include-secret --root /absolute/caller-vault
+```
+
+MCP/Harness expose `memory_shared_wiki_catalog` (empty arguments) and
+`memory_shared_wiki_snapshot` (`sourceId`, `pageKeys`, optional confidential flags)
+only when a host path is configured. Harness additionally registers them only with
+read permission and supports the host plugin option `sharedWikiConfig`; MCP still
+denies execution without read authority. The plugin option takes precedence over
+the environment fallback. No request selects the pin, root, key variable or identity.
+
+Both tools are read-only; complete escaped results must fit 9 MiB. CLI stop signals
+and per-tool cancellation own only their operation. No import/merge/apply/grant
+confirmation flags exist here; those workflows require separate later capabilities.

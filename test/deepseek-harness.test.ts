@@ -9,7 +9,7 @@ import { apply, inject, name, type Config } from '../src/deepseek-harness.js';
 import { MemoryVault } from '../src/vault.js';
 
 const roots: string[] = [];
-const environmentKeys = ['AMEM_VAULT', 'AMEM_ACTOR_ID', 'AMEM_ACTOR_NAME', 'AMEM_PERMISSIONS', 'AMEM_ALLOWED_SCOPES', 'AMEM_MAX_SENSITIVITY', 'AMEM_TENANT_ID'] as const;
+const environmentKeys = ['AMEM_VAULT', 'AMEM_ACTOR_ID', 'AMEM_ACTOR_NAME', 'AMEM_PERMISSIONS', 'AMEM_ALLOWED_SCOPES', 'AMEM_MAX_SENSITIVITY', 'AMEM_TENANT_ID', 'AMEM_SHARED_WIKI_CONFIG'] as const;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));

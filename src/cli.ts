@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
-import { toAgentMemoryError } from './errors.js';
+import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
 import { authorize, localAdminPrincipal, principalFromEnv } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type Scope, type Sensitivity } from './types.js';
@@ -17,6 +17,7 @@ import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImport
 import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan } from './pdf-import.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
+import { SharedWikiReader } from './shared-wiki.js';
 
 interface ParsedArgs {
   command: string;
@@ -310,6 +311,28 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'shared-list':
+    case 'shared-snapshot': {
+      const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
+        ...(action === 'shared-snapshot' ? ['include-sensitive', 'include-secret'] : [])]);
+      for (const flag of args.flags.keys()) if (!allowed.has(flag)) throw new Error(`Unsupported shared Wiki flag: --${flag}`);
+      for (const flag of ['include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      if (action === 'shared-list' && input.positionals.length) throw new Error('Shared catalog takes no positional arguments');
+      const configPath = process.env.AMEM_SHARED_WIKI_CONFIG;
+      if (!configPath) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      const reader = new SharedWikiReader(vault, { configPath }), controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        print(action === 'shared-list' ? await reader.catalog() : await reader.snapshot({
+          sourceId: requiredPositional(input, 0, 'configured shared source ID'), pageKeys: input.positionals.slice(1),
+          includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
+        }));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
     case 'observe':
     case 'as-known-at': {
       const flags = new Set(['root', 'actor', 'actor-name', 'actor-email', 'include-sensitive', 'include-secret',
@@ -664,6 +687,8 @@ Usage:
   amem wiki snapshot <page-key...> (--commit FULL_HASH | --at ISO_TIMESTAMP) [--include-sensitive] [--include-secret]
   amem wiki observe <page-key...> --confirm [--include-sensitive] [--include-secret]
   amem wiki as-known-at <page-key...> --at ISO_TIMESTAMP [--observations ev-ID,ev-ID] [--include-sensitive] [--include-secret]
+  amem wiki shared-list --root CALLER_VAULT
+  amem wiki shared-snapshot <configured-source-id> <page-key...> --root CALLER_VAULT [--include-sensitive] [--include-secret]
   amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]

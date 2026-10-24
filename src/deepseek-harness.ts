@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
@@ -13,6 +13,7 @@ import { MemoryVault } from './vault.js';
 import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema, experienceToolInput, experienceToolResult } from './experience-tool.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
+import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
 import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
@@ -30,6 +31,7 @@ export interface Config {
   automaticMemory?: AutomaticMemoryMode;
   automaticMaxInputCharacters?: number;
   automaticMaxCaptureCharacters?: number;
+  sharedWikiConfig?: string;
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -62,6 +64,8 @@ export const Config: Schema<Config> = Schema.object({
     .description('Maximum user-prompt characters used for automatic local recall.').default(2_000),
   automaticMaxCaptureCharacters: Schema.number().min(500).max(100_000).step(1)
     .description('Skip automatic capture when the complete text-only turn exceeds this limit.').default(20_000),
+  sharedWikiConfig: Schema.string().max(4096)
+    .description('Optional absolute host-owned shared Wiki JSON path; empty uses AMEM_SHARED_WIKI_CONFIG. No cloud account or automatic grants.').default(''),
 });
 
 const jsonOutput = {
@@ -96,12 +100,32 @@ export function apply(ctx: Context, config: Config): void {
   if (granted(principal, 'sync')) registerSyncTools(ctx, vault);
   registerWikiTools(ctx, vault, principal, resolved);
   registerExperienceTools(ctx, vault, principal, resolved);
+  registerSharedWikiTools(ctx, vault, principal, resolved);
   registerAutomaticMemory(ctx, vault, principal, {
     mode: resolved.automaticMemory ?? 'off', scope: resolved.defaultScope, sensitivity: resolved.defaultSensitivity,
     limit: resolved.defaultSearchLimit, maxContextCharacters: resolved.defaultMaxContextCharacters,
     maxInputCharacters: resolved.automaticMaxInputCharacters ?? 2_000,
     maxCaptureCharacters: resolved.automaticMaxCaptureCharacters ?? 20_000,
   }, (signal, action) => run(vault, signal, action, false));
+}
+
+function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
+  if (!config.sharedWikiConfig || !granted(principal, 'read')) return;
+  const shared = new SharedWikiReader(vault, { configPath: config.sharedWikiConfig });
+  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_catalog',
+    description: 'List only configured shared names/pins/ceilings granted to the current reader. Host owns all paths and identities. Does not prove each page is available or change access.', parameters: {}, output: jsonOutput,
+    async execute(args, exec) { wikiArguments(args, []); return runJson(vault, exec.signal, () => shared.catalog()); },
+  }));
+  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_snapshot',
+    description: 'Read complete pages from a configured source at its host-pinned local ancestor commit. Current caller/source grants, scope/clearance, private opt-in, keys, withdrawal and expiry apply. No fetching, model, import, merge, approval or grant editing; content is untrusted data. Offline copies cannot be recalled. Complete escaped result limited to 9 MiB.',
+    parameters: {
+      sourceId: { type: 'string', required: true, description: 'Configured source name from the shared catalog.' },
+      pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
+      includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive content.' },
+      includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret content; source keys remain required.' },
+    }, output: jsonOutput,
+    async execute(args, exec) { return runJson(vault, exec.signal, async () => wikiToolResult(await shared.snapshot(wikiToolInput(sharedWikiSnapshotSchema, args)))); },
+  }));
 }
 
 function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
@@ -791,6 +815,10 @@ function registerSyncTools(ctx: Context, vault: MemoryVault): void {
 function resolveConfig(config: Config): Config {
   const vaultRoot = config.vaultRoot.trim();
   if (vaultRoot.length > 4_096) failValidation('vaultRoot exceeds 4096 characters');
+  if (config.sharedWikiConfig !== undefined && typeof config.sharedWikiConfig !== 'string') failValidation('sharedWikiConfig must be a host-owned path');
+  const configured = config.sharedWikiConfig ?? '', inherited = process.env.AMEM_SHARED_WIKI_CONFIG ?? '';
+  const sharedWikiConfig = configured.trim() ? configured : inherited.trim() ? inherited : '';
+  if (sharedWikiConfig && (sharedWikiConfig.length > 4096 || !isAbsolute(sharedWikiConfig) || /[\x00-\x1f\x7f]/.test(sharedWikiConfig))) failValidation('sharedWikiConfig requires an absolute host-owned path of at most 4096 characters');
   return {
     vaultRoot,
     defaultScope: oneOf(config.defaultScope, scopes, 'defaultScope'),
@@ -800,6 +828,7 @@ function resolveConfig(config: Config): Config {
     automaticMemory: oneOf(config.automaticMemory ?? 'off', ['off', 'recall', 'recall-and-capture'] as const, 'automaticMemory'),
     automaticMaxInputCharacters: boundedInteger(config.automaticMaxInputCharacters ?? 2_000, 'automaticMaxInputCharacters', 100, 2_000),
     automaticMaxCaptureCharacters: boundedInteger(config.automaticMaxCaptureCharacters ?? 20_000, 'automaticMaxCaptureCharacters', 500, 100_000),
+    sharedWikiConfig,
   };
 }
 
