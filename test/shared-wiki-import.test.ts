@@ -5,6 +5,9 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import { SharedWikiImporter } from '../src/shared-wiki-import.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { AgentMemoryError } from '../src/errors.js';
 import { parseMarkdown, serializeMarkdown } from '../src/markdown.js';
 import { readWikiImportArtifact, wikiImportRestrictions } from '../src/wiki-import-artifact.js';
 import { withFileLock } from '../src/utils.js';
@@ -14,7 +17,7 @@ import { MemoryVault } from '../src/vault.js';
 import { LlmClient } from '../src/llm.js';
 import { renderPublicWikiCatalog } from '../src/wiki.js';
 import type { WikiPageDraft, WikiPageMeta } from '../src/wiki-types.js';
-import { importedWikiCaution } from '../src/wiki-import-artifact.js';
+import { importedWikiCaution, wikiImportContent, wikiImportUri } from '../src/wiki-import-artifact.js';
 
 async function fixture(t: TestContext) {
   const data = await sharedFixture(t); data.principal.permissions = ['read','write','review'];
@@ -86,6 +89,49 @@ test('shared Wiki import: concurrent identical confirmations retain one immutabl
   const results=await Promise.all([importer.apply(plan,{confirm:true}),importer.apply(plan,{confirm:true})]);
   assert.equal(results.filter(result=>result.commit).length,1);assert.equal(new Set(results.map(result=>result.evidenceId)).size,1);
   assert.equal((await caller.listRecords({collection:'evidence'})).total,1);
+});
+
+test('shared Wiki import: authority loss after the actual capture reports safe completed identifiers instead of hiding a committed copy',async t=>{
+  const {caller,callerAdmin,importer,selection,principal}=await fixture(t),{plan}=await importer.prepare(selection),original=caller.captureWikiImport.bind(caller);
+  let completed:Awaited<ReturnType<typeof original>>|undefined;
+  t.mock.method(caller,'captureWikiImport',async(...args:Parameters<typeof original>)=>{completed=await original(...args);principal.permissions=['read'];return completed;});
+  await assert.rejects(importer.apply(plan,{confirm:true}),(error:unknown)=>{
+    assert.ok(error instanceof AgentMemoryError);assert.equal(error.code,'AUTHORIZATION_DENIED');assert.deepEqual(error.safeDetails?.completedImport,{evidenceId:completed!.evidenceId,commit:completed!.commit,duplicate:false});
+    assert.doesNotMatch(JSON.stringify(error),/DATED_WIKI_|Compiled Wiki import artifact/);return true;
+  });
+  assert.equal(await callerAdmin.git.run(['rev-parse','HEAD']),completed!.commit);assert.ok(await callerAdmin.get(completed!.evidenceId));
+});
+
+test('shared Wiki import: write-only ordinary API and actual MCP capture cannot forge the reserved import source',async t=>{
+  const {source,caller,callerConfig,principal,importer,selection,calls}=await fixture(t),{plan}=await importer.prepare(selection);
+  const input={content:wikiImportContent(plan.artifact),sourceUri:wikiImportUri(plan.artifact),scope:plan.scope,sensitivity:plan.sensitivity,extract:false};
+  principal.permissions=['write'];const before=await integrity(caller),sourceBefore=await integrity(source),count=calls();
+  await assert.rejects(caller.capture(input),{code:'VALIDATION_FAILED'});
+  await assert.rejects(caller.captureWikiImport(input,{revalidate:async()=>{},validate:()=>{}}),{code:'AUTHORIZATION_DENIED'});
+  const env=Object.fromEntries(Object.entries(process.env).filter(([name])=>!name.startsWith('AMEM_')&&name!=='OPENAI_API_KEY')) as Record<string,string>;
+  Object.assign(env,{AMEM_ACTOR_ID:principal.id,AMEM_TENANT_ID:callerConfig.tenantId,AMEM_PERMISSIONS:'write',AMEM_ALLOWED_SCOPES:'project',AMEM_MAX_SENSITIVITY:'secret',AMEM_MASTER_KEY:'31'.repeat(32)});
+  const client=new Client({name:'import-capture-boundary',version:'1'});
+  try{
+    await client.connect(new StdioClientTransport({command:process.execPath,args:[join(process.cwd(),'dist/mcp.js'),caller.root],env,stderr:'pipe'}));
+    const response=await client.callTool({name:'memory_capture',arguments:input});assert.equal(response.isError,true);
+    const first=response.content[0];assert.equal(first?.type,'text');if(first?.type!=='text')throw new Error('Missing capture refusal');
+    assert.equal(JSON.parse(first.text).error.code,'VALIDATION_FAILED');assert.doesNotMatch(first.text,/DATED_WIKI_/);
+  }finally{await client.close();}
+  assert.deepEqual(await integrity(caller),before);assert.deepEqual(await integrity(source),sourceBefore);assert.equal(calls(),count);
+});
+
+test('shared Wiki import: expiry after an actual committed capture reports completion while retained evidence stays inspectable',async t=>{
+  const {source,caller,callerAdmin,importer,selection}=await fixture(t),base=Date.now();let shifted=false;t.mock.method(Date,'now',()=>base+(shifted?1001:0));
+  for(const file of await readdir(join(source.root,'wiki/pages'))){const path=join(source.root,'wiki/pages',file),doc=parseMarkdown<Record<string,unknown>>(await readFile(path,'utf8'));
+    doc.meta.expiresAt=new Date(base+1000).toISOString();await writeFile(path,serializeMarkdown(doc.meta,doc.body));}
+  await source.git.commit('Synthetic post-commit import expiry',source.principal,['wiki']);
+  const {plan}=await importer.prepare(selection),original=caller.captureWikiImport.bind(caller);let completed:Awaited<ReturnType<typeof original>>|undefined;
+  t.mock.method(caller,'captureWikiImport',async(...args:Parameters<typeof original>)=>{completed=await original(...args);shifted=true;return completed;});
+  await assert.rejects(importer.apply(plan,{confirm:true}),(error:unknown)=>{
+    assert.ok(error instanceof AgentMemoryError);assert.equal(error.code,'NOT_FOUND');assert.deepEqual(error.safeDetails?.completedImport,{evidenceId:completed!.evidenceId,commit:completed!.commit,duplicate:false});
+    assert.doesNotMatch(JSON.stringify(error),/DATED_WIKI_|Compiled Wiki import artifact/);return true;
+  });
+  assert.equal(await callerAdmin.git.run(['rev-parse','HEAD']),completed!.commit);assert.ok(await callerAdmin.get(completed!.evidenceId));
 });
 
 test('shared Wiki import: copying an old internal version retains its currently secret classification', async t => {

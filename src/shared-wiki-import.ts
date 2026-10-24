@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AgentMemoryError } from './errors.js';
+import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 import { authorize } from './policy.js';
 import { SharedWikiReader, sharedWikiSnapshotSchema, type SharedWikiReaderOptions } from './shared-wiki.js';
@@ -62,7 +62,13 @@ export class SharedWikiImporter {
       const result = await this.caller.captureWikiImport({ content, sourceUri: wikiImportUri(artifact), scope: plan.scope, sensitivity: plan.sensitivity }, {
         revalidate: async () => { await retained.validateConfiguration(); validate(); }, validate,
       });
-      validate(); return result;
+      try { validate(); }
+      catch (cause) {
+        const error = toAgentMemoryError(cause);
+        throw new AgentMemoryError(error.code, error.message, { ...error.safeDetails,
+          completedImport: { evidenceId: result.evidenceId, commit: result.commit, duplicate: result.duplicate } }, error.exitCode);
+      }
+      return result;
     });
   }
 

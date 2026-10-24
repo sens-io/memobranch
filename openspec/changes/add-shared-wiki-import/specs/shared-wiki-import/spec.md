@@ -20,6 +20,11 @@ its own signed preview and separate existing review approval.
 - **WHEN** confirmation is absent, required permissions are missing, a plan is edited or belongs to another destination/config
 - **THEN** import fails without partial evidence or knowledge writes
 
+#### Scenario: Ordinary capture cannot bypass import confirmation
+- **WHEN** a caller submits a complete artifact and reserved import URI through ordinary API, CLI or Agent capture
+- **THEN** the request fails without writing import evidence, regardless of extra JSON fields
+- **AND** only the trusted internal importer with runtime validation guards may capture the reserved format under current read/write/review authority
+
 ### Requirement: Origin and restrictions must survive integration
 The system SHALL preserve complete fixed-version provenance and distinguish a
 compiled-source copy from original-source verification. It SHALL enforce source

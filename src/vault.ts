@@ -563,7 +563,7 @@ export class MemoryVault {
     return this.captureGuarded(options);
   }
 
-  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void; reuseExistingWithoutCommit?: boolean }): Promise<CaptureResult> {
+  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void; reuseExistingWithoutCommit?: boolean; allowWikiImport?: boolean }): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
     const content = options.content.trim();
@@ -575,6 +575,7 @@ export class MemoryVault {
     authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
     const pdfOriginal = options.pdfOriginal === undefined ? undefined : structuredClone(options.pdfOriginal);
     const wikiImport = isWikiImportUri(options.sourceUri);
+    if (wikiImport && guard?.allowWikiImport !== true) throw new AgentMemoryError('VALIDATION_FAILED', 'Reserved Wiki import sources require separate preparation and confirmed import');
     if (wikiImport && pdfOriginal !== undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports cannot carry PDF attachments');
     if (pdfOriginal !== undefined) assertPdfEvidence(pdfOriginal, content);
     const digest = (wikiImport ? wikiImportEvidenceDigest : pdfOriginal === undefined ? evidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
@@ -620,7 +621,14 @@ export class MemoryVault {
   /** @internal Trusted import adapter only; callbacks never come from a request. */
   async captureWikiImport(options: Pick<CaptureOptions, 'content' | 'sourceUri' | 'scope' | 'sensitivity'>,
     guard: { revalidate(): Promise<void>; validate(): void }) {
-    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true });
+    const config = await this.config();
+    for (const permission of ['read','write','review'] as const) authorize(this.principal, permission, {
+      tenantId: config.tenantId, scope: options.scope ?? 'user', sensitivity: options.sensitivity ?? 'internal',
+    });
+    if (!isWikiImportUri(options.sourceUri) || typeof guard?.revalidate !== 'function' || typeof guard?.validate !== 'function') {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports require trusted runtime validation guards');
+    }
+    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true, allowWikiImport: true });
   }
 
   private experienceEngine(): ExperienceEngine {
@@ -1730,7 +1738,7 @@ export class MemoryVault {
       } catch (error) {
         throwIfCancelled();
         if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw error;
-        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is invalid: ${path}`);
+        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is missing or invalid: ${path}`);
       }
     }
   }
@@ -1989,6 +1997,8 @@ export class MemoryVault {
 
   private async readProjectionDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
     const documents: Array<MarkdownDocument<T>> = [];
+    const sources = directory === 'wiki' || directory === 'candidates'
+      ? new Map((await this.readProjectionDirectory<Record<string, unknown>>('evidence')).map(source => [source.path, source])) : undefined;
     for (const file of await listMarkdown(resolveInside(this.root, directory))) {
       const path = toPosix(relative(this.root, file));
       const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
@@ -1997,7 +2007,11 @@ export class MemoryVault {
       const document = { path, meta: parsed.meta, body: parsed.body };
       if (!isEncryptedEnvelope(parsed.meta)) assertManagedDocument(document);
       if (!isEncryptedEnvelope(parsed.meta) && (parsed.meta.type === 'memory' || parsed.meta.type === 'memory-candidate')) {
-        await this.assertEvidenceReferences(parsed.meta.evidence as string[], this.activePermission ?? 'read');
+        // Global projections use only already-public outer metadata, never the
+        // current operator's authority to decrypt unrelated source records.
+        const references = (parsed.meta.evidence as string[]).flatMap(path => sources?.get(path) ?? []);
+        if (references.some(source => isEncryptedEnvelope(source.meta))) continue;
+        for (const source of references) assertOrdinaryEvidence(source as unknown as MarkdownDocument<EvidenceMeta>);
       }
       documents.push(document as unknown as MarkdownDocument<T>);
     }
