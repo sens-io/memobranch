@@ -120,10 +120,12 @@ remaining width is its scrollbar), no document-wide horizontal overflow. The
 small-screen preview and controls were usable; editing cleared the validation ID,
 disabled old validation/export and left zero skill-download controls. The viewport
 override was reset, console errors were empty, and the temporary tab was closed.
+The browser's captured JPEG images below are 833×853 and 360×780 respectively;
+these output dimensions differ from the measured viewport dimensions above.
 
-![Actual local export page, default viewport](assets/experience-web-desktop-2026-10-24.png)
+![Actual local export page, default viewport](assets/experience-web-desktop-2026-10-24.jpg)
 
-![Actual local skill preview, 375px browser viewport](assets/experience-web-mobile-2026-10-24.png)
+![Actual local skill preview, 375px browser viewport](assets/experience-web-mobile-2026-10-24.jpg)
 
 ## Changes and remaining work
 
