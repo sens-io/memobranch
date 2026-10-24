@@ -3,6 +3,7 @@ import type { EvidenceMeta, MarkdownDocument, Scope, Sensitivity } from './types
 import { scopes, sensitivities } from './types.js';
 import { sha256 } from './utils.js';
 import { assertPdfEvidence } from './pdf-evidence.js';
+import { readWikiImportArtifact } from './wiki-import-artifact.js';
 
 const EVIDENCE_HASH_DOMAIN = 'memobranch:evidence:v2';
 
@@ -19,6 +20,9 @@ export function legacyEvidenceDigest(scope: Scope, sourceUri: string, content: s
 export function pdfEvidenceDigest(scope: Scope, sensitivity: Sensitivity, sourceUri: string, content: string): string {
   return sha256(`memobranch:evidence:pdf:v1\0${evidenceDigest(scope, sensitivity, sourceUri, content)}`);
 }
+export function wikiImportEvidenceDigest(scope: Scope, sensitivity: Sensitivity, sourceUri: string, content: string): string {
+  return sha256(`memobranch:evidence:compiled-wiki:v1\0${evidenceDigest(scope, sensitivity, sourceUri, content)}`);
+}
 
 function assertSourceUri(sourceUri: string): void {
   // Scope and sensitivity are enums. The remaining identity prefix must not
@@ -31,7 +35,7 @@ function assertSourceUri(sourceUri: string): void {
 export function evidenceDigestVersion(
   document: MarkdownDocument<Record<string, unknown>>,
   options: { allowLegacyEvidence?: boolean } = {},
-): 1 | 2 | 3 {
+): 1 | 2 | 3 | 4 {
   const { meta, body, path } = document;
   const id = typeof meta.id === 'string' ? meta.id : '';
   const scope = typeof meta.scope === 'string' && scopes.includes(meta.scope as Scope) ? meta.scope as Scope : null;
@@ -45,13 +49,21 @@ export function evidenceDigestVersion(
     typeof meta.actor !== 'string' || !meta.actor.trim() ||
     (meta.sourceUri !== undefined && typeof meta.sourceUri !== 'string') ||
     typeof meta.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(meta.sha256) ||
-    (meta.digestVersion !== undefined && meta.digestVersion !== 2 && meta.digestVersion !== 3) ||
+    (meta.digestVersion !== undefined && meta.digestVersion !== 2 && meta.digestVersion !== 3 && meta.digestVersion !== 4) ||
     (meta.legacySha256 !== undefined && (typeof meta.legacySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(meta.legacySha256)))
   ) {
     throw new AgentMemoryError('VALIDATION_FAILED', `Invalid evidence schema: ${path}`);
   }
   const sourceUri = typeof meta.sourceUri === 'string' ? meta.sourceUri : '';
   const content = body.slice(prefix.length);
+  const imported = readWikiImportArtifact(document as unknown as MarkdownDocument<EvidenceMeta>);
+  if (meta.digestVersion === 4) {
+    const digest = wikiImportEvidenceDigest(scope, sensitivity, sourceUri, content);
+    if (!imported || meta.pdfOriginal !== undefined || meta.legacySha256 !== undefined || meta.sha256 !== digest || id !== `ev-${digest.slice(0,12)}`) {
+      throw new AgentMemoryError('VALIDATION_FAILED', `Imported Wiki evidence identity validation failed: ${path}`);
+    }
+    return 4;
+  }
   if (meta.digestVersion === 3) {
     assertPdfEvidence(meta.pdfOriginal, content);
     const digest = pdfEvidenceDigest(scope, sensitivity, sourceUri, content);

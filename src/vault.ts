@@ -9,7 +9,7 @@ import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './confi
 import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest } from './evidence.js';
+import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest, wikiImportEvidenceDigest } from './evidence.js';
 import { assertPdfEvidence } from './pdf-evidence.js';
 import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityConditions, factValidityFields, type MemoriesAtOptions, type MemoryValidityUpdate } from './effective-time.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
@@ -43,10 +43,11 @@ import { stableWikiJson, WikiProof } from './wiki-proof.js';
 import { ExperienceEngine, type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite, type ExperienceRunner, type ExperienceSelection } from './experience.js';
 import { AvailabilityEngine, type AvailabilityObserveOptions, type AvailabilityAtOptions, type AvailabilitySnapshot } from './knowledge-availability.js';
 import type { WikiPageMeta } from './wiki-types.js';
-import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions } from './wiki-snapshot.js';
+import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiSnapshotSupport } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
 import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
 import { reviewDiff } from './review-diff.js';
+import { isWikiImportUri, readWikiImportArtifact } from './wiki-import-artifact.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -142,15 +143,16 @@ export class MemoryVault {
   /** @internal Adapters with further asynchronous checks must validate again immediately before returning. */
   async wikiSnapshotWithValidation(options: WikiSnapshotOptions | WikiDatedSnapshotOptions) {
     const result = await this.readWikiSnapshot(options); result.validate();
-    return { snapshot: result.snapshot, validate: result.validate };
+    return { snapshot: result.snapshot, validate: result.validate, support: result.support };
   }
 
-  private async readWikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<AvailabilitySnapshot> {
+  private async readWikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<AvailabilitySnapshot & { support: WikiSnapshotSupport }> {
     authorize(this.principal, 'read');
     const input = snapshotOptions(options);
     let validateTime = () => {};
     let documentHashes: Array<{ path: string; hash: string }> = [];
     let builtinRulesHash: string | null = null;
+    let support: WikiSnapshotSupport | undefined;
     const action = () => this.settledRead<WikiSnapshot>(async () => {
       const config = await this.config();
       const erasures = join(this.root, '.amem', 'erasures');
@@ -215,6 +217,14 @@ export class MemoryVault {
       if (pages.length !== visited.size || pages.some(page => !visited.has(keyOf(page)))) throw unavailable();
       await reader.finish();
       const checkedPages = [...pages, ...[...visited].map(key => current.get(key)!)];
+      const from = checkedPages.flatMap(page => page.meta.type === 'memory' && page.meta.validFrom ? [page.meta.validFrom] : []).sort((a,b) => Date.parse(b)-Date.parse(a))[0];
+      const until = checkedPages.flatMap(page => [page.meta.expiresAt, ...(page.meta.type === 'memory' ? [page.meta.validUntil] : [])])
+        .filter((value): value is string => Boolean(value)).sort((a,b) => Date.parse(a)-Date.parse(b))[0];
+      support = { scope: scopes[Math.min(...checkedPages.map(page => scopes.indexOf(page.meta.scope)))]!,
+        sensitivity: sensitivities[Math.max(...checkedPages.map(page => sensitivities.indexOf(page.meta.sensitivity)))]!,
+        conditions: unique(checkedPages.flatMap(page => [...page.meta.conditions, ...(page.meta.type === 'memory' ? factValidityConditions(page.meta) : [])])),
+        uncertainty: unique(checkedPages.flatMap(page => page.meta.type === 'wiki-page' ? page.meta.uncertainty : page.meta.status === 'conflicted' ? ['Current or historical ordinary memory has unresolved conflict.'] : [])),
+        conflicted: checkedPages.some(page => page.meta.status === 'conflicted'), ...(from ? { validFrom: from } : {}), ...(until ? { expiresAt: until } : {}) };
       validateTime = () => {
         const now = Date.now();
         for (const page of checkedPages) {
@@ -240,7 +250,8 @@ export class MemoryVault {
       // Releasing the lock performs asynchronous cleanup after the inner checks.
       throwIfCancelled();
       validateTime();
-      return { snapshot: result, documentHashes, builtinRulesHash, validate: () => {
+      if (!support) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki snapshot support is unavailable');
+      return { snapshot: result, documentHashes, builtinRulesHash, support, validate: () => {
         throwIfCancelled(); if (input.signal?.aborted) throw cancellationError(); validateTime();
       } };
     };
@@ -552,7 +563,7 @@ export class MemoryVault {
     return this.captureGuarded(options);
   }
 
-  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void }): Promise<CaptureResult> {
+  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void; reuseExistingWithoutCommit?: boolean }): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
     const content = options.content.trim();
@@ -563,8 +574,10 @@ export class MemoryVault {
     const sensitivity = options.sensitivity ?? 'internal';
     authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
     const pdfOriginal = options.pdfOriginal === undefined ? undefined : structuredClone(options.pdfOriginal);
+    const wikiImport = isWikiImportUri(options.sourceUri);
+    if (wikiImport && pdfOriginal !== undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports cannot carry PDF attachments');
     if (pdfOriginal !== undefined) assertPdfEvidence(pdfOriginal, content);
-    const digest = (pdfOriginal === undefined ? evidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
+    const digest = (wikiImport ? wikiImportEvidenceDigest : pdfOriginal === undefined ? evidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
     const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
@@ -582,7 +595,7 @@ export class MemoryVault {
         scope,
         sensitivity,
         sha256: digest,
-        digestVersion: pdfOriginal === undefined ? 2 : 3,
+        digestVersion: wikiImport ? 4 : pdfOriginal === undefined ? 2 : 3,
         ...(pdfOriginal === undefined ? {} : { pdfOriginal }),
         immutable: true,
       };
@@ -590,7 +603,8 @@ export class MemoryVault {
       await this.writeDocument(evidence);
       await this.appendLog('capture', actor, `${evidenceId} (${scope}/${sensitivity})`);
       return { evidence, duplicate: false };
-    }, undefined, guard ? { revalidateBeforeCommit: guard.revalidate, validateBeforeCommit: guard.validate } : {});
+    }, undefined, guard ? { revalidateBeforeCommit: guard.revalidate, validateBeforeCommit: guard.validate,
+      ...(guard.reuseExistingWithoutCommit ? { noCommitIf: value => value.duplicate } : {}) } : {});
 
     let candidates: Array<{ id: string; path: string }> = [];
     let commit = mutation.commit;
@@ -601,6 +615,12 @@ export class MemoryVault {
       commit = extracted.commit ?? commit;
     }
     return { evidenceId, evidencePath: mutation.value.evidence.path, duplicate: mutation.value.duplicate, candidates, commit };
+  }
+
+  /** @internal Trusted import adapter only; callbacks never come from a request. */
+  async captureWikiImport(options: Pick<CaptureOptions, 'content' | 'sourceUri' | 'scope' | 'sensitivity'>,
+    guard: { revalidate(): Promise<void>; validate(): void }) {
+    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true });
   }
 
   private experienceEngine(): ExperienceEngine {
@@ -698,6 +718,7 @@ export class MemoryVault {
     await this.config();
     authorize(this.principal, 'write');
     const evidence = await this.requireById<EvidenceMeta>('evidence', evidenceId, 'write');
+    assertOrdinaryEvidence(evidence);
     const proposals = await this.llm.extractMemories(evidence.body, { scope: evidence.meta.scope, sensitivity: evidence.meta.sensitivity });
     throwIfCancelled();
     return this.proposeMany(proposals, [evidence.path], actor, `extract ${evidenceId}`);
@@ -727,6 +748,7 @@ export class MemoryVault {
       if (!rootPath.startsWith('evidence/')) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance must point into evidence/: ${path}`);
       const source = await this.readDocument<Record<string, unknown>>(rootPath, 'write');
       if (source.meta.type !== 'evidence' || source.meta.immutable !== true) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance is not immutable evidence: ${path}`);
+      assertOrdinaryEvidence(source as unknown as MarkdownDocument<EvidenceMeta>);
       normalizedEvidence.push(rootPath);
       evidenceRestrictions.push({ scope: scopeOf(source.meta), sensitivity: sensitivityOf(source.meta) });
     }
@@ -1002,7 +1024,9 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     authorize(this.principal, 'read', { tenantId: config.tenantId });
-    for (const directory of ['wiki', 'candidates', 'evidence']) {
+    // A canonical evidence ID is inspectable without first reading unrelated invalid derived records.
+    const directories = /^ev-[a-f0-9]{12,64}$/.test(id) ? ['evidence', 'wiki', 'candidates'] : ['wiki', 'candidates', 'evidence'];
+    for (const directory of directories) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
       if (found?.meta.type === 'wiki-page') return this.wikiEngine().get(id);
       if (found && found.meta.type !== 'memory-erased') return found;
@@ -1446,7 +1470,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; revalidateBeforeCommit?: () => Promise<void>; validateBeforeCommit?: () => void } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; revalidateBeforeCommit?: () => Promise<void>; validateBeforeCommit?: () => void; noCommitIf?: (value: T) => boolean } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -1468,11 +1492,20 @@ export class MemoryVault {
       );
       this.activeTransaction = transaction;
       this.activePermission = permission;
-      let ready = false;
+      let ready = false, rolledBack = false;
       try {
         await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
         await this.installRuntimeIgnore();
         const value = await action();
+        if (options.noCommitIf?.(value)) {
+          // An exact import retry must not refresh unrelated time-dependent projections.
+          if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
+          options.validateBeforeCommit?.(); throwIfCancelled();
+          await withoutCancellation(() => transaction.rollback()); rolledBack = true;
+          this.activeTransaction = null; this.activePermission = null;
+          throwIfCancelled(); options.validateBeforeCommit?.();
+          return { value, commit: null };
+        }
         await this.rebuildGenerated(await this.config());
         if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
         options.validateBeforeCommit?.();
@@ -1496,7 +1529,7 @@ export class MemoryVault {
       } catch (error) {
         this.activeTransaction = null;
         this.activePermission = null;
-        if (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit)) await withoutCancellation(() => transaction.rollback());
+        if (!rolledBack && (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit))) await withoutCancellation(() => transaction.rollback());
         throw error;
       }
     }), resourceIds);
@@ -1693,6 +1726,7 @@ export class MemoryVault {
       try {
         const document = await this.readDocument<Record<string, unknown>>(path, permission);
         if (document.meta.type !== 'evidence' || document.meta.immutable !== true) throw new Error('not immutable evidence');
+        assertOrdinaryEvidence(document as unknown as MarkdownDocument<EvidenceMeta>);
       } catch (error) {
         throwIfCancelled();
         if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw error;
@@ -1924,6 +1958,7 @@ export class MemoryVault {
     const document = await this.materializeDocument<T>(normalized, parsed, { config });
     const logicalMeta = document.meta as Record<string, unknown>;
     authorize(this.principal, permission, { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta), tenantId: config.tenantId });
+    if (logicalMeta.type === 'memory' || logicalMeta.type === 'memory-candidate') await this.assertEvidenceReferences(logicalMeta.evidence as string[], permission);
     return document;
   }
 
@@ -1961,6 +1996,9 @@ export class MemoryVault {
       // projections, so the minimal envelope is sufficient and needs no key.
       const document = { path, meta: parsed.meta, body: parsed.body };
       if (!isEncryptedEnvelope(parsed.meta)) assertManagedDocument(document);
+      if (!isEncryptedEnvelope(parsed.meta) && (parsed.meta.type === 'memory' || parsed.meta.type === 'memory-candidate')) {
+        await this.assertEvidenceReferences(parsed.meta.evidence as string[], this.activePermission ?? 'read');
+      }
       documents.push(document as unknown as MarkdownDocument<T>);
     }
     return documents;
@@ -2068,6 +2106,10 @@ async function listMarkdown(root: string): Promise<string[]> {
     else if (entry.isFile() && entry.name.endsWith('.md')) output.push(path);
   }
   return output;
+}
+
+function assertOrdinaryEvidence(document: MarkdownDocument<EvidenceMeta>): void {
+  if (readWikiImportArtifact(document)) throw new AgentMemoryError('VALIDATION_FAILED', 'Compiled Wiki imports support the separate Wiki workflow, not ordinary memories');
 }
 
 function validateProposal(proposal: ProposedMemory, maximum: number): void {

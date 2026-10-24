@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { evidenceDigest } from '../src/evidence.js';
+import { assertEvidenceDocument, wikiImportEvidenceDigest } from '../src/evidence.js';
 import { assertWikiImportTime, importedWikiCaution, readWikiImportArtifact, wikiImportArtifact, wikiImportContent, wikiImportRestrictions, wikiImportUri } from '../src/wiki-import-artifact.js';
 import type { EvidenceMeta, MarkdownDocument, Scope, Sensitivity } from '../src/types.js';
 import { sharedFixture } from './shared-wiki-fixture.js';
 
 function evidence(artifact: ReturnType<typeof wikiImportArtifact>, scope: Scope = 'project', sensitivity: Sensitivity = 'internal'): MarkdownDocument<EvidenceMeta> {
-  const content = wikiImportContent(artifact), sourceUri = wikiImportUri(artifact), digest = evidenceDigest(scope, sensitivity, sourceUri, content), id = 'ev-' + digest.slice(0,12);
+  const content = wikiImportContent(artifact), sourceUri = wikiImportUri(artifact), digest = wikiImportEvidenceDigest(scope, sensitivity, sourceUri, content), id = 'ev-' + digest.slice(0,12);
   return { path: `evidence/2026/10/24/${id}.md`, meta: { id, type: 'evidence', immutable: true, createdAt: '2026-10-24T00:00:00Z',
-    actor: 'synthetic-importer', scope, sensitivity, sha256: digest, digestVersion: 2, sourceUri }, body: `# Evidence ${id}\n\n` + content };
+    actor: 'synthetic-importer', scope, sensitivity, sha256: digest, digestVersion: 4, sourceUri }, body: `# Evidence ${id}\n\n` + content };
 }
 
 test('Wiki import artifact: real pinned snapshot preserves complete compiled content, versions and origin without runtime/key fields', async t => {
@@ -21,6 +21,11 @@ test('Wiki import artifact: real pinned snapshot preserves complete compiled con
   const later = structuredClone(view); later.snapshot.checkedAt = '2099-01-01T00:00:00Z'; later.snapshot.authorityHead = 'f'.repeat(40);
   for (const page of later.snapshot.pages) page.currentRevision += 1;
   assert.equal(wikiImportContent(wikiImportArtifact(later)), content); assert.deepEqual(readWikiImportArtifact(evidence(artifact)), artifact);
+  assertEvidenceDocument(evidence(artifact) as unknown as MarkdownDocument<Record<string,unknown>>);
+  for (const digestVersion of [undefined,2,3]) {
+    const changed = structuredClone(evidence(artifact)); if(digestVersion===undefined)delete changed.meta.digestVersion;else changed.meta.digestVersion=digestVersion as 2|3;
+    assert.throws(()=>assertEvidenceDocument(changed as unknown as MarkdownDocument<Record<string,unknown>>),{code:'VALIDATION_FAILED'});
+  }
 });
 
 test('Wiki import artifact: complete graph and strict known fields are required; attachment and foreign key injection fail', async t => {

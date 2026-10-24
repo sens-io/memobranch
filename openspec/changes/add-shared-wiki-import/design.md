@@ -36,6 +36,13 @@ artifact hash, never a request-selected path. Existing evidence hashing binds UR
 classification and full content. Validate reserved bodies/URIs and their labels;
 ordinary text/PDF evidence is unchanged. An artifact states that the original raw
 sources were not copied or independently verified and plaintext cannot be recalled.
+Use a distinct evidence hash domain and `digestVersion: 4`; older readers reject
+this version rather than treating compiled material as ordinary evidence. Removing
+or lowering the version/URI fails validation. Stop older readers/writers before
+enabling imports; no existing record is migrated or rewritten automatically.
+Source support includes the selected historical graph and its current restrictions,
+so copying an older version cannot undo a later stronger classification, conflict,
+condition, uncertainty or expiry.
 
 Destination scope must be equally or more restrictive in the project's existing
 scope ordering; sensitivity cannot be lower than any source page. Effective start

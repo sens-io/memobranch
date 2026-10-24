@@ -73,7 +73,7 @@ export interface EvidenceMeta {
   scope: Scope;
   sensitivity: Sensitivity;
   sha256: string;
-  digestVersion?: 2 | 3;
+  digestVersion?: 2 | 3 | 4;
   legacySha256?: string;
   immutable: true;
   /** Exact PDF bytes, never part of a model source/context payload. */

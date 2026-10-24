@@ -5,7 +5,7 @@ import { AgentMemoryError } from './errors.js';
 import { effectiveTimestamp } from './effective-time.js';
 import type { GitStore } from './git-store.js';
 import { throwIfCancelled } from './operation.js';
-import type { MarkdownDocument, MemoryMeta, VaultConfig } from './types.js';
+import type { MarkdownDocument, MemoryMeta, VaultConfig, Scope, Sensitivity } from './types.js';
 import type { WikiPageMeta } from './wiki-types.js';
 
 export interface WikiSnapshotOptions {
@@ -31,6 +31,12 @@ export interface WikiSnapshot {
   rules: Array<{ id: string; revision: number }>;
   warnings: string[];
   selection?: { kind: 'git-committer-time'; at: string; committedAt: string; traversal: 'first-parent'; scannedCommits: number };
+}
+
+/** @internal Combined historical/current support for a deliberately retained copy. */
+export interface WikiSnapshotSupport {
+  scope: Scope; sensitivity: Sensitivity; conditions: string[]; uncertainty: string[]; conflicted: boolean;
+  validFrom?: string; expiresAt?: string;
 }
 
 export const snapshotOptionsSchema = z.object({ commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),

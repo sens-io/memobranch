@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { LlmClient } from './llm.js';
-import { combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
+import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 import { authorize, permissions, type Principal } from './policy.js';
 import { scopes, sensitivities, type VaultConfig } from './types.js';
 import { sha256 } from './utils.js';
@@ -76,6 +76,11 @@ export class SharedWikiReader {
   }
 
   async snapshot(options: SharedWikiSnapshotOptions): Promise<SharedWikiView> {
+    const retained = await this.snapshotWithValidation(options); retained.validate(); return retained.view;
+  }
+
+  /** @internal Runtime guards for further proof work or a destination transaction, never JSON capabilities. */
+  async snapshotWithValidation(options: SharedWikiSnapshotOptions) {
     const { signal, ...input } = parse(sharedWikiSnapshotSchema.extend({ signal: z.instanceof(AbortSignal).optional() }).strict(), options);
     return this.scoped(signal, async () => {
       const before = await this.state(), binding = this.binding(before, input.sourceId), principal = this.sourcePrincipal(before, binding);
@@ -100,10 +105,21 @@ export class SharedWikiReader {
         source: { id: binding.id, title: binding.title, vaultId: binding.vaultId, tenantId: binding.tenantId, commit: binding.commit },
         snapshot: retained.snapshot, warnings: [...warnings] };
       if (Buffer.byteLength(stableWikiJson(result), 'utf8') > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete shared Wiki view exceeds 20 MB');
-      this.finalCaller(before);
-      // No await after this check: the additional caller/grant wait may cross expiry.
-      try { retained.validate(); } catch (error) { this.sourceError(error, binding.id); }
-      return result;
+      const validate = () => {
+        if (signal?.aborted) throw cancellationError();
+        this.finalCaller(before);
+        if (sha256(this.key(binding)) !== keyHash) deny('Shared source key selection changed');
+        try { retained.validate(); } catch (error) { this.sourceError(error, binding.id); }
+      };
+      // No source/caller lock is acquired here. A destination transaction already owns its writer lock.
+      const validateConfiguration = async () => {
+        const config = await this.caller.config(), bindings = await readBindings(this.configPath);
+        this.unchanged(before, { ...before, configHash: digest(config), bindingsHash: digest(bindings) }); validate();
+      };
+      validate();
+      return { view: result, validate, validateConfiguration, destination: {
+        vaultId: before.config.vaultId, tenantId: before.config.tenantId, configHash: before.configHash, maxContentCharacters: before.config.limits.maxContentCharacters,
+      }, support: retained.support, attestationContext: digest({ bindings: before.bindingsHash, key: keyHash }) };
     });
   }
 

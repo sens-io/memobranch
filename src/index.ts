@@ -32,3 +32,6 @@ export type { ExperienceTraceInput, ExperiencePrepareOptions, ExperiencePlan, Ex
 export type { AvailabilityObserveOptions, AvailabilityAtOptions } from './knowledge-availability.js';
 export { SharedWikiReader } from './shared-wiki.js';
 export type { SharedWikiReaderOptions, SharedWikiSnapshotOptions, SharedWikiView } from './shared-wiki.js';
+export { SharedWikiImporter } from './shared-wiki-import.js';
+export type { SharedWikiImportPlan, SharedWikiImportPrepareOptions } from './shared-wiki-import.js';
+export type { WikiImportArtifact, WikiImportRestrictions } from './wiki-import-artifact.js';
