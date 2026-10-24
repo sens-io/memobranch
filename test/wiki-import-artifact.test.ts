@@ -15,6 +15,7 @@ test('Wiki import artifact: real pinned snapshot preserves complete compiled con
   const { reader, input, binding } = await sharedFixture(t), view = await reader.snapshot(input), artifact = wikiImportArtifact(view), content = wikiImportContent(artifact);
   assert.equal(artifact.source.commit, binding.commit); assert.equal(artifact.pages[0]!.revision, 1);
   assert.match(content, /DATED_WIKI_OLD_CANARY/); assert.doesNotMatch(content, /DATED_WIKI_CURRENT_CANARY|masterKey|root|authorityHead|checkedAt|currentRevision|pdfOriginal/);
+  assert.ok(content.includes(importedWikiCaution)); assert.ok(evidence(artifact).body.includes(importedWikiCaution));
   assert.deepEqual(artifact.sources, view.snapshot.sources); assert.deepEqual(artifact.rules, view.snapshot.rules);
   assert.equal(artifact.pages.find(page => page.key === input.pageKeys[0])!.body, view.snapshot.pages.find(page => page.meta.key === input.pageKeys[0])!.body);
   const later = structuredClone(view); later.snapshot.checkedAt = '2099-01-01T00:00:00Z'; later.snapshot.authorityHead = 'f'.repeat(40);
@@ -29,6 +30,18 @@ test('Wiki import artifact: complete graph and strict known fields are required;
     { ...artifact, pages: [...artifact.pages, artifact.pages[0]] }, { ...artifact, pages: artifact.pages.map(page => ({ ...page, signal: {} })) } ]) {
     assert.throws(() => wikiImportContent(changed as typeof artifact), { code: 'VALIDATION_FAILED' });
   }
+});
+
+test('Wiki import artifact: an actual long ordinary-memory dependency fits the whole-artifact limit without truncation', async t => {
+  const { source, reader, binding, saveBindings } = await sharedFixture(t);
+  const captured = await source.capture({ content: 'Actual long legacy support', scope: 'project', extract: false });
+  const candidate = await source.propose({ kind: 'fact', key: 'K'.repeat(400), statement: 'L'.repeat(120_000), scope: 'project', sensitivity: 'internal',
+    confidence: 1, explicit: true, conditions: ['Synthetic long ordinary memory'], tags: [] }, [captured.evidencePath]);
+  const approved = await source.approve(candidate.id); binding.commit = await source.git.run(['rev-parse', 'HEAD']); await saveBindings();
+  const view = await reader.snapshot({ sourceId: binding.id, pageKeys: ['legacy:' + approved.memoryId] }), artifact = wikiImportArtifact(view);
+  assert.ok(artifact.pages[0]!.body.length > 100_000); assert.equal(artifact.pages[0]!.body, view.snapshot.pages[0]!.body);
+  assert.ok(Buffer.byteLength(wikiImportContent(artifact), 'utf8') < 1_000_000); assert.equal(artifact.pages[0]!.pageType, 'legacy');
+  assert.equal(artifact.pages[0]!.title.length, 400);
 });
 
 test('Wiki import artifact: derived warning, restrictions and exact canonical URI/body cannot be lowered or edited', async t => {

@@ -12,7 +12,7 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/), key = clean(200), date = z.st
 const path = clean(1000).refine(value => /^(?:wiki|evidence)\//.test(value) && value.endsWith('.md') && !value.includes('\\') && value.split('/').every(part => part && part !== '.' && part !== '..'));
 const list = <T extends z.ZodType>(schema: T, max = 100) => z.array(schema).max(max).refine(values => new Set(values.map(value => stableWikiJson(value))).size === values.length);
 const page = z.object({ key, id: key, path, pageType: z.enum([...pageTypes, 'legacy']), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  recordHash: digest, title: clean(300), summary: clean(2000), body: z.string().min(1).max(100_000), scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
+  recordHash: digest, title: clean(1_000_000), summary: clean(2000), body: z.string().min(1).max(1_000_000), scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
   status: z.enum(['active', 'conflicted']), evidence: list(path).min(1), links: list(key), conditions: list(clean(4000)), uncertainty: list(clean(4000)),
   validFrom: date.optional(), expiresAt: date.optional(),
 }).strict();
@@ -24,9 +24,9 @@ export const wikiImportArtifactSchema = z.object({ version: z.literal(1), kind: 
 }).strict();
 export type WikiImportArtifact = z.infer<typeof wikiImportArtifactSchema>;
 export interface WikiImportRestrictions { scope: Scope; sensitivity: Sensitivity; conditions: string[]; uncertainty: string[]; conflicted: boolean; validFrom?: string; expiresAt?: string }
-const prefix = 'Compiled Wiki import artifact (v1)\n\n';
-const uriPrefix = 'urn:memobranch:compiled-wiki:v1:';
 export const importedWikiCaution = 'Copied compiled Wiki material; original raw sources were not copied or independently verified. Offline plaintext cannot be recalled.';
+const prefix = 'Compiled Wiki import artifact (v1)\n\n' + importedWikiCaution + '\n\n';
+const uriPrefix = 'urn:memobranch:compiled-wiki:v1:';
 
 /** Normalize only known fields. No source credentials, attachments or runtime read timestamps. */
 export function wikiImportArtifact(view: SharedWikiView): WikiImportArtifact {
