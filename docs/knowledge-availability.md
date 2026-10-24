@@ -29,8 +29,9 @@ partial explicit observations. Legacy history and unverifiable/forged markers
 remain unknown. Losing the local proof key does not create replacement trust.
 
 Query selects each key's latest verifiable observation not later than `at`.
-Different manifests at the same latest recorded instant are unknown, not chosen
-by filename order. The result includes `coverage.mode` and separate `observed` or
+Different versions of a key's required documents or rules at the same latest
+recorded instant are unknown, not chosen by filename order. The result includes
+`coverage.mode` and separate `observed` or
 `unknown` items. Only observed items contain exact committed snapshots. It calls
 no model and creates no observation or canonical write. It is not future advice.
 
