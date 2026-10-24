@@ -36,7 +36,8 @@ text and must stay private; signatures do not encrypt them or grant source acces
 The copy preserves the fixed commit, page revisions/full bodies, original-source
 IDs/hashes, rule references and a clear warning: this is compiled Wiki material;
 original raw sources were not copied or independently verified, and offline
-plaintext cannot be recalled. It does not copy PDF originals, source keys or paths.
+plaintext cannot be recalled. It does not copy PDF originals, source keys or absolute
+source-root paths. Relative page/evidence paths remain part of provenance.
 Support restrictions combine selected historical and current pages. Default
 destination scope/sensitivity are conservative; optional stricter values cannot
 broaden scope or lower sensitivity. An old internal page whose current support is
@@ -59,7 +60,9 @@ edited/foreign plans, current withdrawal/expiry, dirty sources and missing keys
 refuse rather than using preview plaintext. Source and destination locks are not
 held together; final destination waits cannot outlive source validity. Once a
 transaction is ready, existing safe commit/recovery rules apply; inspect committed
-operation details before retrying cancelled work. Completed offline copies are not
+operation details before retrying cancelled work. A post-capture authority/time
+failure includes safe `completedImport` identifiers, never artifact plaintext.
+Completed offline copies are not
 automatically withdrawn by later source changes.
 
 Bounds: 25 requested/50 dependent pages, complete artifact and plan each at most
