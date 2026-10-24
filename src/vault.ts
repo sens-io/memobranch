@@ -139,6 +139,12 @@ export class MemoryVault {
     const result = await this.readWikiSnapshot(options); result.validate(); return result.snapshot;
   }
 
+  /** @internal Adapters with further asynchronous checks must validate again immediately before returning. */
+  async wikiSnapshotWithValidation(options: WikiSnapshotOptions | WikiDatedSnapshotOptions) {
+    const result = await this.readWikiSnapshot(options); result.validate();
+    return { snapshot: result.snapshot, validate: result.validate };
+  }
+
   private async readWikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<AvailabilitySnapshot> {
     authorize(this.principal, 'read');
     const input = snapshotOptions(options);

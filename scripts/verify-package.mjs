@@ -47,6 +47,7 @@ try {
     'dist/web-experience-ui.js', 'dist/web-experience-ui.d.ts',
     'dist/knowledge-availability.js', 'dist/knowledge-availability.d.ts', 'docs/knowledge-availability.md', 'docs/knowledge-availability_CN.md',
     'dist/web-availability-ui.js', 'dist/web-availability-ui.d.ts',
+    'dist/shared-wiki.js', 'dist/shared-wiki.d.ts', 'docs/pinned-shared-wiki.md', 'docs/pinned-shared-wiki_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -130,7 +131,13 @@ try {
       type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
       type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
       startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
+      SharedWikiReader, type SharedWikiReaderOptions, type SharedWikiSnapshotOptions, type SharedWikiView,
       type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+    export async function publicSharedWiki(vault: MemoryVault, options: SharedWikiReaderOptions, selection: SharedWikiSnapshotOptions) {
+      const reader = new SharedWikiReader(vault, options);
+      const view: SharedWikiView = await reader.snapshot({ ...selection, signal: new AbortController().signal });
+      return { sources: await reader.catalog(), view, pin: view.source.commit };
+    }
     export async function publicAvailability(vault: MemoryVault, observe: AvailabilityObserveOptions, query: AvailabilityAtOptions) {
       const recorded = await vault.wikiObserveAvailability(observe);
       const view = await vault.wikiAsKnownAt({ ...query, signal: new AbortController().signal });
@@ -285,6 +292,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(availability.stdout);
+  await writeFile(join(consumer, 'verify-installed-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-shared-wiki.mjs')));
+  const sharedWiki = await exec(process.execPath, ['verify-installed-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(sharedWiki.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

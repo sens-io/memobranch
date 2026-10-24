@@ -30,3 +30,5 @@ export type { WikiSnapshot, WikiSnapshotOptions, WikiDatedSnapshotOptions } from
 export type { WikiMergeOptions, WikiMergeOrigin } from './wiki-merge.js';
 export type { ExperienceTraceInput, ExperiencePrepareOptions, ExperiencePlan, ExperienceSuite, ExperienceRunner, ExperienceSelection, ExperienceValidation } from './experience.js';
 export type { AvailabilityObserveOptions, AvailabilityAtOptions } from './knowledge-availability.js';
+export { SharedWikiReader } from './shared-wiki.js';
+export type { SharedWikiReaderOptions, SharedWikiSnapshotOptions, SharedWikiView } from './shared-wiki.js';
