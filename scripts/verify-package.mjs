@@ -48,6 +48,7 @@ try {
     'dist/knowledge-availability.js', 'dist/knowledge-availability.d.ts', 'docs/knowledge-availability.md', 'docs/knowledge-availability_CN.md',
     'dist/web-availability-ui.js', 'dist/web-availability-ui.d.ts',
     'dist/shared-wiki.js', 'dist/shared-wiki.d.ts', 'docs/pinned-shared-wiki.md', 'docs/pinned-shared-wiki_CN.md',
+    'dist/web-shared-wiki-ui.js', 'dist/web-shared-wiki-ui.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -146,7 +147,7 @@ try {
     export async function publicExperience(vault: MemoryVault, trace: ExperienceTraceInput,
       options: ExperiencePrepareOptions, suite: ExperienceSuite, runner: ExperienceRunner) {
       const selection: ExperienceSelection = { includeSensitive: false, includeSecret: false };
-      const webOptions: WebOptions = { port: 0, experienceRunner: runner };
+      const webOptions: WebOptions = { port: 0, experienceRunner: runner, sharedWikiConfig: '/absolute/host/shared-wiki.json' };
       const web = await startWebServer(vault.root, webOptions); await web.stop();
       const recorded = await vault.experienceCapture(trace, { scope: 'project', sensitivity: 'internal' });
       const plan: ExperiencePlan = await vault.experiencePrepare({ ...options, traceIds: [recorded.evidenceId] });

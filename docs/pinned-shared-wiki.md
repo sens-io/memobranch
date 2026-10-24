@@ -1,7 +1,7 @@
 # Pinned local / Git Wiki sharing (development source)
 
-The library core and CLI/MCP/Harness adapters are implemented and undergoing
-retained/installed verification. Web management is pending. This is not a published npm feature, cloud
+The library, CLI/MCP/Harness and Web adapters are implemented and undergoing
+retained/installed verification. This is not a published npm feature, cloud
 account service, import, merge or offline revocation mechanism.
 
 ```ts
@@ -113,3 +113,19 @@ stale-catalog precondition above; a plain `commit` override remains rejected.
 Both tools are read-only; complete escaped results must fit 9 MiB. CLI stop signals
 and per-tool cancellation own only their operation. No import/merge/apply/grant
 confirmation flags exist here; those workflows require separate later capabilities.
+
+## Local Web management (development source)
+
+Set the host environment above before starting `memobranch web --root /absolute/caller-vault`.
+An embedding application may pass `startWebServer(root, { sharedWikiConfig: '/absolute/host/file.json' })`;
+an explicit empty string disables the environment fallback. Requests cannot edit it.
+In **共享 Wiki**, loading the page reads only the authorized source catalog. Select
+the source, review its full pinned commit and ceilings, enter page keys, then
+explicitly read. Confidential choices default off and cannot raise access.
+
+The Web adapter sends the displayed pin as `expectedCommit`. A changed pin requires
+refreshing the catalog; there is no fallback, import, approval or grant editor.
+Results show complete page bodies, revisions, full origin/rule references and
+offline-copy warnings. Complete HTTP envelopes must fit 16 MiB. Source/field changes,
+stop, navigation and logout clear old results and prevent late responses from
+restoring them. The host config is not served as a file or stored in browser state.

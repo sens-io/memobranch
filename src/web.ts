@@ -14,6 +14,7 @@ import { wikiSnapshotToolSchema } from './wiki-tool.js';
 import { experiencePlanSchema, experienceSuiteSchema, type ExperienceRunner } from './experience.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema } from './experience-tool.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
+import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -136,13 +137,16 @@ export interface WebHandle {
 }
 
 /** Local single-operator adapter. Credentials are never accepted through request bodies. */
-export interface WebOptions extends MemoryVaultOptions { port?: number; experienceRunner?: ExperienceRunner }
+export interface WebOptions extends MemoryVaultOptions { port?: number; experienceRunner?: ExperienceRunner; sharedWikiConfig?: string }
 export async function startWebServer(root: string, options: WebOptions = {}): Promise<WebHandle> {
   const port = options.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new AgentMemoryError('CONFIG_INVALID', 'Web port must be between 0 and 65535');
-  const { port: _port, experienceRunner, ...vaultOptions } = options;
+  const { port: _port, experienceRunner, sharedWikiConfig: configuredSharedWiki, ...vaultOptions } = options;
+  const sharedWikiConfig = configuredSharedWiki === undefined ? process.env.AMEM_SHARED_WIKI_CONFIG ?? '' : configuredSharedWiki;
+  if (typeof sharedWikiConfig !== 'string') throw new AgentMemoryError('CONFIG_INVALID', 'Shared Wiki configuration requires a host-owned path');
   if (experienceRunner !== undefined && typeof experienceRunner !== 'function') throw new AgentMemoryError('CONFIG_INVALID', 'Experience evaluator must be trusted application code');
   const initial = new MemoryVault(root, vaultOptions);
+  if (sharedWikiConfig) new SharedWikiReader(initial, { configPath: sharedWikiConfig }); // Validate host path, not grants; no file read yet.
   await settledRead(initial, () => initial.settings(), true); // Recovery diagnostics remain reachable.
   const logo = await readFile(new URL('../assets/logo.png', import.meta.url));
   const token = randomBytes(32).toString('hex');
@@ -151,6 +155,20 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
   const pending = new Set<Promise<void>>();
   const workers = new Set<AbortController>();
   const operations: Record<string, Route> = { ...routes,
+    'shared-catalog': route('read', empty, async vault => {
+      if (sharedWikiConfig) return { configured: true, ...await new SharedWikiReader(vault, { configPath: sharedWikiConfig }).catalog() };
+      const identity = JSON.stringify(vault.principal), config = await settledRead(vault, () => vault.config());
+      authorize(vault.principal, 'read', { tenantId: config.tenantId });
+      if (JSON.stringify(vault.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Shared reader authority changed');
+      return { configured: false, sources: [], warnings: ['Shared Wiki sources are not configured by the host.'] };
+    }),
+    'shared-snapshot': route('read', sharedWikiSnapshotSchema, async (vault, input) => {
+      if (!sharedWikiConfig) {
+        await settledRead(vault, () => vault.config());
+        throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      }
+      return new SharedWikiReader(vault, { configPath: sharedWikiConfig }).snapshot(input);
+    }),
     'experience-status': route('read', empty, async () => ({ evaluatorAvailable: typeof experienceRunner === 'function' })),
     'experience-validate': route('review', z.object({ plan: experiencePlanSchema, suite: experienceSuiteSchema,
       includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
@@ -258,7 +276,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
       }
       if (name === 'preview') assertReviewBytes(result);
       if (name === 'jobs-review') assertReviewBytes(result);
-      if (name === 'wiki-snapshot' || name === 'merge-prepare' || name === 'wiki-as-known-at') assertReviewBytes({ result });
+      if (name === 'wiki-snapshot' || name === 'merge-prepare' || name === 'wiki-as-known-at' || name === 'shared-snapshot') assertReviewBytes({ result });
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       if (name === 'experience-prepare') assertReviewBytes({ plan: result, suite: { name: '', cases: [] }, confirm: true });
       if (name === 'experience-export' || name === 'experience-validate') assertReviewBytes(result);

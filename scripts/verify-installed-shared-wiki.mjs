@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { LlmClient, MemoryVault, SharedWikiReader } from 'memobranch';
+import { LlmClient, MemoryVault, SharedWikiReader, startWebServer } from 'memobranch';
 import { Context } from '@deepseek-ai/cordis';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
@@ -86,6 +86,23 @@ try {
   } finally {
     await ctx.fiber.dispose(); for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]; Object.assign(process.env, originalEnv);
   }
+  const web = await startWebServer(caller.root, { principal: caller.principal, sharedWikiConfig: configPath });
+  try {
+    const call = async (name, args) => {
+      const response = await fetch(web.url + '/api/' + name, { method: 'POST', headers: {
+        Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(args) });
+      const body = await response.json(); if (!response.ok) throw new Error(body.error.code); return body.result;
+    };
+    assert.equal((await call('shared-catalog', {})).configured, true);
+    assert.equal((await call('shared-catalog', {})).sources[0].commit, pin);
+    const view = await call('shared-snapshot', { ...input, expectedCommit: pin });
+    assert.match(view.snapshot.pages.find(page => page.meta.key === key).body, /version 1/);
+    await assert.rejects(call('shared-snapshot', { ...input, expectedCommit: sourceHead }));
+    await assert.rejects(call('shared-snapshot', { ...input, root: source.root }));
+    assert.match(await (await fetch(web.url + '/app.js')).text(), /shared-snapshot/);
+    console.log('Installed Web shared Wiki: actual HTTP catalog, exact old pin, stale selection/path refusal and bundled UI passed.');
+  } finally { await web.stop(); }
   assert.equal(await source.git.run(['rev-parse', 'HEAD']), sourceHead); assert.equal(await caller.git.run(['rev-parse', 'HEAD']), callerHead);
   assert.deepEqual(await readFile(join(source.root, first.evidencePath)), raw); assert.deepEqual(await readFile(join(source.git.gitDir, 'index')), sourceIndex); assert.equal(calls, count);
   console.log('Installed CLI shared Wiki: configured catalog, pinned old snapshot and strict flag refusal passed.');

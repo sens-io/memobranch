@@ -919,3 +919,61 @@ test('availability UI: read-only selection, confidential flags and safe errors n
   const view=await availabilityPage(saved);await saveAvailability(saved,view);assert.match(view.textContent,/已保存观察（请先核查，勿重复提交）/);assert.equal(saved.requests.length,1);
   named(view,'availabilityKeys').value='concept:labels\nconcept:labels';await named(view,'availabilityKeys').fire('input');await named(view,'availabilityAt').closest('form')!.fire('submit');await settle();assert.equal(saved.requests.length,1);assert.match(view.textContent,/不同的页面名称/);
 });
+
+const sharedCatalog = {configured:true,sources:[
+  {id:'team-one',title:'Team one <script>label()</script>',commit:'a'.repeat(40),scopes:['user'],maxSensitivity:'secret'},
+  {id:'team-two',title:'Team two',commit:'b'.repeat(40),scopes:['user'],maxSensitivity:'internal'},
+]};
+function sharedResult(id='team-one',body='Shared old body <script>untrusted()</script>'){
+  const source=sharedCatalog.sources.find(item=>item.id===id)!;return {kind:'shared-wiki-view',source:{id,title:source.title,commit:source.commit,vaultId:'shared-vault',tenantId:'shared-tenant'},warnings:['Offline plaintext cannot be recalled.'],snapshot:{commit:source.commit,pages:[{meta:{id:'wp-synthetic',type:'wiki-page',key:'concept:shared',title:'Shared page',revision:1,scope:'user',sensitivity:'internal',conditions:['Synthetic only'],uncertainty:['Not current advice']},body,currentRevision:2}],warnings:['Historical content, not current advice.']}};
+}
+async function sharedPage(ui:ReturnType<typeof harness>){const output=await ui.run('sharedWiki()') as Element;ui.app.append(output);await settle();return output;}
+
+test('shared UI: opening reads only catalog; snapshots bind displayed pin and render literal complete content without writes',async()=>{
+  const ui=harness(request=>success(request.operation==='shared-catalog'?sharedCatalog:sharedResult()),['read']);ui.run("principal.maxSensitivity='secret'");
+  const output=await sharedPage(ui);assert.equal(ui.requests.length,1);assert.equal(ui.requests[0]!.operation,'shared-catalog');
+  assert.equal(named(output,'sharedSource').value,'team-one');assert.match(output.textContent,/<script>label\(\)<\/script>/);
+  named(output,'sharedKeys').value='concept:shared';named(output,'sharedSecret').checked=true;await named(output,'sharedSecret').fire('change');
+  await named(output,'sharedKeys').closest('form')!.fire('submit');await settle();
+  assert.deepEqual(ui.requests[1]!.data,{sourceId:'team-one',pageKeys:['concept:shared'],expectedCommit:'a'.repeat(40),includeSensitive:false,includeSecret:true});
+  assert.match(output.textContent,/Shared old body <script>untrusted\(\)<\/script>/);assert.match(output.textContent,/保留版本 1 · 当前版本 2/);
+  assert.equal(nodes(output).some(node=>node.tagName==='script'),false);assert.equal(ui.requests.some(request=>/apply|capture|import|merge|grant/.test(request.operation)),false);
+  named(output,'sharedSource').value='team-two';await named(output,'sharedSource').fire('change');
+  assert.doesNotMatch(output.textContent,/Shared old body/);assert.equal(named(output,'sharedSecret').checked,false);assert.equal(named(output,'sharedSecret').disabled,true);
+});
+
+test('shared UI: stale pin or mismatched source responses never render content or auto-retry',async()=>{
+  for(const mismatch of ['pin','source']){
+    const result=sharedResult();if(mismatch==='pin')result.source.commit='c'.repeat(40);else result.source.id='team-two';
+    const ui=harness(request=>success(request.operation==='shared-catalog'?sharedCatalog:result)),output=await sharedPage(ui);
+    named(output,'sharedKeys').value='concept:shared';await named(output,'sharedKeys').closest('form')!.fire('submit');await settle();
+    assert.match(output.textContent,/固定提交已变化/);assert.doesNotMatch(output.textContent,/Shared old body/);assert.equal(ui.requests.length,2);
+  }
+});
+
+test('shared UI: source changes, stop/new reads and leaving cannot revive late shared plaintext',async()=>{
+  const delayed=deferred<Response>();let reads=0;
+  const ui=harness(request=>request.operation==='shared-catalog'?success(sharedCatalog):++reads===1?delayed.promise:success(sharedResult('team-two','FRESH_SHARED'))),output=await sharedPage(ui);
+  named(output,'sharedKeys').value='concept:shared';const form=named(output,'sharedKeys').closest('form')!;await form.fire('submit');await settle();const pending=ui.requests[1]!;
+  await button(output,'停止当前操作').fire('click');assert.equal(pending.signal?.aborted,true);assert.equal(named(output,'sharedKeys').value,'concept:shared');
+  named(output,'sharedSource').value='team-two';await named(output,'sharedSource').fire('change');await form.fire('submit');await settle();assert.match(output.textContent,/FRESH_SHARED/);
+  delayed.resolve(success(sharedResult('team-one','LATE_SHARED_SECRET')));await settle();assert.doesNotMatch(output.textContent,/LATE_SHARED_SECRET/);assert.match(output.textContent,/FRESH_SHARED/);
+  const keys=named(output,'sharedKeys');ui.run('pageCleanup();generation++');assert.equal(keys.value,'');assert.equal(output.children.length,0);
+});
+
+test('shared UI: cancelled catalog, unconfigured hosts and read failures keep snapshots disabled without grant controls',async()=>{
+  const pending=deferred<Response>(),ui=harness(()=>pending.promise),output=await sharedPage(ui);
+  assert.equal(button(output,'读取共享知识').disabled,true);await button(output,'停止当前操作').fire('click');pending.resolve(success(sharedCatalog));await settle();
+  assert.equal(button(output,'读取共享知识').disabled,true);assert.doesNotMatch(output.textContent,/Team one/);
+  const off=harness(()=>success({configured:false,sources:[]})),emptyView=await sharedPage(off);assert.match(emptyView.textContent,/宿主尚未配置/);assert.equal(button(emptyView,'读取共享知识').disabled,true);
+  const failed=harness(request=>request.operation==='shared-catalog'?success(sharedCatalog):failure('ENCRYPTION_KEY_UNAVAILABLE')),view=await sharedPage(failed);
+  named(view,'sharedKeys').value='concept:shared';await named(view,'sharedKeys').closest('form')!.fire('submit');await settle();assert.match(view.textContent,/未提供解密密钥/);assert.equal(failed.requests.length,2);
+  assert.equal(nodes(view).some(node=>node.tagName==='button'&&/增加授权|批准|导入|合并/.test(node.textContent)),false);
+});
+
+test('shared UI: logout clears selected names and drafts and suppresses pending read responses',async()=>{
+  const pending=deferred<Response>(),ui=harness(request=>request.operation==='shared-catalog'?success(sharedCatalog):pending.promise),output=await sharedPage(ui);
+  const keys=named(output,'sharedKeys'),source=named(output,'sharedSource');keys.value='concept:shared';await keys.closest('form')!.fire('submit');await settle();const request=ui.requests[1]!;
+  ui.run('logout()');assert.equal(request.signal?.aborted,true);assert.equal(keys.value,'');assert.equal(source.value,'');
+  pending.resolve(success(sharedResult('team-one','AFTER_LOGOUT_SHARED_SECRET')));await settle();assert.doesNotMatch(ui.body.textContent,/AFTER_LOGOUT_SHARED_SECRET|Team one/);
+});
