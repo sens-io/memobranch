@@ -43,8 +43,8 @@ test('plugin exposes only principal-granted categories and executes real vault c
       'memory_experience_capture', 'memory_experience_export', 'memory_experience_prepare',
       'memory_explain', 'memory_forget', 'memory_get', 'memory_history', 'memory_maintenance', 'memory_policy',
       'memory_propose', 'memory_recall', 'memory_recover', 'memory_reindex', 'memory_review', 'memory_search', 'memory_source_timeline', 'memory_version',
-      'memory_wiki_apply', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_lint',
-      'memory_wiki_merge_prepare', 'memory_wiki_migrate', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_revoke', 'memory_wiki_rules', 'memory_wiki_set_rules', 'memory_wiki_snapshot',
+      'memory_wiki_apply', 'memory_wiki_as_known_at', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_lint',
+      'memory_wiki_merge_prepare', 'memory_wiki_migrate', 'memory_wiki_observe', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_revoke', 'memory_wiki_rules', 'memory_wiki_set_rules', 'memory_wiki_snapshot',
     ]);
     assert.equal(tools.has('memory_erase'), false);
     assert.equal(tools.has('memory_remote_sync'), false);
@@ -88,7 +88,7 @@ test('read-only visibility, argument bounds, and pre-dispatch cancellation fail 
     const tools = loadPlugin(defaultConfig(root));
     assert.deepEqual([...tools.keys()].sort(), [
       'memory_at', 'memory_config', 'memory_context', 'memory_explain', 'memory_get', 'memory_history', 'memory_policy', 'memory_recall', 'memory_search', 'memory_source_timeline', 'memory_version',
-      'memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules', 'memory_wiki_snapshot',
+      'memory_wiki_as_known_at', 'memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules', 'memory_wiki_snapshot',
     ]);
     await assert.rejects(execute(tools, 'memory_search', { query: 'x', limit: 51 }), /VALIDATION_FAILED/);
     const controller = new AbortController();

@@ -12,6 +12,7 @@ import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from
 import { MemoryVault } from './vault.js';
 import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema, experienceToolInput, experienceToolResult } from './experience-tool.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
@@ -151,7 +152,32 @@ function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Pr
 }
 
 function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
+  const availabilityParameters = {
+    pageKeys: { type: 'array' as const, items: { type: 'string' as const }, required: true as const, description: '1–25 distinct current Wiki keys, at most 200 characters each.' },
+    includeSensitive: { type: 'boolean' as const, description: 'Explicitly select authorized sensitive material.' },
+    includeSecret: { type: 'boolean' as const, description: 'Explicitly select authorized secret material; keys remain required.' },
+  };
+  if (granted(principal, 'read') && granted(principal, 'write')) ctx.tools.register(defineTool({
+    name: 'memory_wiki_observe',
+    description: 'Explicitly save a signed immutable observation of current committed pages and exact dependencies with read/write authority and confirm:true. Host time and identity are not caller inputs. Partial local evidence, not first learning or proof of understanding. No approval, execution or content changes.',
+    parameters: { ...availabilityParameters, confirm: { type: 'boolean', required: true, description: 'Must be true after explicit review of this observation write.' } },
+    output: jsonOutput,
+    async execute(args, exec) {
+      return runJson(vault, exec.signal, () => vault.wikiObserveAvailability(wikiToolInput(availabilityObserveSchema, args)));
+    },
+  }));
   if (granted(principal, 'read')) {
+    ctx.tools.register(defineTool({
+      name: 'memory_wiki_as_known_at',
+      description: 'Read exact committed knowledge supported by explicit signed local observations at or before at, never inferred from Git dates. Legacy/ambiguous history stays unknown. Optional observationIds restrict coverage; outside newer/conflicting observations are not ruled out. Current source/key/tenant/withdrawal/private checks apply. No model or writes; complete escaped result limited to 9 MiB.',
+      parameters: { ...availabilityParameters,
+        at: { type: 'string', required: true, description: 'ISO timestamp with timezone and at most millisecond precision.' },
+        observationIds: { type: 'array', items: { type: 'string' }, description: 'Optional 1–40 distinct ev- IDs; restricts search to these observations.' },
+      }, output: jsonOutput,
+      async execute(args, exec) {
+        return runJson(vault, exec.signal, async () => wikiToolResult(await vault.wikiAsKnownAt(wikiToolInput(availabilityAtSchema, args))));
+      },
+    }));
     ctx.tools.register(defineTool({
       name: 'memory_wiki_snapshot',
       description: 'Read 1–25 complete Wiki pages and dependencies using exactly one full local ancestor commit OR at ISO timestamp. Date lookup scans at most 2000 current first-parent commits by committer time, not as-known-at truth. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model or import. Complete escaped review is limited to 9 MiB.',

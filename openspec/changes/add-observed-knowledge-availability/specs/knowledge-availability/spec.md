@@ -39,3 +39,15 @@ tenant and key availability when returning historical observed content.
 #### Scenario: Reading availability
 - **WHEN** an authorized caller queries a supported observation
 - **THEN** exact verified committed content and observation limits are returned without new writes, model calls or automatic observation
+
+### Requirement: Adapters preserve explicit observation and host authority
+The CLI, MCP and Harness adapters SHALL reuse strict core selection and current
+authority, keep cancellation host-owned and distinguish writes from historical reads.
+
+#### Scenario: An agent records an observation
+- **WHEN** the caller has current read/write authority and explicitly confirms selected keys
+- **THEN** only immutable availability evidence is saved, without caller-supplied time, identity, executable or automatic knowledge approval
+
+#### Scenario: A read-only or cancelled caller attempts to observe
+- **WHEN** observation lacks read/write authority, confirmation or continues waiting after cancellation
+- **THEN** it cannot save an observation and the adapter remains usable for later authorized requests

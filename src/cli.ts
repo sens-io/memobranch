@@ -16,6 +16,7 @@ import { withOperation } from './operation.js';
 import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
 import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan } from './pdf-import.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 
 interface ParsedArgs {
   command: string;
@@ -309,6 +310,28 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'observe':
+    case 'as-known-at': {
+      const flags = new Set(['root', 'actor', 'actor-name', 'actor-email', 'include-sensitive', 'include-secret',
+        ...(action === 'observe' ? ['confirm'] : ['at', 'observations'])]);
+      for (const flag of args.flags.keys()) if (!flags.has(flag)) throw new Error(`Unsupported availability flag: --${flag}`);
+      for (const flag of ['confirm', 'include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      const selection = { pageKeys: input.positionals,
+        includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') };
+      const value = action === 'observe' ? availabilityObserveSchema.safeParse({ ...selection, confirm: flagBoolean(args, 'confirm') })
+        : availabilityAtSchema.safeParse({ ...selection, at: requiredFlag(args, 'at'),
+          ...(args.flags.has('observations') ? { observationIds: requiredFlag(args, 'observations').split(',').map(id => id.trim()) } : {}) });
+      if (!value.success) throw new Error('Invalid availability selection; observing requires --confirm');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        print('confirm' in value.data ? await vault.wikiObserveAvailability(value.data) : await vault.wikiAsKnownAt(value.data));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
     case 'snapshot': {
       if (args.flags.has('commit') === args.flags.has('at')) throw new Error('Use exactly one of --commit or --at');
       const selector = args.flags.has('at') ? { at: requiredFlag(args, 'at') } : { commit: requiredFlag(args, 'commit') };
@@ -637,6 +660,8 @@ Usage:
   amem remote status | remote sync [--push] | remote remove
   amem wiki catalog | rules | migrate
   amem wiki snapshot <page-key...> (--commit FULL_HASH | --at ISO_TIMESTAMP) [--include-sensitive] [--include-secret]
+  amem wiki observe <page-key...> --confirm [--include-sensitive] [--include-secret]
+  amem wiki as-known-at <page-key...> --at ISO_TIMESTAMP [--observations ev-ID,ev-ID] [--include-sensitive] [--include-secret]
   amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]

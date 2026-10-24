@@ -1,6 +1,7 @@
 # 明确记录知识何时可用（开发源码）
 
-库接口核心已通过本地验收，命令行、Agent 工具和网页入口仍在开发。它与按 Git 日期查看
+库接口核心已通过本地验收，命令行、MCP/Harness 已在开发源码实现，仍待各入口的
+完整保留检查、安装验证和复审；网页入口待实现。它与按 Git 日期查看
 版本、按事实生效时间筛选不同；不表示已发布 npm，也不证明真实模型何时理解了知识。
 实际检查和限制见[核心验收记录](knowledge-availability-verification-2026-10-24.md)。
 
@@ -49,3 +50,23 @@ HEAD、所属身份和权限，异步检查后还会在最终保存决定前再�
 失效，错误只附带 `completedAvailability` 的证据 ID 与提交，不返回清单正文；原有
 已提交取消信息仍保留。结果不明时先查当前记录及历史，不自动重试。没有数据库、
 数据迁移或必填配置变化。
+
+## 命令行与 Agent 工具（开发源码）
+
+```sh
+memobranch wiki observe concept:deployment --confirm --root /path/to/vault
+memobranch wiki as-known-at concept:deployment --at 2026-10-24T12:00:00Z --root /path/to/vault
+# 只查询指定集合，不能排除集合外有更新或冲突的记录：
+memobranch wiki as-known-at concept:deployment --at 2026-10-24T12:00:00Z --observations ev-0123456789ab --root /path/to/vault
+```
+
+两个命令均支持 `--include-sensitive` / `--include-secret`，仍需当前权限和密钥。
+`observe` 必须 `--confirm`，不能覆盖观察时间；`as-known-at` 必须 `--at`，不接受
+提交、应用或确认选项。停止信号只取消本次操作；已经完成的事务不能因此撤销。
+
+MCP 与 DeepSeek Harness 提供 `memory_wiki_observe`（`pageKeys`、`confirm:true`、
+可选私密资料标志）和 `memory_wiki_as_known_at`（`pageKeys`、`at`、可选
+`observationIds` 和私密资料标志）。身份、所属资料库、路径、时间和取消均由宿主管理。
+Harness 只有读写权限齐全才注册观察工具，读取工具需要读权限；MCP 调用时仍检查
+当前权限。包含转义后的完整结果最多 9 MiB，超限报错而不截断；不自动观察、
+调用模型判断或批准知识。

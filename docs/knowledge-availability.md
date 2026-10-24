@@ -1,6 +1,7 @@
 # Explicit knowledge availability (development source)
 
-Library core accepted locally; CLI, agent tools and Web adapters remain in development.
+Library core accepted locally; CLI/MCP/Harness adapters are implemented in development
+source, with their final retained/installed review pending. Web management is pending.
 This is separate from Git-date revision views and fact-effective time queries.
 No npm publication or real-world model knowledge measurement is implied.
 See the [core verification and limits](knowledge-availability-verification-2026-10-24.md).
@@ -65,3 +66,26 @@ ready transaction already settling. Post-save authority failures carry only
 `completedAvailability` (saved evidence ID/commit), without manifest plaintext;
 ordinary committed-cancellation metadata remains available. Inspect current records
 and history before retrying. No database, migration or required configuration.
+
+## CLI and agent tools (development source)
+
+```sh
+memobranch wiki observe concept:deployment --confirm --root /path/to/vault
+memobranch wiki as-known-at concept:deployment --at 2026-10-24T12:00:00Z --root /path/to/vault
+# Restrict coverage explicitly; this does not rule out outside observations:
+memobranch wiki as-known-at concept:deployment --at 2026-10-24T12:00:00Z --observations ev-0123456789ab --root /path/to/vault
+```
+
+Both commands support `--include-sensitive` / `--include-secret` with current
+authorization and keys. `observe` requires `--confirm`; it cannot accept an `--at`
+or `--observed-at` override. `as-known-at` requires `--at` and does not accept a
+commit/apply/confirmation flag. Stop signals cancel the command's own operation;
+completed transactions remain distinguishable from failed, uncommitted work.
+
+MCP and DeepSeek Harness expose `memory_wiki_observe` (`pageKeys`, `confirm:true`,
+optional private flags) and `memory_wiki_as_known_at` (`pageKeys`, `at`, optional
+`observationIds` and private flags). Identity, tenant, root, clock and cancellation
+are host-owned. Harness registers observation only with both read/write grants and
+the historical reader only with read; MCP still rejects unauthorized execution.
+Agent results must fit 9 MiB including escaping; over-budget complete results fail,
+never silently truncate. No automatic observation, model evaluation or approval.

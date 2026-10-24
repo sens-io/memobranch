@@ -12,6 +12,7 @@ import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault } from './vault.js';
 import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolResult } from './wiki-tool.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema, experienceToolResult } from './experience-tool.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 
 import { VERSION } from './version.js';
 const vaultRoot = resolve(process.argv[2] ?? process.env.AMEM_VAULT ?? process.cwd());
@@ -153,6 +154,20 @@ function createServer(): McpServer {
       includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false) }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async ({ at, ...options }, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.memoriesAt(at, options)));
+
+  server.registerTool('memory_wiki_observe', {
+    title: 'Explicitly record local knowledge availability',
+    description: 'With current read/write authority and confirm:true, save a signed immutable observation of 1–25 current committed Wiki keys and their dependencies. Host time, identity and root are server-owned. Partial local evidence, not first learning or proof that an agent read/understood a fact. Does not approve, modify or execute knowledge.',
+    inputSchema: availabilityObserveSchema,
+    annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, () => vault.wikiObserveAvailability(input)));
+
+  server.registerTool('memory_wiki_as_known_at', {
+    title: 'Read explicitly observed knowledge at a time',
+    description: 'Read exact committed content from verifiable local availability observations not later than at. Unknown legacy/conflicting history stays unknown; never infers knowledge from Git dates. Optional observationIds restrict coverage and cannot rule out newer/conflicting records outside that set. Current source/key/tenant/withdrawal and explicit private selection still apply. Read-only, no model. Complete escaped result limited to 9 MiB.',
+    inputSchema: availabilityAtSchema,
+    annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
+  }, async (input, ctx) => executeWiki(ctx.mcpReq.signal, async () => wikiToolResult(await vault.wikiAsKnownAt(input))));
 
   server.registerTool('memory_wiki_snapshot', {
     title: 'Read a committed Wiki revision',
