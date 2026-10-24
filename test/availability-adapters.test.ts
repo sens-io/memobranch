@@ -60,7 +60,8 @@ test('availability CLI: explicit save, exact observed version, unknown legacy an
   const at = new Date().toISOString();
   assert.equal(JSON.parse((await run('as-known-at', ['--at', at])).stdout).items[0].status, 'unknown');
   const head = await vault.git.run(['rev-parse', 'HEAD']);
-  for (const args of [[], ['--confirm=false'], ['--confirm', '--observed-at=2001-01-01T00:00:00Z'], ['--confirm', '--include-secret=garbage']]) {
+  for (const args of [[], ['--confirm=false'], ['--confirm=true=garbage'], ['--confirm', '--observed-at=2001-01-01T00:00:00Z'],
+    ['--confirm', '--include-secret=garbage'], ['--confirm', '--include-secret=true=garbage'], ['--confirm', '--include-sensitive=true=garbage']]) {
     await assert.rejects(run('observe', args));
   }
   await assert.rejects(run('observe', ['--confirm'], 'read'));

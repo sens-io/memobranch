@@ -17,8 +17,10 @@ test('CLI returns stable JSON for version and invalid input', async () => {
     assert.deepEqual(JSON.parse(version.stdout), { version: metadata.version });
     const versionFlag = await exec(process.execPath, [...base, '--version']);
     assert.deepEqual(JSON.parse(versionFlag.stdout), { version: metadata.version });
-    const initialized = await exec(process.execPath, [...base, 'init', root, '--json']);
+    const initialized = await exec(process.execPath, [...base, 'init', root, '--name=CLI=v1=fixture', '--json']);
     assert.equal((JSON.parse(initialized.stdout) as { created: boolean }).created, true);
+    const configured = await exec(process.execPath, [...base, 'config', '--root', root]);
+    assert.equal(JSON.parse(configured.stdout).name, 'CLI=v1=fixture', 'inline values retain every character after the first equals sign');
     await assert.rejects(
       exec(process.execPath, [...base, 'propose', '--root', root, '--json']),
       (error: unknown) => {

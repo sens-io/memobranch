@@ -519,7 +519,9 @@ function parseArgs(args: string[]): ParsedArgs {
       positionals.push(value);
       continue;
     }
-    const [rawName = '', inline] = value.slice(2).split('=', 2);
+    const option = value.slice(2), separator = option.indexOf('=');
+    const rawName = separator === -1 ? option : option.slice(0, separator);
+    const inline = separator === -1 ? undefined : option.slice(separator + 1);
     if (inline !== undefined) flags.set(rawName, inline);
     else {
       const next = args[index + 1];

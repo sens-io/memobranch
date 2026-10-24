@@ -49,5 +49,9 @@ authority, keep cancellation host-owned and distinguish writes from historical r
 - **THEN** only immutable availability evidence is saved, without caller-supplied time, identity, executable or automatic knowledge approval
 
 #### Scenario: A read-only or cancelled caller attempts to observe
-- **WHEN** observation lacks read/write authority, confirmation or continues waiting after cancellation
+- **WHEN** observation lacks read/write authority or confirmation, or cancellation occurs before the transaction's ready-to-commit decision, including while waiting for a lock
 - **THEN** it cannot save an observation and the adapter remains usable for later authorized requests
+
+#### Scenario: Cancellation overlaps an already-decided commit
+- **WHEN** cancellation or authority loss is reported after the transaction has entered commit settlement
+- **THEN** the caller can distinguish a saved observation by safe evidence/commit identifiers, without assuming cancellation recalls an already-completed save
