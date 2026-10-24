@@ -102,7 +102,9 @@ observation time and observed content commit. Recording does not automatically q
 To read, enter an ISO timestamp with timezone; optionally restrict observation IDs
 one per line. The explicit “only this observation” receipt action selects that ID
 and time and then performs a read. Results distinguish observed/unknown, display the
-actual commit, complete page/source/rule JSON and coverage warnings. Source content
+actual commit, complete pages, source/rule references and coverage warnings. Raw
+source bodies and rule instructions are not included in this revision-view result;
+source IDs/paths/hashes and rule IDs/revisions preserve their references. Page content
 is plain text, never executed HTML. Web output must fit 16 MiB including its JSON
 envelope; over-budget complete results fail rather than truncate.
 
