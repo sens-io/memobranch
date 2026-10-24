@@ -14,6 +14,11 @@
    extraction disabled. It is a copy of compiled source material, not independent
    verification of its original raw sources. An exact retry creates no extra
    evidence or commit, but still checks current access and source availability.
+   This guarantee needs an explicit destination-lock duplicate path: after current
+   guards pass, do not rebuild generated projections. If transaction setup has
+   already staged migrations or writes, roll them back before returning the
+   existing record with `commit: null`. Unrelated knowledge expiring between
+   retries must not make duplicate import create a housekeeping commit.
 3. Manual integration requires current read/write authority, an existing imported
    artifact, authored body/summary and expected current revision. It creates a
    normal signed Wiki proposal containing a grounded source summary and the new
@@ -42,6 +47,13 @@ the imported compiled source. Expired artifact evidence stays inspectable as raw
 retained history but cannot support currently usable Wiki knowledge. Copied
 artifacts are not remotely revocable; origin changes after a completed import do
 not automatically erase the caller's immutable copy.
+
+Imported artifacts support the Wiki workflow only. Ordinary-memory proposal,
+extraction, approval, consolidation, validation and reads must refuse an artifact
+as an ordinary memory's evidence rather than losing its uncertainty, conflict or
+lifecycle restrictions through an older path. The artifact itself remains an
+authorized inspectable evidence record. This batch does not change ordinary
+memory schemas to encode every compiled-Wiki restriction.
 
 ## Concurrency, cancellation and proof
 Never hold source and caller locks simultaneously. Initial/final source snapshot

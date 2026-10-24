@@ -10,6 +10,8 @@
 - [ ] Missing/changed authority, keys/grants/pin/content/config, forged/foreign/stale plans and classified destination refusal.
 - [ ] Actual destination waits crossing lifecycle/cancellation, rollback/readiness/recovery and opposite-source concurrency.
 - [ ] Imported restrictions survive model omission, manual drafts, approval, ordinary reads and public projection.
+- [ ] Exact retry after unrelated memory expiry creates no generated housekeeping commit; concurrent identical imports create one artifact.
+- [ ] All ordinary-memory creation/approval/consolidation/validation/read paths refuse imported artifact support.
 - [ ] Manual integration creation/update, stale revision, conflicts, source summary and retained local provenance.
 - [ ] Strict bounded inputs and complete output across real CLI/SDK/HTTP and native browser cleanup behavior.
 - [ ] Both Git defaults, same installed package Node 20/22, strict OpenSpec, audit and independent fixed-candidate review.

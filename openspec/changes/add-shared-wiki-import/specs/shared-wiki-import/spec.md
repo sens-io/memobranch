@@ -11,6 +11,11 @@ its own signed preview and separate existing review approval.
 - **THEN** preparation changes no canonical files, confirmation captures one derived artifact, and no Wiki page or model call occurs
 - **AND** exact retry rechecks access and source availability without another evidence/commit
 
+#### Scenario: Unrelated knowledge expires before an exact retry
+- **WHEN** an unrelated ordinary memory expires after the first import and the same valid artifact is confirmed again
+- **THEN** the duplicate path does not rebuild generated projections or create a housekeeping commit
+- **AND** concurrent identical imports still retain one artifact and one successful capture
+
 #### Scenario: Reader, writer or forged plan cannot approve
 - **WHEN** confirmation is absent, required permissions are missing, a plan is edited or belongs to another destination/config
 - **THEN** import fails without partial evidence or knowledge writes
@@ -24,6 +29,11 @@ Wiki preparation, approval and readable knowledge.
 #### Scenario: A model or author drops restrictions
 - **WHEN** a proposed page omits conditions/uncertainty, lowers sensitivity, broadens scope or extends an imported source's lifetime
 - **THEN** the program retains or refuses the restrictions before approval and current reads cannot expose weakened knowledge
+
+#### Scenario: Ordinary memory attempts to bypass imported restrictions
+- **WHEN** extraction, proposal, approval, consolidation or a preexisting ordinary memory references a compiled Wiki artifact as evidence
+- **THEN** the ordinary-memory path refuses it instead of discarding imported uncertainty, conflict or expiry
+- **AND** authorized inspection of the artifact and its separate Wiki workflow remain available
 
 #### Scenario: Manual integration keeps local knowledge under review
 - **WHEN** a human authors integration against an imported artifact and an exact current revision
