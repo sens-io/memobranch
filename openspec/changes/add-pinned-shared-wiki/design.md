@@ -29,11 +29,18 @@ Pending transactions/erasures are errors requiring existing explicit recovery.
 
 Do not hold caller and source locks together: cross-configured sources must not
 deadlock through opposite lock ordering. After reading, recheck caller authority,
-current configuration and host binding/key selection. Reject a changed/revoked
+current configuration and host binding/key selection within the final caller read
+snapshot. Reject a changed/revoked
 grant rather than returning old material or silently selecting a newer commit.
 Retain the core's consistent-read semantics for overlapping later source changes;
-future reads must honor withdrawal. Stop signals remain host-owned and bounded
-file/snapshot operations share the existing operation cancellation context.
+future reads must honor withdrawal. Retain the source snapshot's existing synchronous
+time/cancellation validation callback and run it after the final asynchronous caller /
+binding check and lock cleanup. It must check both historical and current page
+expiry/fact validity; extra waiting must not make a now-expired page readable.
+Use a small internal snapshot-with-validation method, without exposing the callback
+or private document hash list through tool/HTTP results. Stop signals remain host-owned and bounded
+file/snapshot operations share the existing operation cancellation context. Source
+errors expose stable codes rather than absolute roots or transport details.
 
 A catalog reveals only readable configured IDs/titles and pins, without roots,
 credentials, other readers or an assertion that all source content is available.

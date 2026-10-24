@@ -25,8 +25,12 @@ both current caller limits and current source integrity, lifecycle and keys.
 - **THEN** no old plaintext or fallback revision is returned
 
 #### Scenario: A host binding changes during a read
-- **WHEN** the configured grant, pin, caller authority or source key selection changes before returning
+- **WHEN** the configured grant, pin, caller authority or source key selection changes before final authorization revalidation
 - **THEN** the old result is refused and no new permission is inferred
+
+#### Scenario: Final caller checks wait past source expiry
+- **WHEN** the source was readable but final caller checks or lock cleanup cross the current or historical page's expiry/effective interval
+- **THEN** a final synchronous source-time check refuses the previously assembled content
 
 ### Requirement: Sharing remains a bounded read workflow
 The system SHALL keep catalog/reading separate from import, merge, approval and
