@@ -35,3 +35,5 @@ export type { SharedWikiReaderOptions, SharedWikiSnapshotOptions, SharedWikiView
 export { SharedWikiImporter } from './shared-wiki-import.js';
 export type { SharedWikiImportPlan, SharedWikiImportPrepareOptions } from './shared-wiki-import.js';
 export type { WikiImportArtifact, WikiImportRestrictions } from './wiki-import-artifact.js';
+export { startCloudWikiServer } from './shared-wiki-cloud-server.js';
+export type { CloudWikiServerOptions, CloudWikiServerHandle } from './shared-wiki-cloud-server.js';
