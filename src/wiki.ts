@@ -166,6 +166,11 @@ export class WikiEngine {
     let importedBounds: WikiImportRestrictions[] = [];
     let duplicate = false;
     const replay = (): string[] => { duplicate = true; return []; };
+    const validateSupport = () => {
+      if (plan.merge) assertMergeTime(plan.merge);
+      if (plan.integration) assertWikiIntegrationTime(plan.integration);
+      for (const boundary of importedBounds) assertWikiImportTime(boundary);
+    };
     const result = await this.port.mutate('review', 'wiki-apply', async () => {
       const state = await this.load('review', false, plan.merge?.selection ?? plan.integration?.selection);
       state.sourceIds = plan.sourceIds;
@@ -210,7 +215,9 @@ export class WikiEngine {
       }
       if (changed.length) await this.port.log(plan.merge ? `wiki-merge:${plan.merge.fromCommit}` : `wiki-${plan.kind}`, changed.map((page) => page.meta.id));
       return changed.map((page) => page.meta.id);
-    }, () => { if (plan.merge) assertMergeTime(plan.merge); if (plan.integration) assertWikiIntegrationTime(plan.integration); for (const boundary of importedBounds) assertWikiImportTime(boundary); }, () => duplicate);
+    }, validateSupport, () => duplicate);
+    // Replay did not commit; its read must remain valid through outer lock cleanup too.
+    if (duplicate) validateSupport();
     return { pageIds: result.value, commit: result.commit };
   }
 

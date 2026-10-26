@@ -197,6 +197,20 @@ test('Wiki integration regression: ordinary preview refuses expiry during outer 
   assert.deepEqual(await integrity(caller), before);
 });
 
+test('Wiki integration regression: successful replay refuses expiry during outer mutation-lock cleanup', async t => {
+  const base = Date.now(); let shifted = false; t.mock.method(Date, 'now', () => base + (shifted ? 120000 : 0));
+  const { caller, input } = await fixture(t, 'internal', false, new Date(base + 60000).toISOString());
+  const prepared = await caller.wikiIntegrationPrepare(input); await caller.wikiApply(prepared.plan);
+  const before = await integrity(caller), original = fsPromises.rm; let injected = false;
+  const hook = t.mock.method(fsPromises, 'rm', async (...args: Parameters<typeof fsPromises.rm>) => {
+    if (!injected && String(args[0]) === join(caller.root, '.amem/write.lock')) { injected = true; shifted = true; }
+    return original(...args);
+  }); syncBuiltinESMExports();
+  try { await assert.rejects(caller.wikiApply(prepared.plan), { code: 'VALIDATION_FAILED' }); assert.equal(injected, true); }
+  finally { shifted = false; hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.deepEqual(await integrity(caller), before);
+});
+
 test('Wiki integration regression: a retained origin hash cannot approve a target edited after application', async t => {
   const { caller, callerAdmin, input } = await fixture(t), prepared = await caller.wikiIntegrationPrepare(input);
   await caller.wikiApply(prepared.plan); const current = await callerAdmin.get(wikiPageId(input.pageKey));

@@ -92,7 +92,21 @@ local-conflict retention and a true whole-plan UTF-8 bound before signing, plus
 above-limit preview/application refusal. Build/test types passed in
 `wiki-integration-build-8.log` / `wiki-integration-types-8.log`.
 
-Fixed-candidate Node 20.0 checks and re-review remain in progress.
+The `5ef7740894a46fad002a365bb3bf9488f806e8b8` fix also passed all 52/52
+compiled Node 20.0 checks (`wiki-integration-fixed-node20.log`), zero failed,
+cancelled or skipped. Documentation/test re-review covered 5/5 files with zero
+skipped and closed its contract/coverage findings. Source re-review covered 5/5,
+zero skipped, and confirmed the preview, actual-content receipt and projection
+rollback fixes. It identified one remaining final replay boundary below.
+
+That replay still checked time before the outer mutation lock's asynchronous
+cleanup. `wiki-integration-replay-cleanup-red.log` genuinely failed 0/1 against
+`5ef77408`. Duplicate-only validation now also runs after the mutation returns;
+normally committed operations retain their existing safe-commit semantics.
+`wiki-integration-replay-cleanup-green.log` passed 1/1. All earlier regressions
+remain. The final 236-check combined run, 53-check compiled Node 20 run and this
+last fix's independent review are still in progress.
+
 Package/native adapter verification and
 complete checks under both Git defaults remain to be recorded before batch 4
 acceptance. No push, publication, real account/service or deployment occurred.
