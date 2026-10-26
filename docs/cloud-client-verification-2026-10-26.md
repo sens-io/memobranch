@@ -31,7 +31,7 @@ created. See [instructions](cloud-sharing.md) and [roadmap](remaining-roadmap.md
 | Strict OpenSpec / production audit | Final strict validation 31/31; production audit zero vulnerabilities. |
 | Same installed artifact, Node 20/22 | Both passed with one unchanged 436-entry tarball; installed-check code review is complete. |
 | Native browser | Completed on the synthetic runtime described below; source/broker/client state unchanged. |
-| Independent fixed-candidate review | Every implementation file reviewed; both confirmed legacy compatibility defects fixed and independently closed. Final checkpoint-text review pending. |
+| Independent fixed-candidate review | Every implementation file reviewed; both confirmed legacy compatibility defects fixed and independently closed. Final checkpoint `a44af3a3`: 5/5 files reviewed, zero skipped, no confirmed issue. |
 
 Core tests cover real HTTP/HTTPS, trust of a locally generated CA, rejected
 untrusted certificates, changed CA/binding/credential, current account/source
@@ -132,7 +132,7 @@ input was observed in the native accessibility state instead.
 
 Review coverage: `fcff39a4` 4 core + 7 delivery files, `673d83c5` 2/2,
 `10137d91` 2/2, `5d3365e5` 2/2, `db41e876` 2/2 and native checkpoint `736bd420`
-3/3; zero skipped. OCR provided
+3/3, final checkpoint `a44af3a3` 5/5; zero skipped. OCR provided
 deterministic file/rule selection only, retaining its existing older-Git warning;
 no external review model was used.
 
