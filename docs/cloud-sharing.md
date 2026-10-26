@@ -2,7 +2,7 @@
 
 The user selected both a self-hosted service and Git remote sharing. The current
 branch contains a **self-hosted read service** and a **cloud client candidate**.
-Version 2 client bindings and existing read adapters are being verified. Remote
+Version 2 client bindings and existing read adapters have passed the [client checkpoint](cloud-client-verification-2026-10-26.md). Remote
 Git caches, service CLI setup and whole-batch acceptance are still pending. This
 is not a deployment or full cloud-sharing acceptance.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)

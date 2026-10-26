@@ -26,10 +26,10 @@ created. See [instructions](cloud-sharing.md) and [roadmap](remaining-roadmap.md
 | Build and test type checking | Passed with the legacy-date fix. |
 | Related core and adapter checks | 73/73, zero failures/skips/cancellations; `.scratch/cloud-shared-wiki-client-targeted-5.log`. |
 | Separate existing/new CLI, MCP, Harness and Web read checks | 18/18; includes 4 new cloud adapter tests, not 18 new cloud tests. `.scratch/cloud-shared-wiki-client-adapters-2.log`. |
-| Minimum Node 20.0.0 compiled-JavaScript tests | The preceding condition-fix candidate passed 34 client/service checks. Final legacy-date candidate rerun pending. |
-| Full retained checks, both Git defaults | Final runs pending. |
-| Strict OpenSpec / production audit | Initial strict validation 31/31; final validation/audit pending. |
-| Same installed artifact, Node 20/22 | Final runs pending; installed-check code review is complete. |
+| Minimum Node 20.0.0 compiled-JavaScript tests | Final legacy-date candidate passed all 34 client/service checks (17 client + 17 service), zero skipped/cancelled. |
+| Full retained checks, both Git defaults | Each passed 938 checks: 914 functional + 14 release-script + 10 evaluation checks, zero failures/skips/cancellations. |
+| Strict OpenSpec / production audit | Final strict validation 31/31; production audit zero vulnerabilities. |
+| Same installed artifact, Node 20/22 | Both passed with one unchanged 436-entry tarball; installed-check code review is complete. |
 | Native browser | Completed on the synthetic runtime described below; source/broker/client state unchanged. |
 | Independent fixed-candidate review | Every implementation file reviewed; both confirmed legacy compatibility defects fixed and independently closed. Final checkpoint-text review pending. |
 
@@ -42,6 +42,42 @@ malformed protocol and conservative-lease cases; the real client remains in use.
 An expiring remote lease during an actual destination writer wait refuses and
 rolls the copy back. Secret remote text becomes encrypted derived evidence;
 ordinary reads/preparation do not change canonical knowledge or run a model.
+
+Full logs: `.scratch/cloud-shared-wiki-client-full-main.log` and `-full-master.log`;
+minimum runtime: `.scratch/cloud-shared-wiki-client-node20-final.log`; final specs
+and audit: `.scratch/cloud-shared-wiki-client-final-specs.log` and `-audit.json`.
+These are local macOS checks, not a claim about remote GitHub CI. Runtime/test
+sources did not change after `5d3365e5` during final verification.
+
+## Installed and older-runtime compatibility checks
+
+The exact archive was
+`.scratch/cloud-client-package.1dRZPc/memobranch-1.1.0.tgz`, SHA-256
+`ea325ba93a3e654635125fa7ae3d77bc8567fb5065f99225af28dbfe5ca82b12`.
+It contains 436 entries and was packed once from `736bd420`, including the draft
+checkpoint report. This final report text was updated afterward; runtime sources
+are the reviewed `5d3365e5` code. Node 22.17.0/default `main` and Node 20.0.0/default
+`master` independently installed the same file and passed all package checks.
+Before/after archive hashes matched. Logs: `.scratch/cloud-shared-wiki-client-package-node22.log`
+and `-package-node20.log`.
+
+The installed cloud check uses public exports, real service HTTP and version 2
+bindings. Read and preparation checks compare source/broker/client HEADs, refs,
+indexes, model-call count and one named raw evidence file in each vault. Confirmed
+copy creates derived evidence, leaves the Wiki empty and source/broker state
+unchanged; exact retry makes no commit. A later source withdrawal refuses another
+copy. These are three raw samples, not an all-files integrity scan.
+
+An additional actual older archive
+(`.scratch/shared-wiki-package.BeISu0/memobranch-1.1.0.tgz`, SHA-256
+`f71ae58885aa6b3c8c8fa82a520f5aca12c0ba501ecd5232608584a5a9fe5e90`)
+was extracted and its compiled modules loaded on Node 22.17.0. Its reader refused
+the new version 2 binding with `CONFIG_INVALID`; its vault refused the actual
+copied digest-version-4 evidence with `VALIDATION_FAILED`. All three vault HEADs,
+refs and indexes stayed unchanged. This uses the workspace dependency tree, not
+an independent old-package installation or every historical reader/runtime.
+Evidence: `.scratch/cloud-shared-wiki-client-compat.log` and
+`.scratch/cloud-client-compat-observations.json`.
 
 ## Actual browser observations
 
@@ -95,7 +131,8 @@ input was observed in the native accessibility state instead.
 | `kevin/knowledge-expansion` | Actual page still described only local/Git sources. | `673d83c5`: two wording changes include cloud sources, with no permission/style change; independent review and actual rendering checked. |
 
 Review coverage: `fcff39a4` 4 core + 7 delivery files, `673d83c5` 2/2,
-`10137d91` 2/2, `5d3365e5` 2/2, `db41e876` 2/2; zero skipped. OCR provided
+`10137d91` 2/2, `5d3365e5` 2/2, `db41e876` 2/2 and native checkpoint `736bd420`
+3/3; zero skipped. OCR provided
 deterministic file/rule selection only, retaining its existing older-Git warning;
 no external review model was used.
 
