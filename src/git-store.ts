@@ -15,6 +15,8 @@ export interface GitRunOptions {
   actor?: Actor;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Preserve whitespace for exact object materialization; default text probes remain trimmed. */
+  rawOutput?: boolean;
 }
 
 export interface GitIntegrity {
@@ -78,7 +80,7 @@ export class GitStore {
           GIT_COMMITTER_EMAIL: email,
         },
       }, signal, timeoutMs);
-      return stdout.trim();
+      return options.rawOutput ? stdout : stdout.trim();
     } catch (error) {
       // Interrupted probes must not masquerade as absent refs or remotes.
       if (error instanceof AgentMemoryError) throw error;

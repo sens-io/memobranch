@@ -26,6 +26,31 @@ silently return previously cached content.
 - **WHEN** the configured Git fetch fails despite an existing cache
 - **THEN** the read returns a transport error and no cached view
 
+#### Scenario: A force-pushed branch excludes the fixed pin
+- **WHEN** a fresh branch no longer includes the pin, even if its objects are cached
+- **THEN** the read refuses without advancing the pin or serving cached content
+
+### Requirement: Owned disposable Git materialization
+Git reads MUST use an owned private cache with bounded exact object copies, no
+source checkout, executable hooks, attribute transformations or source-supplied
+runtime. Refresh MUST preserve separately provisioned private record keys.
+
+#### Scenario: Unsafe current tree
+- **WHEN** the current branch contains a symlink, submodule, runtime path, attribute file or ambiguous path
+- **THEN** the whole read refuses before old pinned content is returned
+
+#### Scenario: Interrupted refresh is retried
+- **WHEN** replacement or Git metadata updates were interrupted in an owned cache
+- **THEN** the next explicit read refreshes and reconstructs its managed files without deleting private keys
+
+#### Scenario: Missing confidential record keys
+- **WHEN** ciphertext is fetched but selected record keys were never provisioned or were erased
+- **THEN** confidential reading refuses without using the caller's default master key
+
+#### Scenario: A blocked Git helper
+- **WHEN** the reader cancels or its complete operation deadline expires
+- **THEN** the helper is terminated and no partial view or old cached result is returned
+
 ### Requirement: Bounded private transport
 Cloud requests MUST use bounded complete envelopes, cancellation/deadlines and
 server-owned endpoints. Public listeners MUST require TLS. Credentials, roots and

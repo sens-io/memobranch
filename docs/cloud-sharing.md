@@ -1,9 +1,9 @@
 # Cloud sharing — development candidate
 
 The user selected both a self-hosted service and Git remote sharing. The current
-branch contains a **self-hosted read service** and a **cloud client candidate**.
+branch contains a **self-hosted read service**, a **cloud client** and a **Git cache candidate**.
 Version 2 client bindings and existing read adapters have passed the [client checkpoint](cloud-client-verification-2026-10-26.md). Remote
-Git caches, service CLI setup and whole-batch acceptance are still pending. This
+Git cache verification, service CLI setup and whole-batch acceptance are still pending. This
 is not a deployment or full cloud-sharing acceptance.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
 and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
@@ -169,9 +169,75 @@ lock waits; approval still performs a new remote read.
 Version 2 also supports existing local bindings by adding `"transport":"local"`.
 Version 1 files retain their existing local behavior and optional pin precondition.
 Older programs reject version 2: stop older processes before using it. No vault
-record or schema is migrated. Service-side readers refuse cloud bindings, so an
-account cannot turn the service into a recursive forwarding proxy. `git` bindings
-are not implemented yet and currently refuse.
+record or schema is migrated. Service-side readers refuse cloud and Git bindings,
+so an account cannot turn the service into a recursive forwarding proxy.
+
+## Configure the Git cache candidate
+
+Use the same version 2 host file and existing shared read adapters. A Git source
+fixes a remote, short branch name and a full immutable pin independently:
+
+```json
+{
+  "version": 2,
+  "sources": [{
+    "transport": "git",
+    "id": "team-git",
+    "title": "Team Git Wiki",
+    "remote": "ssh://git@git.example.com/team/wiki.git",
+    "branch": "published",
+    "commit": "<full configured source commit>",
+    "vaultId": "<source vault ID>",
+    "tenantId": "<source tenant ID>",
+    "readers": [{ "id": "local-reader", "tenantId": "<local client tenant ID>" }],
+    "scopes": ["project"],
+    "maxSensitivity": "internal"
+  }]
+}
+```
+
+Normal remotes are credential-free HTTPS, SSH or `git@host:path`. Git uses the
+operator's native credential/SSH configuration with interactive prompts disabled;
+do not place credentials in the URL. Absolute local paths or `file:` URLs need an
+explicit host-only `allowLocalFile: true` and an independently trusted local
+repository. Request bodies cannot select commands, remote paths or branches.
+Git repository access is separate from the configured local reader grant.
+
+Catalog listing makes no remote request. Each snapshot requires `expectedCommit`,
+fetches the configured branch and requires the pin to remain in its full history.
+Current branch withdrawals, classification and expiry still apply to an old pin.
+Unavailable remotes, a removed pin, unsafe trees or failed refreshes refuse; an
+existing cache is never an offline fallback. Pin updates require a host file edit
+and a new displayed-version selection. No Git push, merge or checkout is used.
+
+The disposable cache is fixed under the caller vault's
+`.amem/shared-cache/<id>/vault/`. Its owner file binds the caller, source IDs,
+remote and branch. Reusing an alias for a different source refuses; after stopping
+all readers, an operator may reset that disposable slot or use a new alias.
+Keep private key material separately before a reset. Never use this cache as a
+working checkout. Successful refreshes replace only validated managed files and
+preserve private runtime, including `.amem/keys.json`. A following explicit read
+rebuilds interrupted replacements after another fresh fetch.
+
+For confidential pages, separately provision the source's wrapped record-key file
+into that cache's `.amem/keys.json`, with private filesystem permissions, and add
+`masterKeyEnv` naming the corresponding host environment variable. The Git remote
+must never contain that key file or the master key. A missing/erased key prevents
+new decryption, even if ciphertext was fetched earlier. Unrelated confidential
+records are not decrypted for a permitted non-confidential selection. Git cannot
+discover a remote key erasure that was never communicated to the cache operator;
+use the self-hosted service when every read needs live source-side key checks.
+Neither mode can recall plaintext already copied by a reader.
+
+Limits: `timeoutMs` 100–120000 (default 30000) covers refresh and snapshot work;
+`maxCacheBytes` 64000–1073741824 (default 536870912) bounds the cache with checks
+before/after work and monitoring during fetch. Monitoring can overshoot between
+checks; use host storage/process limits as well. Current trees are limited to
+5000 files, 10 MB each and 100 MB total, with existing selected-graph limits also
+applied. Symlinks, submodules, runtime paths, Git attributes and ambiguous portable
+paths refuse. Objects are copied by verified bytes with hooks and transformations
+disabled; source instructions are not executed. Confirmed library imports fetch
+again and retain separate read/write/review and explicit confirmation checks.
 
 ## Boundaries and remaining work
 

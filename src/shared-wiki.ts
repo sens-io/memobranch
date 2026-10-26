@@ -8,6 +8,7 @@ import { cancellationError, combineSignals, operationSignal, throwIfCancelled, w
 import { authorize, permissions, type Principal } from './policy.js';
 import { cloudWikiOriginAllowed, readCloudWikiSnapshot } from './shared-wiki-cloud-client.js';
 import { parseCloudJson, readCloudHostFile } from './shared-wiki-cloud-config.js';
+import { readGitSharedWiki, sharedGitBranchAllowed, sharedGitRemoteAllowed } from './shared-wiki-git.js';
 import { scopes, sensitivities, type VaultConfig } from './types.js';
 import { sha256 } from './utils.js';
 import { MemoryVault } from './vault.js';
@@ -30,10 +31,14 @@ const cloudBindingSchema = bindingSchema.omit({ root: true, masterKeyEnv: true }
   credentialEnv: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/),
   allowLoopbackHttp: z.boolean().optional(), caFile: path.optional(), timeoutMs: z.number().int().min(100).max(120_000).optional(),
 }).strict().refine(value => cloudWikiOriginAllowed(value.origin, value.allowLoopbackHttp) && (!value.caFile || value.origin.startsWith('https:')));
+const gitBindingSchema = bindingSchema.omit({ root: true }).extend({ transport: z.literal('git'), remote: z.string().min(1).max(4096),
+  branch: z.string().min(1).max(200), allowLocalFile: z.boolean().optional(), timeoutMs: z.number().int().min(100).max(120_000).optional(),
+  maxCacheBytes: z.number().int().min(64_000).max(1_073_741_824).optional(),
+}).strict().refine(value => sharedGitRemoteAllowed(value.remote, value.allowLocalFile) && sharedGitBranchAllowed(value.branch));
 const configV1Schema = z.object({ version: z.literal(1), sources: z.array(bindingSchema).max(20)
   .refine(values => new Set(values.map(source => source.id)).size === values.length) }).strict();
 const configSchema = z.union([configV1Schema, z.object({ version: z.literal(2), sources: z.array(z.union([
-  bindingSchema.extend({ transport: z.literal('local') }).strict(), cloudBindingSchema,
+  bindingSchema.extend({ transport: z.literal('local') }).strict(), cloudBindingSchema, gitBindingSchema,
 ])).max(20).refine(values => new Set(values.map(source => source.id)).size === values.length) }).strict()]);
 const principalSchema = z.object({ id: text, name: z.string().min(1).max(500), email: z.string().max(500).optional(),
   tenantId: text.optional(), permissions: z.array(z.enum(permissions)).min(1).max(6), scopes: uniqueScopes, maxSensitivity: z.enum(sensitivities) });
@@ -55,6 +60,8 @@ export interface SharedWikiView {
 type Binding = z.infer<typeof configSchema>['sources'][number];
 type CloudBinding = z.infer<typeof cloudBindingSchema>;
 const cloudBinding = (binding: Binding): binding is CloudBinding => 'transport' in binding && binding.transport === 'cloud';
+type GitBinding = z.infer<typeof gitBindingSchema>;
+const gitBinding = (binding: Binding): binding is GitBinding => 'transport' in binding && binding.transport === 'git';
 type State = { config: VaultConfig; bindings: z.infer<typeof configSchema>; identity: string; configHash: string; bindingsHash: string; principal: Principal };
 const signalSchema = z.object({ signal: z.instanceof(AbortSignal).optional() }).strict();
 const warnings = [
@@ -100,7 +107,7 @@ export class SharedWikiReader {
     return this.scoped(signal, async () => {
       const before = await this.state(), binding = this.binding(before, input.sourceId), principal = this.sourcePrincipal(before, binding);
       if (input.expectedCommit !== undefined && input.expectedCommit !== binding.commit) throw new AgentMemoryError('VALIDATION_FAILED', 'Shared Wiki pin changed; reload the configured source catalog');
-      if (cloudBinding(binding) && input.expectedCommit === undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Cloud Wiki reads require the full displayed commit precondition');
+      if ((cloudBinding(binding) || gitBinding(binding)) && input.expectedCommit === undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Remote Wiki reads require the full displayed commit precondition');
       const key = this.key(binding), keyHash = sha256(key);
       const ca = cloudBinding(binding) && binding.caFile ? await readCloudHostFile(binding.caFile, 1_000_000) : undefined;
       const caHash = sha256(ca?.toString('base64') ?? '');
@@ -112,6 +119,9 @@ export class SharedWikiReader {
             ...(binding.timeoutMs === undefined ? {} : { timeoutMs: binding.timeoutMs }), ...(ca ? { ca } : {}) }, key,
             { sourceId: binding.remoteSourceId, vaultId: binding.vaultId, tenantId: binding.tenantId, commit: binding.commit, pageKeys: input.pageKeys },
             principal, { includeSensitive: input.includeSensitive, includeSecret: input.includeSecret });
+        } else if (gitBinding(binding)) {
+          retained = await readGitSharedWiki(this.caller.root, before.config.vaultId, binding, principal, key,
+            { pageKeys: input.pageKeys, includeSensitive: input.includeSensitive, includeSecret: input.includeSecret });
         } else {
           const source = new MemoryVault(binding.root, { principal, masterKey: key, llm: new LlmClient({ apiKey: '', embeddingModel: '' }) });
           retained = await source.withReadSnapshot(async () => {
@@ -132,6 +142,9 @@ export class SharedWikiReader {
         snapshot: retained.snapshot, warnings: cloudBinding(binding) ? [
           'Explicit host-configured cloud read at a fixed commit; server current access and lifecycle checks apply.',
           'No cached fallback, automatic pin update, model call, import, merge, approval or canonical write. Copied plaintext cannot be recalled.',
+        ] : gitBinding(binding) ? [
+          'Explicit host-configured Git read at a fixed commit, checked against the freshly fetched branch.',
+          'Only an owned derived cache is updated. No cached fallback, pin advance, source/caller knowledge write, push, merge or model call. Copied plaintext cannot be recalled.',
         ] : [...warnings] };
       if (Buffer.byteLength(stableWikiJson(result), 'utf8') > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete shared Wiki view exceeds 20 MB');
       const validate = () => {
@@ -163,7 +176,7 @@ export class SharedWikiReader {
     const identity = stableWikiJson(this.caller.principal);
     const state = await this.caller.withReadSnapshot(async () => {
       const config = await this.caller.config(), bindings = await readBindings(this.configPath);
-      if (this.localOnly && bindings.sources.some(cloudBinding)) configError();
+      if (this.localOnly && bindings.sources.some(binding => cloudBinding(binding) || gitBinding(binding))) configError();
       return { config, bindings, identity, principal, configHash: digest(config), bindingsHash: digest(bindings) };
     }, 'read');
     this.finalCaller(state); return state;

@@ -90,10 +90,13 @@ Source and destination locks are never held together. Existing CLI/MCP/Harness/W
 catalog/snapshot entry points use the transport selected by the host file. The
 browser never receives or stores cloud credentials.
 The service constructs readers with host-only `localOnly: true`, rejecting cloud
-bindings before endpoint access. Version 2 currently accepts `local` and `cloud`;
-`git` is added by the subsequent owned-cache implementation and refuses until then.
+and Git bindings before endpoint access. Version 2 accepts `local`, `cloud` and
+the owned-cache `git` candidate. Whole-batch delivery remains pending.
 
 ## Git remote
+
+The concrete cache, limits, key provisioning and recovery contract is specified
+in [the owned-cache design](git-cache.md).
 
 A host binding fixes a credential-free HTTPS/SSH Git URL, one explicit branch,
 full pinned ancestor, expected vault/tenant, reader tuples and classification
