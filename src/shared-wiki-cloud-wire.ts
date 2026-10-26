@@ -10,22 +10,24 @@ import { assertSnapshotPath, type WikiSnapshot, type WikiSnapshotSupport } from 
 
 const text = (maximum: number) => z.string().min(1).max(maximum).regex(/^[^\x00-\x1f\x7f]+$/);
 const commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), date = z.string().datetime({ offset: true });
+// Ordinary memory predates the strict Wiki schema and uses Date.parse validation.
+const legacyDate = z.string().min(1).max(1_000_000).refine(value => Number.isFinite(Date.parse(value)));
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const list = <T extends z.ZodType>(schema: T, maximum = 100) => z.array(schema).max(maximum);
 const prose = z.string().min(1).max(1_000_000);
-const legacyMeta = z.object({ id: text(200), type: z.literal('memory'), createdAt: date, updatedAt: date, validatedAt: date,
+const legacyMeta = z.object({ id: text(200), type: z.literal('memory'), createdAt: legacyDate, updatedAt: legacyDate, validatedAt: legacyDate,
   kind: z.enum(memoryKinds), key: prose, scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
   confidence: z.number().min(0).max(1), status: z.enum(['active', 'conflicted']), evidence: list(text(1000), 200),
   conditions: list(z.string().max(1_000_000), 20_000), tags: list(z.string().max(1_000_000), 20_000), revision,
-  expiresAt: date.optional(), validFrom: date.optional(), validUntil: date.optional(),
-  supersedes: list(text(200), 1000).optional(), supersededBy: text(200).optional(), revokedAt: date.optional(), revocationReason: text(1_000_000).optional(),
+  expiresAt: legacyDate.optional(), validFrom: date.optional(), validUntil: date.optional(),
+  supersedes: list(text(200), 1000).optional(), supersededBy: text(200).optional(), revokedAt: legacyDate.optional(), revocationReason: prose.optional(),
 }).strict();
 // Validation must not trim/normalize committed metadata: it contributes to origin hashes.
 const wikiMeta = z.custom<WikiPageMeta>(value => wikiPageMetaSchema.safeParse(value).success);
 const document = z.object({ path: text(1000), meta: z.union([wikiMeta, legacyMeta]), body: z.string().min(1).max(20_000_000), currentRevision: revision }).strict();
 const supportSchema = z.object({ scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
   conditions: list(z.string().max(1_000_000), 20_000), uncertainty: list(prose, 20_000), conflicted: z.boolean(),
-  validFrom: date.optional(), expiresAt: date.optional(),
+  validFrom: date.optional(), expiresAt: legacyDate.optional(),
 }).strict();
 const envelopeSchema = z.object({ version: z.literal(1), kind: z.literal('cloud-shared-wiki-snapshot'),
   view: z.object({ version: z.literal(1), kind: z.literal('shared-wiki-view'),
