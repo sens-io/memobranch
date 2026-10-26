@@ -93,7 +93,7 @@ amem cloud check --accounts /srv/memobranch/private/cloud-accounts.json
 amem cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
 ```
 
-Check reports broker identities and current readable alias counts. A zero count
+Check validates broker identities and reports account IDs and current readable alias counts. A zero count
 is reported as zero; it does not prove page availability or decryption. Output
 does not include account digests or roots. Source brokers accept local bindings
 only. Unknown/duplicate flags, missing flag values and extra positional arguments
