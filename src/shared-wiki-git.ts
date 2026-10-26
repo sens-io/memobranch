@@ -76,9 +76,11 @@ export async function readGitSharedWiki(callerRoot: string, callerVaultId: strin
         await ownership();
         // Inspect the existing slot before Git or our writes can follow an old
         // metadata link. Remote trees are never allowed to supply this runtime.
-        if (await diskBytes(slot) > maximum) tooLarge();
         const fixed = await directoryChain(slot, ['vault', '.amem']); identities.push(...fixed);
         const root = join(slot, 'vault'), git = new GitStore(root), hooks = join(root, '.amem', 'empty-hooks');
+        await diskBytes(slot); // Reject links/foreign file types before cleanup or Git.
+        await removeAbandonedStages(root);
+        if (await diskBytes(slot) > maximum) tooLarge();
         await createDirectory(hooks); if ((await readdir(hooks)).length) invalid();
         await writeRegular(join(root, '.amem', 'empty-attributes'), Buffer.alloc(0));
         const run = (args: string[], options: GitRunOptions = {}) => git.run(['--no-replace-objects', '-c', `core.hooksPath=${hooks}`,
@@ -241,6 +243,24 @@ async function clearGitLocks(gitDir: string) {
     if (!await exists(path)) continue;
     const meta = await lstat(path); if (!meta.isFile() || meta.nlink !== 1) invalid();
     await rm(path);
+  }
+}
+async function removeAbandonedStages(root: string) {
+  const runtime = join(root, '.amem');
+  for (const name of await readdir(runtime)) {
+    throwIfCancelled();
+    if (!/^stage-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(name)) continue;
+    const path = join(runtime, name), identity = await directoryIdentity(path), files = await readdir(path);
+    if (files.length > 5000) tooLarge();
+    // Only the reserved layout written by this cache is disposable. Never
+    // descend into an unexpected directory or remove private host/key files.
+    for (const file of files) {
+      throwIfCancelled(); const meta = await lstat(join(path, file));
+      if (!/^[a-f0-9]{64}$/.test(file) || !meta.isFile() || meta.nlink !== 1) invalid();
+    }
+    await assertDirectories([identity]);
+    for (const file of files) { throwIfCancelled(); await rm(join(path, file)); }
+    await assertDirectories([identity]); await rm(path, { recursive: true });
   }
 }
 async function removeEmptyManagedDirectories(root: string) {

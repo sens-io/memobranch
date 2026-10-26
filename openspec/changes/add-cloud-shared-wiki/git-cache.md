@@ -43,6 +43,11 @@ recovery of a derived cache, not rollback or modification of the original source
 Do not use the cache as a user working checkout.
 The exclusive refresh lock also permits removing known transient Git lock files
 left by a terminated helper; it does not remove the private key store.
+Before allocating a new stage, remove abandoned reserved `stage-<UUID>` directories
+whose entries are only regular, singly linked, 64-hex staging files. Unexpected
+files or links refuse rather than being deleted. This cleanup happens before the
+cache budget check so a crashed partial stage cannot permanently consume the
+space required to reconstruct a valid managed tree.
 
 Never delete or fetch the private `.amem/keys.json`. For confidential reads the
 operator must separately provision the cache's wrapped record keys and select its

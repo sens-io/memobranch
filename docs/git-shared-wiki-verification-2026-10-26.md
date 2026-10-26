@@ -42,9 +42,9 @@ an uncommunicated erasure of a separately distributed cache key. See the
   `.scratch/shared-git-wiki-node20-split.log` then passed **28/28** compiled checks
   on Node 20.0 (no loader, failures, cancellations or skips). It includes the
   queue-link refusal, SSH cancellation/deadline and actual in-flight quota checks.
-- The current Node 22 combined regression is still running in
-  `.scratch/shared-git-wiki-targeted-6.log`; unlike the earlier mistaken command,
-  it checks all supplied paths exist and names the real cloud test files.
+- `.scratch/shared-git-wiki-targeted-6.log`: **100/100** Node 22 combined checks
+  passed, zero failures/cancellations/skips. It checks all supplied paths exist
+  and names the real cloud client/server files. This predates the staging fix below.
 - Latest build passed in `.scratch/shared-git-wiki-build-4.log`; latest test
   compilation passed in `.scratch/shared-git-wiki-node20-split-build.log`.
   Strict OpenSpec previously passed 31/31 in
@@ -53,7 +53,18 @@ an uncommunicated erasure of a separately distributed cache key. See the
 The first independent document/test review checked all 8 assigned files at
 `4a4debc0d29fbfc0a366ef2a8498939cc692dfd0`, skipped 0 and found no new confirmed
 defect; it explicitly retained the then-failing SSH group as incomplete verification.
-Core review and review of the subsequent test isolation are pending.
+The subsequent independent test-isolation review checked 3/3 changed files at
+`653e1d6e972a051d032f4fb99f1f675d921947b2`, skipped 0 and verified the three
+transport tests and assertions were retained. Core review confirmed the issue below;
+final review of its fix remains pending.
+
+| Source branch | Confirmed issue | Correction and verification |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | P2: crashed `stage-*` files could leave a cache below its quota but unable to allocate another full stage; retry repeatedly failed `CONTENT_TOO_LARGE`. | Validate ownership/types, remove only reserved abandoned staging files before budgeting, retain keys/unknown private files. Parent regression failed before the fix (`shared-git-wiki-orphan-before.log`) and both new regressions passed after (`shared-git-wiki-orphan-after.log`, 2/2). The independent fixed-candidate reproduction measured baseline 71915, stage 57444 and valid limit 133455; the interrupted cache occupied 129661 yet could not rebuild until the old stage was removed. |
+
+Latest staging-fix build and types passed (`shared-git-wiki-build-5.log`,
+`shared-git-wiki-types-5.log`). Both runtime whole-run gates must be repeated after
+the fix; the earlier 28/100 counts do not prove these additional two tests.
 Both Git-default full checks, production audit,
 the same installed package on both runtimes, actual browser checks and compatibility
 verification remain pending for this Git checkpoint. Earlier cloud verification

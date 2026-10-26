@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import fsPromises, { chmod, link, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import fsPromises, { chmod, link, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -214,6 +214,29 @@ test('shared Git: a preexisting refresh queue symlink refuses before writing any
   await assert.rejects(reader.snapshot(input), { code: 'CONFIG_INVALID' }); assert.deepEqual(await readdir(outside), []);
 });
 
+test('shared Git: abandoned owned staging files cannot consume the next refresh quota or delete separately provisioned keys', async t => {
+  const { reader, input, binding, saveBindings, cache, slot } = await gitFixture(t); await reader.snapshot(input);
+  const stage = join(cache, '.amem/stage-76ec9c03-bded-4d77-bcaf-9fde7a9bf037'), keys = join(cache, '.amem/keys.json');
+  await writeFile(keys, 'HOST_KEY_RETENTION_CANARY');
+  const baseline = await fixtureBytes(slot), tree = await new GitStore(cache).run(['ls-tree', '-r', '-l', 'HEAD']);
+  const stageBytes = tree.split('\n').reduce((total, line) => total + Number(/^\d+ blob [a-f0-9]+\s+(\d+)\t/.exec(line)![1]), 0);
+  binding.maxCacheBytes = Math.max(64_000, baseline + stageBytes + 4096); await saveBindings();
+  await mkdir(stage); await writeFile(join(stage, '0'.repeat(64)), Buffer.alloc(stageBytes)); await writeFile(join(cache, '.amem/shared-cache-pending.json'), '{}');
+  assert.ok(await fixtureBytes(slot) < binding.maxCacheBytes, 'interrupted cache fits before rebuilding');
+  assert.match(JSON.stringify(await reader.snapshot(input)), /DATED_WIKI_OLD_CANARY/); assert.equal(existsSync(stage), false);
+  await mkdir(stage); await writeFile(join(stage, '0'.repeat(64)), Buffer.alloc(600_000));
+  binding.maxCacheBytes = 512_000; await saveBindings();
+  assert.match(JSON.stringify(await reader.snapshot(input)), /DATED_WIKI_OLD_CANARY/);
+  assert.equal(existsSync(stage), false); assert.equal(await readFile(keys, 'utf8'), 'HOST_KEY_RETENTION_CANARY');
+});
+
+test('shared Git: reserved staging cleanup refuses unexpected private files instead of deleting them', async t => {
+  const { reader, input, cache } = await gitFixture(t); await reader.snapshot(input);
+  const stage = join(cache, '.amem/stage-34c0e753-f899-4fc6-846f-d2d636c183dc'); await mkdir(stage);
+  await writeFile(join(stage, 'keys.json'), 'DO_NOT_DELETE_PRIVATE_FILE');
+  await assert.rejects(reader.snapshot(input), { code: 'CONFIG_INVALID' }); assert.equal(await readFile(join(stage, 'keys.json'), 'utf8'), 'DO_NOT_DELETE_PRIVATE_FILE');
+});
+
 test('shared Git: actual refresh lock cancellation releases its ticket, holds no caller writer lock and leaves canonical data unchanged', async t => {
   const { reader, input, caller } = await gitFixture(t), lock = join(caller.root, '.amem/shared-cache/team-wiki.lock');
   const acquired = deferred(), release = deferred(), controller = new AbortController(), before = await integrity(caller);
@@ -246,4 +269,8 @@ function environment(t: TestContext, values: Record<string, string>) {
   Object.assign(process.env, values); t.after(restore); return restore;
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+async function fixtureBytes(path: string): Promise<number> {
+  const meta = await stat(path); if (!meta.isDirectory()) return meta.size;
+  let bytes = 0; for (const name of await readdir(path)) bytes += await fixtureBytes(join(path, name)); return bytes;
+}
 async function waitFor(check: () => Promise<boolean>) { const end = performance.now() + 5000; while (performance.now() < end) { if (await check().catch(() => false)) return; await delay(10); } throw new Error('Expected live fixture condition'); }
