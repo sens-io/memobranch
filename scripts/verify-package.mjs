@@ -51,6 +51,7 @@ try {
     'dist/web-shared-wiki-ui.js', 'dist/web-shared-wiki-ui.d.ts',
     'dist/shared-wiki-cloud-config.js', 'dist/shared-wiki-cloud-config.d.ts',
     'dist/shared-wiki-cloud-server.js', 'dist/shared-wiki-cloud-server.d.ts', 'docs/cloud-sharing.md', 'docs/cloud-sharing_CN.md',
+    'dist/shared-wiki-cloud-client.js', 'dist/shared-wiki-cloud-client.d.ts', 'dist/shared-wiki-cloud-wire.js', 'dist/shared-wiki-cloud-wire.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -136,6 +137,7 @@ try {
       startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
       SharedWikiReader, type SharedWikiReaderOptions, type SharedWikiSnapshotOptions, type SharedWikiView,
       startCloudWikiServer, type CloudWikiServerOptions, type CloudWikiServerHandle,
+      SharedWikiImporter, type SharedWikiImportPrepareOptions, type SharedWikiImportPlan,
       type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
     export async function publicCloudWiki(options: CloudWikiServerOptions) {
       const handle: CloudWikiServerHandle = await startCloudWikiServer(options);
@@ -145,6 +147,11 @@ try {
       const reader = new SharedWikiReader(vault, options);
       const view: SharedWikiView = await reader.snapshot({ ...selection, signal: new AbortController().signal });
       return { sources: await reader.catalog(), view, pin: view.source.commit };
+    }
+    export async function publicSharedImport(vault: MemoryVault, options: SharedWikiReaderOptions, selection: SharedWikiImportPrepareOptions) {
+      const importer = new SharedWikiImporter(vault, options);
+      const plan: SharedWikiImportPlan = (await importer.prepare(selection)).plan;
+      return importer.apply(plan, { confirm: true, signal: new AbortController().signal });
     }
     export async function publicAvailability(vault: MemoryVault, observe: AvailabilityObserveOptions, query: AvailabilityAtOptions) {
       const recorded = await vault.wikiObserveAvailability(observe);
