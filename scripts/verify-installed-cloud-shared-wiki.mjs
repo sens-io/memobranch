@@ -10,8 +10,9 @@ let service;
 try {
   let version = 1, calls = 0;
   const llm = new LlmClient({ apiKey: '', embeddingModel: '' });
-  llm.wiki = async (_operation, input) => {
+  llm.wiki = async (operation, input) => {
     calls++;
+    if (operation === 'navigate') return { keys: input.catalog.map(page => page.key) };
     const sources = input.sources.map(source => ({ key: 'source:' + source.id, pageType: 'source', title: 'Installed source',
       summary: 'Synthetic source', body: source.body, evidenceIds: [source.id], links: [], status: 'active', conditions: [], uncertainty: [] }));
     return { pages: [...sources, { ...sources[0], key: 'concept:installed-cloud', pageType: 'concept', title: 'Installed cloud page',
