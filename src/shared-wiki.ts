@@ -6,10 +6,12 @@ import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { LlmClient } from './llm.js';
 import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
 import { authorize, permissions, type Principal } from './policy.js';
+import { cloudWikiOriginAllowed, readCloudWikiSnapshot } from './shared-wiki-cloud-client.js';
+import { parseCloudJson, readCloudHostFile } from './shared-wiki-cloud-config.js';
 import { scopes, sensitivities, type VaultConfig } from './types.js';
 import { sha256 } from './utils.js';
 import { MemoryVault } from './vault.js';
-import type { WikiSnapshot } from './wiki-snapshot.js';
+import type { WikiSnapshot, WikiSnapshotSupport } from './wiki-snapshot.js';
 import { stableWikiJson } from './wiki-proof.js';
 
 const text = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/);
@@ -23,8 +25,16 @@ const bindingSchema = z.object({ id: sourceId, title: text, root: path, commit, 
   scopes: uniqueScopes, maxSensitivity: z.enum(sensitivities),
   masterKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/).optional(),
 }).strict();
-const configSchema = z.object({ version: z.literal(1), sources: z.array(bindingSchema).max(20)
+const cloudBindingSchema = bindingSchema.omit({ root: true, masterKeyEnv: true }).extend({ transport: z.literal('cloud'),
+  origin: z.string().min(1).max(2048), remoteSourceId: sourceId,
+  credentialEnv: z.string().regex(/^[A-Z_][A-Z0-9_]{0,127}$/),
+  allowLoopbackHttp: z.boolean().optional(), caFile: path.optional(), timeoutMs: z.number().int().min(100).max(120_000).optional(),
+}).strict().refine(value => cloudWikiOriginAllowed(value.origin, value.allowLoopbackHttp) && (!value.caFile || value.origin.startsWith('https:')));
+const configV1Schema = z.object({ version: z.literal(1), sources: z.array(bindingSchema).max(20)
   .refine(values => new Set(values.map(source => source.id)).size === values.length) }).strict();
+const configSchema = z.union([configV1Schema, z.object({ version: z.literal(2), sources: z.array(z.union([
+  bindingSchema.extend({ transport: z.literal('local') }).strict(), cloudBindingSchema,
+])).max(20).refine(values => new Set(values.map(source => source.id)).size === values.length) }).strict()]);
 const principalSchema = z.object({ id: text, name: z.string().min(1).max(500), email: z.string().max(500).optional(),
   tenantId: text.optional(), permissions: z.array(z.enum(permissions)).min(1).max(6), scopes: uniqueScopes, maxSensitivity: z.enum(sensitivities) });
 
@@ -34,7 +44,7 @@ export const sharedWikiSnapshotSchema = z.object({ sourceId,
   includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
 }).strict();
 export type SharedWikiSnapshotOptions = z.input<typeof sharedWikiSnapshotSchema> & { signal?: AbortSignal | undefined };
-export interface SharedWikiReaderOptions { configPath: string; env?: NodeJS.ProcessEnv }
+export interface SharedWikiReaderOptions { configPath: string; env?: NodeJS.ProcessEnv; localOnly?: boolean }
 export interface SharedWikiView {
   version: 1;
   kind: 'shared-wiki-view';
@@ -42,7 +52,9 @@ export interface SharedWikiView {
   snapshot: WikiSnapshot;
   warnings: string[];
 }
-type Binding = z.infer<typeof bindingSchema>;
+type Binding = z.infer<typeof configSchema>['sources'][number];
+type CloudBinding = z.infer<typeof cloudBindingSchema>;
+const cloudBinding = (binding: Binding): binding is CloudBinding => 'transport' in binding && binding.transport === 'cloud';
 type State = { config: VaultConfig; bindings: z.infer<typeof configSchema>; identity: string; configHash: string; bindingsHash: string; principal: Principal };
 const signalSchema = z.object({ signal: z.instanceof(AbortSignal).optional() }).strict();
 const warnings = [
@@ -55,10 +67,13 @@ const warnings = [
 export class SharedWikiReader {
   private readonly configPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly localOnly: boolean;
 
   constructor(private readonly caller: MemoryVault, options: SharedWikiReaderOptions) {
     if (!path.safeParse(options?.configPath).success) configError();
+    if (options.localOnly !== undefined && typeof options.localOnly !== 'boolean') configError();
     this.configPath = options.configPath; this.env = options.env ?? process.env;
+    this.localOnly = options.localOnly ?? false;
   }
 
   async catalog(options: { signal?: AbortSignal | undefined } = {}) {
@@ -85,25 +100,39 @@ export class SharedWikiReader {
     return this.scoped(signal, async () => {
       const before = await this.state(), binding = this.binding(before, input.sourceId), principal = this.sourcePrincipal(before, binding);
       if (input.expectedCommit !== undefined && input.expectedCommit !== binding.commit) throw new AgentMemoryError('VALIDATION_FAILED', 'Shared Wiki pin changed; reload the configured source catalog');
+      if (cloudBinding(binding) && input.expectedCommit === undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Cloud Wiki reads require the full displayed commit precondition');
       const key = this.key(binding), keyHash = sha256(key);
+      const ca = cloudBinding(binding) && binding.caFile ? await readCloudHostFile(binding.caFile, 1_000_000) : undefined;
+      const caHash = sha256(ca?.toString('base64') ?? '');
       // Explicit empty key prevents MemoryVault's normal AMEM_MASTER_KEY fallback.
-      let retained: Awaited<ReturnType<MemoryVault['wikiSnapshotWithValidation']>>;
+      let retained: { snapshot: WikiSnapshot; support: WikiSnapshotSupport; validate(): void };
       try {
-        const source = new MemoryVault(binding.root, { principal, masterKey: key, llm: new LlmClient({ apiKey: '', embeddingModel: '' }) });
-        retained = await source.withReadSnapshot(async () => {
-          const config = await source.config();
-          if (config.vaultId !== binding.vaultId || config.tenantId !== binding.tenantId) unavailable();
-          return source.wikiSnapshotWithValidation({ commit: binding.commit, pageKeys: input.pageKeys,
-            includeSensitive: input.includeSensitive, includeSecret: input.includeSecret });
-        }, 'read');
+        if (cloudBinding(binding)) {
+          retained = await readCloudWikiSnapshot({ origin: binding.origin, ...(binding.allowLoopbackHttp === undefined ? {} : { allowLoopbackHttp: binding.allowLoopbackHttp }),
+            ...(binding.timeoutMs === undefined ? {} : { timeoutMs: binding.timeoutMs }), ...(ca ? { ca } : {}) }, key,
+            { sourceId: binding.remoteSourceId, vaultId: binding.vaultId, tenantId: binding.tenantId, commit: binding.commit, pageKeys: input.pageKeys },
+            principal, { includeSensitive: input.includeSensitive, includeSecret: input.includeSecret });
+        } else {
+          const source = new MemoryVault(binding.root, { principal, masterKey: key, llm: new LlmClient({ apiKey: '', embeddingModel: '' }) });
+          retained = await source.withReadSnapshot(async () => {
+            const config = await source.config();
+            if (config.vaultId !== binding.vaultId || config.tenantId !== binding.tenantId) unavailable();
+            return source.wikiSnapshotWithValidation({ commit: binding.commit, pageKeys: input.pageKeys,
+              includeSensitive: input.includeSensitive, includeSecret: input.includeSecret });
+          }, 'read');
+        }
       } catch (error) { this.sourceError(error, binding.id); }
       if (retained.snapshot.commit !== binding.commit) unavailable();
       // The source lock is released before waiting for the caller's final lock.
       const after = await this.state(); this.unchanged(before, after);
       if (sha256(this.key(this.binding(after, input.sourceId))) !== keyHash) deny('Shared source key selection changed');
+      if (cloudBinding(binding) && binding.caFile && sha256((await readCloudHostFile(binding.caFile, 1_000_000)).toString('base64')) !== caHash) deny('Cloud Wiki certificate trust changed');
       const result: SharedWikiView = { version: 1, kind: 'shared-wiki-view',
         source: { id: binding.id, title: binding.title, vaultId: binding.vaultId, tenantId: binding.tenantId, commit: binding.commit },
-        snapshot: retained.snapshot, warnings: [...warnings] };
+        snapshot: retained.snapshot, warnings: cloudBinding(binding) ? [
+          'Explicit host-configured cloud read at a fixed commit; server current access and lifecycle checks apply.',
+          'No cached fallback, automatic pin update, model call, import, merge, approval or canonical write. Copied plaintext cannot be recalled.',
+        ] : [...warnings] };
       if (Buffer.byteLength(stableWikiJson(result), 'utf8') > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete shared Wiki view exceeds 20 MB');
       const validate = () => {
         if (signal?.aborted) throw cancellationError();
@@ -114,12 +143,14 @@ export class SharedWikiReader {
       // No source/caller lock is acquired here. A destination transaction already owns its writer lock.
       const validateConfiguration = async () => {
         const config = await this.caller.config(), bindings = await readBindings(this.configPath);
-        this.unchanged(before, { ...before, configHash: digest(config), bindingsHash: digest(bindings) }); validate();
+        this.unchanged(before, { ...before, configHash: digest(config), bindingsHash: digest(bindings) });
+        if (cloudBinding(binding) && binding.caFile && sha256((await readCloudHostFile(binding.caFile, 1_000_000)).toString('base64')) !== caHash) deny('Cloud Wiki certificate trust changed');
+        validate();
       };
       validate();
       return { view: result, validate, validateConfiguration, destination: {
         vaultId: before.config.vaultId, tenantId: before.config.tenantId, configHash: before.configHash, maxContentCharacters: before.config.limits.maxContentCharacters,
-      }, support: retained.support, attestationContext: digest({ bindings: before.bindingsHash, key: keyHash }) };
+      }, support: retained.support, attestationContext: cloudBinding(binding) ? digest({ bindings: before.bindingsHash, key: keyHash, ca: caHash }) : digest({ bindings: before.bindingsHash, key: keyHash }) };
     });
   }
 
@@ -132,6 +163,7 @@ export class SharedWikiReader {
     const identity = stableWikiJson(this.caller.principal);
     const state = await this.caller.withReadSnapshot(async () => {
       const config = await this.caller.config(), bindings = await readBindings(this.configPath);
+      if (this.localOnly && bindings.sources.some(cloudBinding)) configError();
       return { config, bindings, identity, principal, configHash: digest(config), bindingsHash: digest(bindings) };
     }, 'read');
     this.finalCaller(state); return state;
@@ -154,7 +186,7 @@ export class SharedWikiReader {
       maxSensitivity: sensitivities[Math.min(sensitivities.indexOf(caller.maxSensitivity), sensitivities.indexOf(binding.maxSensitivity))]! };
   }
 
-  private key(binding: Binding) { return binding.masterKeyEnv ? this.env[binding.masterKeyEnv] ?? '' : ''; }
+  private key(binding: Binding) { return cloudBinding(binding) ? this.env[binding.credentialEnv] ?? '' : binding.masterKeyEnv ? this.env[binding.masterKeyEnv] ?? '' : ''; }
 
   private finalCaller(state: State) {
     throwIfCancelled(); authorize(this.caller.principal, 'read', { tenantId: state.config.tenantId });
@@ -199,11 +231,12 @@ async function readBindings(path: string) {
         || start.size !== end.size || start.mtimeMs !== end.mtimeMs || start.ctimeMs !== end.ctimeMs) configError();
       text = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, total));
     } finally { await handle.close(); }
-    throwIfCancelled(); const result = configSchema.safeParse(JSON.parse(text));
+    throwIfCancelled(); const value = JSON.parse(text);
+    const result = configSchema.safeParse(value?.version === 2 ? parseCloudJson(Buffer.from(text)) : value);
     if (!result.success) configError(); return result.data;
   } catch (error) {
     throwIfCancelled();
-    if (error instanceof AgentMemoryError) throw error;
+    if (error instanceof AgentMemoryError && error.code !== 'VALIDATION_FAILED') throw error;
     return configError();
   }
 }

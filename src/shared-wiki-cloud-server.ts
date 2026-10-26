@@ -115,7 +115,7 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
           const config = await broker.config();
           if (config.vaultId !== account!.vaultId || config.tenantId !== account!.tenantId) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Cloud Wiki broker identity changed');
         }, 'read');
-        const reader = new SharedWikiReader(broker, { configPath: account.sharedWikiConfig, env });
+        const reader = new SharedWikiReader(broker, { configPath: account.sharedWikiConfig, env, localOnly: true });
         let result: unknown, validate = () => {};
         let expiresAt: string | undefined;
         if (snapshotData) {

@@ -1,9 +1,10 @@
 # Cloud sharing — development candidate
 
 The user selected both a self-hosted service and Git remote sharing. The current
-branch contains a **self-hosted read-service library candidate**. Cloud client
-bindings, remote Git caches, CLI setup and management/agent adapter integration
-are still pending. This is not a deployment or full cloud-sharing acceptance.
+branch contains a **self-hosted read service** and a **cloud client candidate**.
+Version 2 client bindings and existing read adapters are being verified. Remote
+Git caches, service CLI setup and whole-batch acceptance are still pending. This
+is not a deployment or full cloud-sharing acceptance.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
 and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
 
@@ -117,6 +118,60 @@ per-account concurrency 1–8, global rate 1–6000/minute, per-account rate 1�
 The server cancels work on disconnect, deadline or stop. Error responses contain
 safe codes, not internal roots or raw exception messages. Oversized output fails
 as a whole; no truncated page is returned.
+
+## Configure a cloud client candidate
+
+Use a separate private host file for the client. Requests select its alias and
+page keys; they cannot provide endpoints, credentials, roots, grants or identities.
+For example:
+
+```json
+{
+  "version": 2,
+  "sources": [{
+    "transport": "cloud",
+    "id": "team-wiki",
+    "title": "Team Wiki",
+    "origin": "https://memory.example.com:8443",
+    "remoteSourceId": "published-team",
+    "credentialEnv": "TEAM_WIKI_TOKEN",
+    "commit": "<full configured source commit>",
+    "vaultId": "<source vault ID>",
+    "tenantId": "<source tenant ID>",
+    "readers": [{ "id": "local-reader", "tenantId": "<local client tenant ID>" }],
+    "scopes": ["project"],
+    "maxSensitivity": "internal"
+  }]
+}
+```
+
+Set the existing host `AMEM_SHARED_WIKI_CONFIG` to that absolute file path and
+provide `TEAM_WIKI_TOKEN` privately in the host environment. Use the existing
+`wiki shared-list` / `wiki shared-snapshot … --expected-commit …` commands and
+`memory_shared_wiki_catalog` / `memory_shared_wiki_snapshot` agent tools, or the
+local management page. Cloud snapshots require the full displayed commit;
+omitting it refuses. The configured source identity refers to the original source
+vault, not the service's broker vault. Catalogs list local configured aliases and
+make no network request; successful catalog listing does not establish remote
+availability. A snapshot performs a fresh remote read with the intersection of
+local caller/binding limits sent as attenuation.
+
+Optional host fields: `timeoutMs` (100–120000, default 30000) and absolute `caFile`
+(regular CA certificate file, at most 1000000 bytes). Certificates and hostnames
+remain verified. Only explicit `allowLoopbackHttp: true` permits development HTTP
+origins on literal `127.0.0.1` or `::1`. Origins contain no trailing slash, path,
+credentials, query or fragment. Redirects are refused without forwarding a token;
+there is no retry or cached content fallback. Credentials and CA hashes stay out
+of serialized views and import plans. Changing a selected credential, binding or
+CA invalidates retained work. The short remote lease continues during later local
+lock waits; approval still performs a new remote read.
+
+Version 2 also supports existing local bindings by adding `"transport":"local"`.
+Version 1 files retain their existing local behavior and optional pin precondition.
+Older programs reject version 2: stop older processes before using it. No vault
+record or schema is migrated. Service-side readers refuse cloud bindings, so an
+account cannot turn the service into a recursive forwarding proxy. `git` bindings
+are not implemented yet and currently refuse.
 
 ## Boundaries and remaining work
 

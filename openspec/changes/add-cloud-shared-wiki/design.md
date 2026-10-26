@@ -73,6 +73,10 @@ precede a concurrent revocation. Previously copied plaintext cannot be recalled.
 
 A host binding fixes HTTPS origin, remote source alias, expected vault/tenant,
 full pin, local reader tuples, ceilings and a credential environment variable.
+An optional host-owned `caFile` provides a private service's CA certificate without
+disabling normal certificate/hostname verification. Its bounded regular-file
+contents are checked again and included only as a hash in private import-proof
+context; they are never returned as source metadata.
 Only explicit loopback development bindings allow HTTP. Reject URL credentials,
 queries, fragments, redirect responses, oversized or malformed envelopes and
 identity/pin mismatches. Never forward tokens on redirects. A failed or cancelled
@@ -85,6 +89,9 @@ Credential hashes stay in private proof context, never serialized review plans.
 Source and destination locks are never held together. Existing CLI/MCP/Harness/Web
 catalog/snapshot entry points use the transport selected by the host file. The
 browser never receives or stores cloud credentials.
+The service constructs readers with host-only `localOnly: true`, rejecting cloud
+bindings before endpoint access. Version 2 currently accepts `local` and `cloud`;
+`git` is added by the subsequent owned-cache implementation and refuses until then.
 
 ## Git remote
 
