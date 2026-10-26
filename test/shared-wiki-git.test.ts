@@ -227,35 +227,6 @@ test('shared Git: actual refresh lock cancellation releases its ticket, holds no
   assert.deepEqual(await integrity(caller), before);
 });
 
-for (const mode of ['cancel', 'timeout'] as const) test(`shared Git: a real blocked SSH helper is terminated on ${mode}, with no cached fallback`, { timeout: 15000 }, async t => {
-  const { reader, input, binding, saveBindings, caller } = await gitFixture(t);
-  const helper = join(caller.root, '.amem/synthetic-ssh.cjs'), started = helper + '.started';
-  await writeFile(helper, `require('node:fs').writeFileSync(${JSON.stringify(started)},String(process.pid));setInterval(()=>{},1000);`);
-  environment(t, { GIT_SSH_COMMAND: `${quote(process.execPath)} ${quote(helper)}`, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
-  binding.remote = 'ssh://git@synthetic.invalid/wiki'; binding.allowLocalFile = false; binding.timeoutMs = mode === 'timeout' ? 3500 : 10000; await saveBindings();
-  const controller = new AbortController(), before = await integrity(caller), start = performance.now();
-  const result = reader.snapshot({ ...input, signal: controller.signal }).then(() => null, error => error);
-  try {
-    await waitFor(async () => existsSync(started)); const pid = Number(await readFile(started, 'utf8'));
-    if (mode === 'cancel') controller.abort();
-    const failure = await result; assert.equal(failure?.code, mode === 'cancel' ? 'OPERATION_CANCELLED' : 'REMOTE_TRANSPORT');
-    assert.ok(performance.now() - start < 7000); await assertStopped(pid); assert.deepEqual(await integrity(caller), before);
-  } catch (error) { t.diagnostic(await readFile(helper + '.trace', 'utf8').catch(() => 'No synthetic Git trace')); throw error; }
-  finally { controller.abort(); await result; }
-});
-
-test('shared Git: actual in-flight cache growth stops a blocked transport at the configured resource limit', { timeout: 15000 }, async t => {
-  const { reader, input, binding, saveBindings, caller, cache } = await gitFixture(t);
-  const helper = join(caller.root, '.amem/synthetic-growing-ssh.cjs'), started = helper + '.started';
-  await writeFile(helper, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},String(process.pid));fs.writeFileSync(${JSON.stringify(join(cache, '.amem/growing-pack-canary'))},Buffer.alloc(80000));setInterval(()=>{},1000);`);
-  environment(t, { GIT_SSH_COMMAND: `${quote(process.execPath)} ${quote(helper)}`, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
-  binding.remote = 'ssh://git@synthetic.invalid/wiki'; binding.allowLocalFile = false; binding.maxCacheBytes = 64_000; binding.timeoutMs = 10000; await saveBindings();
-  const before = await integrity(caller);
-  try { await assert.rejects(reader.snapshot(input), { code: 'CONTENT_TOO_LARGE' }); }
-  catch (error) { t.diagnostic(await readFile(helper + '.trace', 'utf8').catch(() => 'No synthetic Git trace')); throw error; }
-  const pid = Number(await readFile(started, 'utf8')); await assertStopped(pid); assert.deepEqual(await integrity(caller), before);
-});
-
 test('shared Git: concurrent reads serialize refresh, and imports require separate confirmation plus a fresh remote check', async t => {
   const { source, caller, callerAdmin, principal, reader, input, publish, configPath, env } = await gitFixture(t);
   const beforeSource = await integrity(source), beforeCaller = await integrity(caller);
@@ -273,15 +244,6 @@ function environment(t: TestContext, values: Record<string, string>) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); let done = false;
   const restore = () => { if (done) return; done = true; for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } };
   Object.assign(process.env, values); t.after(restore); return restore;
-}
-function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
-async function assertStopped(pid: number) {
-  try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
-  if (process.platform === 'linux') {
-    try { assert.match(await readFile(`/proc/${pid}/stat`, 'utf8'), /\) Z /); return; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
-  }
-  assert.fail('Git helper must be stopped before returning');
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 async function waitFor(check: () => Promise<boolean>) { const end = performance.now() + 5000; while (performance.now() < end) { if (await check().catch(() => false)) return; await delay(10); } throw new Error('Expected live fixture condition'); }

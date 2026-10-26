@@ -37,12 +37,24 @@ an uncommunicated erasure of a separately distributed cache key. See the
 - `.scratch/shared-git-wiki-transport-5.log`: corrected cloud client/server plus Git
   run, 61 checks, 60 passed and one Git SSH helper readiness failure; not a green gate.
 - Earlier compiled Node 20.0 runs had helper readiness failures. Isolated SHA-256
-  and cancellation passed; a complete passing minimum-runtime rerun is still required.
-- Build/types passed before the latest queue-link change. Latest build/types and
-  current whole-run checks must pass. Strict OpenSpec previously passed 31/31 in
+  and cancellation passed. Native SSH tests were moved, with every assertion
+  retained, into their own test process, separate from filesystem/clock mocks.
+  `.scratch/shared-git-wiki-node20-split.log` then passed **28/28** compiled checks
+  on Node 20.0 (no loader, failures, cancellations or skips). It includes the
+  queue-link refusal, SSH cancellation/deadline and actual in-flight quota checks.
+- The current Node 22 combined regression is still running in
+  `.scratch/shared-git-wiki-targeted-6.log`; unlike the earlier mistaken command,
+  it checks all supplied paths exist and names the real cloud test files.
+- Latest build passed in `.scratch/shared-git-wiki-build-4.log`; latest test
+  compilation passed in `.scratch/shared-git-wiki-node20-split-build.log`.
+  Strict OpenSpec previously passed 31/31 in
   `.scratch/shared-git-wiki-specs-1.log`.
 
-Independent fixed-commit review, both Git-default full checks, production audit,
+The first independent document/test review checked all 8 assigned files at
+`4a4debc0d29fbfc0a366ef2a8498939cc692dfd0`, skipped 0 and found no new confirmed
+defect; it explicitly retained the then-failing SSH group as incomplete verification.
+Core review and review of the subsequent test isolation are pending.
+Both Git-default full checks, production audit,
 the same installed package on both runtimes, actual browser checks and compatibility
 verification remain pending for this Git checkpoint. Earlier cloud verification
 does not prove the new Git gates. The overall goal remains active.
