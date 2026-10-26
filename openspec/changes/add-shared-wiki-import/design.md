@@ -26,6 +26,27 @@
    review operation writes Wiki pages. No automatic resolution of imported/local
    conflicts and no promotion of imported prose to independently confirmed facts.
 
+`MemoryVault.wikiIntegrationPrepare` accepts an imported evidence ID, target key,
+authored title/summary/body, optional target type, exact expected revision (zero
+for creation), optional stricter scope/sensitivity, added conditions/uncertainty,
+an explicit conflict flag, private selection and a library-only abort signal. It returns the
+complete imported artifact, current target or null, a signed `integrate` Wiki
+plan and the ordinary full preview. It does not call a model, create another raw
+record or apply a plan. A new grounded source summary links to the complete
+immutable artifact; an existing valid summary is retained. Summary text contains
+literal source identity and retained page revisions, never executable instructions.
+Standard inherited restriction/affected-page checks apply unchanged. Existing
+local evidence, conditions, uncertainty, links and unresolved conflicts survive.
+
+The signed integration origin stores the artifact ID, target key, classification
+and private selection. Classification cannot weaken the observed inputs; private
+output requires explicit private selection too. Application uses ordinary separate Wiki review, checks the current
+local artifact, its exact body hash, config and lifecycle, and records a target
+origin hash for an exact no-op retry. Old readers reject the new plan kind. A
+completed offline copy needs no renewed remote access for local integration;
+removing the original source grant does not erase that retained copy. Preparation
+and review remain bounded and cancelled by the existing destination operations.
+
 ## Origin and inherited restrictions
 The reserved artifact includes source vault/tenant/full commit, selected keys,
 complete page bodies/versions/classification/conditions/uncertainty/lifecycle,

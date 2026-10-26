@@ -1,7 +1,7 @@
 # Explicit compiled Wiki imports (development candidate)
 
-The library copy operation is implemented and under verification. Human-authored
-integration and CLI/MCP/Harness/Web import adapters are still pending. This is not
+The library copy operation is implemented. Human-authored library integration is
+implemented and under verification; CLI/MCP/Harness/Web import adapters are still pending. This is not
 batch acceptance, an npm release, Git branch merge or a cloud sharing service.
 
 Reuse the [host-owned pinned sharing configuration](pinned-shared-wiki.md). Do not
@@ -48,8 +48,8 @@ as history, but cannot support currently readable Wiki knowledge.
 
 Import alone captures evidence, without model calls, extraction or Wiki approval.
 The existing separate `wikiIngest` → `wikiPreview` → `wikiApply` workflow can use
-the artifact under the new restrictions. Human-authored integration preparation
-remains a later part of this batch. Ordinary-memory extraction, proposal, approval,
+the artifact under the new restrictions. The human-authored library operation below
+needs no model call. Ordinary-memory extraction, proposal, approval,
 consolidation, validation and reads refuse imported-artifact support rather than
 losing its restrictions. A separately configured local checkout can represent
 another branch; this feature does not fetch, checkout or Git-merge it.
@@ -64,6 +64,45 @@ operation details before retrying cancelled work. A post-capture authority/time
 failure includes safe `completedImport` identifiers, never artifact plaintext.
 Completed offline copies are not
 automatically withdrawn by later source changes.
+
+## Human-authored integration (library candidate)
+
+After the separate import, prepare an authored target against its exact revision:
+
+```ts
+const integration = await vault.wikiIntegrationPrepare({
+  evidenceId: captured.evidenceId,
+  pageKey: 'concept:deployment', expectedRevision: 0, // Zero creates; use the current revision to update.
+  title: 'Reviewed deployment guidance', summary: 'Human-authored integration.',
+  body: 'The reviewed guidance, including any unresolved differences.',
+  // sensitivity: 'secret', includeSecret: true,
+  // status: 'conflicted', conditions: ['Only for this project'], uncertainty: ['Still needs validation'],
+});
+// Inspect the COMPLETE imported artifact, current target, proposed pages and dependents.
+console.log(integration.comparison, integration.preview);
+// Only a separate authorized review writes Wiki knowledge:
+await vault.wikiApply(integration.plan);
+```
+
+Preparation requires read/write permission; ordinary separate Wiki application
+requires review permission. It calls no model and writes no canonical content.
+The signed `integrate` plan keeps its artifact ID, classification and private
+selection. It adds a grounded source summary when absent, retains existing local
+evidence/links and keeps source/local conditions, uncertainty, conflict and expiry.
+Authors may add restrictions or raise sensitivity; lowering input classification
+or resolving an existing conflict through this operation is refused or preserved.
+Confidential inputs and outputs require their explicit selection flags and keys.
+The comparison includes the complete retained import and current target; no
+semantic contradiction detection or independent verification is claimed.
+
+Creation uses revision zero; updating requires the actual current revision and
+cannot change a page's purpose. Changed, foreign or edited plans refuse. An exact
+successful retry returns no pages/commit while checking the local artifact and
+current permissions, keys, configuration and time. The original remote grant is
+not needed after an explicit offline copy; it cannot recall retained plaintext.
+Old programs reject the new plan kind. The library signal cancels owned work,
+including actual destination waits. CLI/agent/Web preparation adapters and their
+batch acceptance remain pending.
 
 Bounds: 25 requested/50 dependent pages, complete artifact and plan each at most
 1,000,000 UTF-8 bytes, destination's lower evidence limit, 100 inherited conditions/

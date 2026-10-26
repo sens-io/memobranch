@@ -13,8 +13,9 @@ import { nowIso, sha256, unique } from './utils.js';
 import { assertWikiDocument, builtinWikiRuleId, wikiPageDraftSchema, wikiPlanSchema, wikiQueryResultSchema, wikiPageId, wikiPagePath, wikiReceiptId, wikiRulesId } from './wiki-schema.js';
 import type { WikiCatalogEntry, WikiCitation, WikiLintIssue, WikiLintResult, WikiPageDraft, WikiPageMeta, WikiPlan, WikiPreview, WikiQueryResult, WikiReceiptMeta, WikiReviewVersion, WikiRulesMeta } from './wiki-types.js';
 import { assertMergeTime, type WikiMergeOptions, type WikiMergeOrigin } from './wiki-merge.js';
+import type { WikiIntegrationOptions } from './wiki-integration.js';
 import type { WikiSnapshot } from './wiki-snapshot.js';
-import { assertWikiImportTime, readWikiImportArtifact, wikiImportRestrictions, wikiImportSupportsPage, type WikiImportRestrictions } from './wiki-import-artifact.js';
+import { assertWikiImportTime, importedWikiCaution, readWikiImportArtifact, wikiImportRestrictions, wikiImportSupportsPage, type WikiImportRestrictions } from './wiki-import-artifact.js';
 
 type Document = MarkdownDocument<Record<string, unknown>>;
 type Page = MarkdownDocument<WikiPageMeta>;
@@ -163,7 +164,7 @@ export class WikiEngine {
     await this.verify(plan, 'plan');
     let importedBounds: WikiImportRestrictions[] = [];
     const result = await this.port.mutate('review', 'wiki-apply', async () => {
-      const state = await this.load('review', false, plan.merge?.selection);
+      const state = await this.load('review', false, plan.merge?.selection ?? plan.integration?.selection);
       state.sourceIds = plan.sourceIds;
       if (state.config.vaultId !== plan.vaultId) fail('Wiki plan belongs to another vault');
       // Successful replay is checked against current canonical state, not a runtime cache.
@@ -172,6 +173,10 @@ export class WikiEngine {
       if (plan.merge) {
         this.assertMergeSupport(state, plan.merge, 'review');
         if (state.eligible.get(plan.merge.key)?.meta.originHash === sha256(stable(plan))) return [];
+      }
+      if (plan.integration) {
+        this.assertConfig(state, plan.configHash); this.assertIntegrationSupport(state, plan, 'review');
+        if (state.eligible.get(plan.integration.key)?.meta.originHash === sha256(stable(plan))) return [];
       }
       this.assertConfig(state, plan.configHash);
       this.assertSnapshot(state, plan.snapshot);
@@ -207,7 +212,7 @@ export class WikiEngine {
 
   async preview(value: unknown): Promise<WikiPreview> {
     const plan = checked(wikiPlanSchema, value);
-    const state = await this.load('read', false, plan.merge?.selection);
+    const state = await this.load('read', false, plan.merge?.selection ?? plan.integration?.selection);
     state.sourceIds = plan.sourceIds;
     await this.verify(plan, 'plan');
     this.assertConfig(state, plan.configHash);
@@ -233,6 +238,39 @@ export class WikiEngine {
   async pageByKey(key: string, selection?: { includeSensitive?: boolean; includeSecret?: boolean }): Promise<Page> {
     const state = await this.load('read', false, selection);
     return required(state.eligible.get(key), 'Wiki page is unavailable');
+  }
+
+  /** A retained compiled copy supports a human draft; it is never new raw verification. */
+  async manualIntegration(input: WikiIntegrationOptions) {
+    authorize(this.port.principal, 'read'); authorize(this.port.principal, 'write');
+    const selection = { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true };
+    const state = await this.load('write', false, selection);
+    const source = required(state.evidence.get(input.evidenceId), 'Imported Wiki evidence is unavailable');
+    const artifact = required(readWikiImportArtifact(source), 'Manual integration requires an imported compiled Wiki artifact');
+    const boundary = wikiImportRestrictions(artifact); assertWikiImportTime(boundary);
+    const current = state.pages.get(input.pageKey);
+    if ((current?.meta.revision ?? 0) !== input.expectedRevision || current && !state.eligible.has(input.pageKey)) fail('Integration target revision changed or is unavailable');
+    const pageType = input.pageType ?? current?.meta.pageType ?? 'synthesis';
+    if (pageType === 'source' || current && current.meta.pageType !== pageType) fail('Integration target purpose cannot change');
+    state.sourceIds = [source.meta.id];
+    const floor = restrictions([source.meta, ...[...state.eligible.values(), ...state.rules].map(page => page.meta)]);
+    const labels = { scope: input.scope ?? floor.scope, sensitivity: input.sensitivity ?? floor.sensitivity };
+    if (scopes.indexOf(labels.scope) > scopes.indexOf(floor.scope) || sensitivities.indexOf(labels.sensitivity) < sensitivities.indexOf(floor.sensitivity)) fail('Integration classification cannot weaken its inputs');
+    const sourceKey = `source:${source.meta.id}`, summary = state.pages.get(sourceKey);
+    if (summary && (!state.eligible.has(sourceKey) || summary.meta.pageType !== 'source' || !summary.meta.evidence.includes(source.path))) fail('Imported source summary is unavailable');
+    const drafts: WikiPageDraft[] = [{ key: input.pageKey, pageType, title: input.title, summary: input.summary, body: input.body,
+      evidenceIds: [source.meta.id], links: unique([sourceKey, ...(current?.meta.links ?? [])]),
+      status: input.status === 'conflicted' || boundary.conflicted || current?.meta.status === 'conflicted' ? 'conflicted' : 'active',
+      conditions: input.conditions ?? [], uncertainty: input.uncertainty ?? [] }];
+    if (!summary) drafts.push({ key: sourceKey, pageType: 'source', title: 'Imported compiled Wiki source', summary: importedWikiCaution,
+      body: `# Imported compiled Wiki source\n\n${importedWikiCaution}\n\n## Origin\n\n${literalBlock(stable(artifact.source))}\n\n## Retained page revisions\n\n${literalBlock(stable(artifact.pages.map(page => ({ key: page.key, revision: page.revision }))))}\n\nComplete bodies, original-source hashes and rules remain in the linked immutable import evidence.`,
+      evidenceIds: [source.meta.id], links: [], status: boundary.conflicted ? 'conflicted' : 'active', conditions: [], uncertainty: [] });
+    const integration = { evidenceId: source.meta.id, key: input.pageKey, selection, ...labels };
+    const plan = await this.makePlan(state, 'integrate', drafts, current ? [current.meta.key] : [], state.sourceIds, undefined, undefined, undefined, integration);
+    this.prepare(state, plan, 'write');
+    const preview = await this.preview(plan);
+    await this.revalidate(state); authorize(this.port.principal, 'read'); assertWikiImportTime(boundary);
+    return { plan, preview, comparison: { artifact, evidenceId: source.meta.id, current: current ?? null } };
   }
 
   /** Human-authored derived knowledge; the old graph is not new evidence. */
@@ -626,12 +664,12 @@ export class WikiEngine {
     return sha256(stable({ sourceIds: [...sourceIds].sort(), snapshot: this.snapshot(state, sourceIds), config: state.config, compiler: this.port.llm.model, rules: ruleVersions(state) }));
   }
 
-  private async makePlan(state: State, kind: WikiPlan['kind'], pages: WikiPageDraft[], contextKeys: string[], sourceIds: string[], receiptId?: string, query?: WikiPlan['query'], merge?: WikiPlan['merge']): Promise<WikiPlan> {
+  private async makePlan(state: State, kind: WikiPlan['kind'], pages: WikiPageDraft[], contextKeys: string[], sourceIds: string[], receiptId?: string, query?: WikiPlan['query'], merge?: WikiPlan['merge'], integration?: WikiPlan['integration']): Promise<WikiPlan> {
     // Navigation titles and summaries are information too: their restrictions
     // travel with the result, even when the model did not request the full body.
     const observedKeys = unique([...contextKeys, ...state.eligible.keys()]);
     const expanded = this.expandDependentDrafts(state, pages);
-    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ...this.planManifest(state, expanded, observedKeys, sourceIds), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}), ...(merge ? { merge } : {}) };
+    const payload = { version: 1 as const, vaultId: state.config.vaultId, kind, pages: expanded, contextKeys: observedKeys, sourceIds, snapshot: this.snapshot(state), configHash: sha256(stable(state.config)), ruleIds: Object.keys(ruleVersions(state)), ...this.planManifest(state, expanded, observedKeys, sourceIds), ...(receiptId ? { receiptId } : {}), ...(query ? { query } : {}), ...(merge ? { merge } : {}), ...(integration ? { integration } : {}) };
     return checked(wikiPlanSchema, await this.sealWithState(state, payload, 'plan'));
   }
 
@@ -690,6 +728,7 @@ export class WikiEngine {
 
   private prepare(state: State, plan: WikiPlan, permission: Permission): Page[] {
     if (plan.merge) this.assertMergeSupport(state, plan.merge, permission);
+    if (plan.integration) this.assertIntegrationSupport(state, plan, permission);
     if (plan.vaultId !== state.config.vaultId) fail('Wiki plan belongs to another vault');
     if (unique(plan.pages.map((page) => page.key)).length !== plan.pages.length) fail('Duplicate Wiki target');
     if (this.expandDependentDrafts(state, plan.pages).length !== plan.pages.length) fail('Wiki plan omitted required dependent-page updates');
@@ -718,7 +757,7 @@ export class WikiEngine {
       const evidence = evidencePaths.map((path) => required(state.documents.get(path), 'Wiki evidence is unavailable'));
       const imported = evidencePaths.flatMap(path => state.imports.get(path) ?? []);
       for (const boundary of imported) assertWikiImportTime(boundary);
-      const labels = restrictions([...evidence.map((item) => item.meta as unknown as EvidenceMeta), ...context.map((item) => item.meta), ...state.rules.map((item) => item.meta), ...(plan.merge ? [plan.merge] : [])]);
+      const labels = restrictions([...evidence.map((item) => item.meta as unknown as EvidenceMeta), ...context.map((item) => item.meta), ...state.rules.map((item) => item.meta), ...(plan.merge ? [plan.merge] : []), ...(plan.integration ? [plan.integration] : [])]);
       authorize(this.port.principal, permission, { ...labels, tenantId: state.config.tenantId });
       if (draft.pageType === 'source' && (!draft.key.startsWith('source:') || !draft.evidenceIds.includes(draft.key.slice(7)))) fail('Source page identity must name its immutable input');
       const expires = [draft.expiresAt, plan.merge?.expiresAt, ...context.map((item) => item.meta.expiresAt), ...imported.map(item => item.expiresAt)].filter((value): value is string => Boolean(value)).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
@@ -735,6 +774,7 @@ export class WikiEngine {
         evidence: evidencePaths, links: unique([...draft.links, ...(old?.meta.links ?? [])]).filter((key) => key !== draft.key), dependencies, rules, conditions, uncertainty, ...(expires ? { expiresAt: expires } : {}),
         ...(plan.query?.key === draft.key ? { originHash: plan.query.hash } : {}),
         ...(plan.merge?.key === draft.key ? { originHash: sha256(stable(plan)) } : {}),
+        ...(plan.integration?.key === draft.key ? { originHash: sha256(stable(plan)) } : {}),
       } };
       return page;
     });
@@ -780,6 +820,17 @@ export class WikiEngine {
     authorize(this.port.principal, permission, { ...origin, tenantId: state.config.tenantId });
     if (origin.supportKeys.some(key => !state.eligible.has(key))) fail('Historical merge support is no longer available');
     if (origin.sensitivity === 'secret' && !origin.selection.includeSecret || origin.sensitivity === 'sensitive' && !origin.selection.includeSensitive) fail('Historical merge requires explicit confidential selection');
+  }
+
+  private assertIntegrationSupport(state: State, plan: WikiPlan, permission: Permission): void {
+    const origin = plan.integration!;
+    const source = required(state.evidence.get(origin.evidenceId), 'Imported integration support is unavailable');
+    const artifact = required(readWikiImportArtifact(source), 'Integration support is not imported Wiki evidence');
+    if (plan.sourceHashes[source.meta.id] !== sha256(source.body)) fail('Imported integration source changed');
+    assertWikiImportTime(wikiImportRestrictions(artifact));
+    authorize(this.port.principal, permission, { scope: source.meta.scope, sensitivity: source.meta.sensitivity, tenantId: state.config.tenantId });
+    authorize(this.port.principal, permission, { scope: origin.scope, sensitivity: origin.sensitivity, tenantId: state.config.tenantId });
+    if (origin.sensitivity === 'secret' && !origin.selection.includeSecret || origin.sensitivity === 'sensitive' && !origin.selection.includeSensitive) fail('Integration requires explicit confidential selection');
   }
 }
 

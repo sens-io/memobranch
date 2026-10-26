@@ -46,8 +46,9 @@ import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiSnapshotSupport } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
 import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
+import { wikiIntegrationOptionsSchema, type WikiIntegrationOptions } from './wiki-integration.js';
 import { reviewDiff } from './review-diff.js';
-import { isWikiImportUri, readWikiImportArtifact } from './wiki-import-artifact.js';
+import { assertWikiImportTime, isWikiImportUri, readWikiImportArtifact, wikiImportRestrictions } from './wiki-import-artifact.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -277,6 +278,22 @@ export class MemoryVault {
     const finish = async () => {
       const result = await action();
       throwIfCancelled(); assertMergeTime(result.plan.merge!);
+      return result;
+    };
+    if (!input.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
+  async wikiIntegrationPrepare(options: WikiIntegrationOptions) {
+    authorize(this.principal, 'read'); authorize(this.principal, 'write');
+    const parsed = wikiIntegrationOptionsSchema.safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded Wiki integration input');
+    const input = parsed.data, identity = stableWikiJson(this.principal);
+    const finish = async () => {
+      const result = await this.settledRead(() => this.wikiEngine().manualIntegration(input));
+      throwIfCancelled(); authorize(this.principal, 'read'); authorize(this.principal, 'write');
+      if (stableWikiJson(this.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Integration authority changed');
+      assertWikiImportTime(wikiImportRestrictions(result.comparison.artifact));
       return result;
     };
     if (!input.signal) return finish();

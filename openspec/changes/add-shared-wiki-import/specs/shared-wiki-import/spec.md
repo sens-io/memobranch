@@ -45,6 +45,16 @@ Wiki preparation, approval and readable knowledge.
 - **THEN** the complete local/imported/proposed comparison and affected pages are previewed, existing provenance remains and only separate review can commit
 - **AND** changed revisions or conflicting imported/local claims never silently overwrite the current target
 
+#### Scenario: The human draft adds confidentiality or unresolved differences
+- **WHEN** an authorized author adds stricter classification, conditions, uncertainty or a conflict flag
+- **THEN** the signed preview and applied target retain them together with all source and local restrictions
+- **AND** confidential output requires explicit private selection, and weaker classification or clearing an existing conflict is not permitted by integration
+
+#### Scenario: Local integration uses an explicitly retained offline copy
+- **WHEN** the source removes a remote grant after a successful separately confirmed copy
+- **THEN** a new local integration may still use the retained artifact under current local authority and lifecycle
+- **AND** it is not represented as original-source verification or a renewed remote read
+
 ### Requirement: Import must preserve source and destination boundaries
 The system SHALL use current host-configured shared access, without concurrent
 source/destination locks, arbitrary paths, network operations or automatic source
