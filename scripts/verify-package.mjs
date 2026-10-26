@@ -49,6 +49,8 @@ try {
     'dist/web-availability-ui.js', 'dist/web-availability-ui.d.ts',
     'dist/shared-wiki.js', 'dist/shared-wiki.d.ts', 'docs/pinned-shared-wiki.md', 'docs/pinned-shared-wiki_CN.md',
     'dist/web-shared-wiki-ui.js', 'dist/web-shared-wiki-ui.d.ts',
+    'dist/shared-wiki-cloud-config.js', 'dist/shared-wiki-cloud-config.d.ts',
+    'dist/shared-wiki-cloud-server.js', 'dist/shared-wiki-cloud-server.d.ts', 'docs/cloud-sharing.md', 'docs/cloud-sharing_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -133,7 +135,12 @@ try {
       type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
       startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
       SharedWikiReader, type SharedWikiReaderOptions, type SharedWikiSnapshotOptions, type SharedWikiView,
+      startCloudWikiServer, type CloudWikiServerOptions, type CloudWikiServerHandle,
       type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+    export async function publicCloudWiki(options: CloudWikiServerOptions) {
+      const handle: CloudWikiServerHandle = await startCloudWikiServer(options);
+      await handle.stop(); return handle.url;
+    }
     export async function publicSharedWiki(vault: MemoryVault, options: SharedWikiReaderOptions, selection: SharedWikiSnapshotOptions) {
       const reader = new SharedWikiReader(vault, options);
       const view: SharedWikiView = await reader.snapshot({ ...selection, signal: new AbortController().signal });
@@ -298,6 +305,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(sharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-cloud-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-cloud-shared-wiki.mjs')));
+  const cloudSharedWiki = await exec(process.execPath, ['verify-installed-cloud-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(cloudSharedWiki.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
