@@ -59,11 +59,13 @@ These commands are in the development checkout; the published npm version is not
 claimed to contain them. Build the checkout first. All four commands require
 admin permission. A restricted agent's read/write policy does not authorize host
 setup. Use an authorized operator environment; the commands do not change it.
+Run the following examples from the repository root so they use this checkout's
+`dist/cli.js`, regardless of any older global npm installation.
 
 Generate an inactive credential and digest on the operator's private terminal:
 
 ```sh
-amem cloud credentials
+node dist/cli.js cloud credentials
 ```
 
 The JSON contains `token` and `tokenSha256`. Generation writes no file or grant.
@@ -71,7 +73,7 @@ Keep the token private and distribute it only to the intended reader. The servic
 file stores the digest only. Prepare a service-file template using that digest:
 
 ```sh
-amem cloud account-template --id team-reader \
+node dist/cli.js cloud account-template --id team-reader \
   --broker-root /srv/memobranch/reader-broker \
   --sources-config /srv/memobranch/private/shared-wiki.json \
   --token-sha256 '<64 lowercase hexadecimal characters>' \
@@ -89,8 +91,8 @@ or grant changes; read-lock bookkeeping still uses the private runtime.
 Check and run the foreground service:
 
 ```sh
-amem cloud check --accounts /srv/memobranch/private/cloud-accounts.json
-amem cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
+node dist/cli.js cloud check --accounts /srv/memobranch/private/cloud-accounts.json
+node dist/cli.js cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
 ```
 
 Check validates broker identities and reports account IDs and current readable alias counts. A zero count

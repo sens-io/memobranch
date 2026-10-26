@@ -49,6 +49,17 @@ They check both vaults' canonical state, a raw evidence sample and model-call co
   `package.json` (`cloud-host-node20-2.log`, 47 passed / 2 file-load failures).
   Copying the unchanged package metadata into that compiled directory repairs the
   verification layout; no product or test assertion was changed.
+- With package metadata present, the next run passed 56/57: its actual Web check
+  correctly refused to start because the compiled staging directory also lacked
+  the unchanged `assets/logo.png` required by the management service
+  (`cloud-host-node20-3.log`). The staging directory now includes that runtime
+  asset as well. This failed gate is retained; it is not reported as a product
+  fix or a passing minimum-runtime run.
+- With the required metadata and asset present, `.scratch/cloud-host-node20-4.log`
+  passed all **57/57** compiled checks on Node 20.0.0, zero failures, cancellations
+  or skips. Source/tests and assertions match `3b113867`; no TypeScript runtime
+  loader or unsupported test-runner flag is used. The preparation copies only
+  the unchanged `package.json` and `assets/logo.png` beside the compiled output.
 
 Host tests exercise real loopback HTTP and native TLS with an explicit fixture CA,
 untrusted-certificate refusal, rate limits, SIGINT/SIGTERM, source-lock waits,
@@ -71,10 +82,16 @@ source counts, rather than reporting the broker identities. The sentence is fixe
 the implementation and the Chinese guide already matched that behavior. Final
 text/verification review remains pending until the gates are recorded.
 
+The final guide examples also invoke `node dist/cli.js` from the repository root,
+so building a checkout does not accidentally direct users to an older globally
+installed CLI. This is a documentation correction, not a runtime change.
+
+Strict validation passed 31/31 items in `.scratch/cloud-host-specs.log` and the
+production audit reported zero vulnerabilities in `.scratch/cloud-host-audit.json`.
+
 ## Pending gates
 
-Compiled Node 20.0 checks, complete checks under both Git defaults, the same fresh
-installed archive on Node 20/22, strict OpenSpec, production dependency audit and
-independent fixed-candidate review remain to be recorded. Earlier browser and Git
+Complete checks under both Git defaults, the same fresh installed archive on
+Node 20/22, and final verification-text review remain to be recorded. Earlier browser and Git
 transport checkpoints are retained separately; this phase changes no browser UI.
 Roadmap batches 4–6 remain pending even after the cloud batch is accepted.

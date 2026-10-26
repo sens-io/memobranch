@@ -48,18 +48,19 @@ node --input-type=module -e 'import { randomBytes, createHash } from "node:crypt
 以下命令属于开发源码，不代表已经包含在公开 npm 版本中。先构建当前源码。
 四条命令都要求管理员（`admin`）权限；只有读写权限的 Agent 不能操作服务配置，命令也不会
 修改当前操作者的权限设置。
+在项目根目录运行以下示例，明确使用当前源码构建的 `dist/cli.js`，避免调用到旧的全局 npm 安装。
 
 在操作者的私有终端中生成尚未生效的凭据及摘要：
 
 ```sh
-amem cloud credentials
+node dist/cli.js cloud credentials
 ```
 
 输出包含 `token` 和 `tokenSha256`。命令不会保存文件或增加授权。
 将令牌私下交给指定读者，服务账号文件只保存摘要。使用摘要生成配置模板：
 
 ```sh
-amem cloud account-template --id team-reader \
+node dist/cli.js cloud account-template --id team-reader \
   --broker-root /srv/memobranch/reader-broker \
   --sources-config /srv/memobranch/private/shared-wiki.json \
   --token-sha256 '<64 位小写十六进制摘要>' \
@@ -74,8 +75,8 @@ amem cloud account-template --id team-reader \
 检查配置，再在前台启动服务：
 
 ```sh
-amem cloud check --accounts /srv/memobranch/private/cloud-accounts.json
-amem cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
+node dist/cli.js cloud check --accounts /srv/memobranch/private/cloud-accounts.json
+node dist/cli.js cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
 ```
 
 检查结果只列出账号名称与当前可读来源数量，不显示摘要或路径；数量为零时如实显示零，不代表
