@@ -1,8 +1,9 @@
-# Cloud host setup and Git adapters — verification in progress
+# Cloud sharing — local acceptance record
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 This record covers local development, not an npm release, push or deployment.
-The complete cloud batch is not accepted until the remaining gates below pass.
+All executable cloud-batch gates below have passed; final acceptance-text review
+is pending. Roadmap batches 4–6 are not accepted by this checkpoint.
 
 ## Candidate and behavior
 
@@ -100,9 +101,52 @@ match `3b113867`; later commits only update documentation. The runner exited 0.
 | `main` | `.scratch/cloud-host-full-main.log` | 963 functional + 14 release-script + 10 evaluation = **987**, zero failed/cancelled/skipped in each phase. |
 | `master` | `.scratch/cloud-host-full-master.log` | The same **987**, zero failed/cancelled/skipped in each phase. |
 
-## Pending gates
+## Same installed artifact on both runtimes
 
-The same fresh installed archive on Node 20/22 and final verification-text review
-remain to be recorded. Earlier browser and Git
-transport checkpoints are retained separately; this phase changes no browser UI.
-Roadmap batches 4–6 remain pending even after the cloud batch is accepted.
+One archive was packed from `287283453e45fb82ae7a68fff0f3cd124997ba5a`, with
+runtime/tests matching `3b113867`. It contains **448 entries**, including the new
+host module/declarations, guides and this report's draft. Final acceptance text
+was written after packing and is not claimed to be in that archive.
+
+Archive: `.scratch/cloud-host-package.UZfok9/memobranch-1.1.0.tgz`.
+SHA-256 before, between and after the two complete verifiers:
+`254ad8c8c08eff93cf5093ed6158ee3e66b260a2b23a2231f3efe73fc78c28c6`.
+Both comparisons passed and the serialized runner exited 0.
+
+| Runtime and Git default | Log | Result |
+| --- | --- | --- |
+| Node 22.17.0, `main` | `.scratch/cloud-host-package-node22.log` | Complete package verifier passed, 448 entries. |
+| Node 20.0.0, `master` | `.scratch/cloud-host-package-node20.log` | Complete package verifier passed against the identical archive, 448 entries. |
+
+Each verifier independently installs the archive with install scripts disabled,
+compiles the public type consumer and executes the installed exports/CLI/SDK/HTTP
+consumers. The new host consumer uses an inactive random credential, an existing
+synthetic reader grant, a validated template, an explicitly fixture-saved account,
+a real foreground read, refusal after an account exceeds the operator ceiling,
+and graceful signal shutdown. It compares both vault HEADs/refs/indexes, one
+source raw sample, account bytes and model-call count. The installed cloud/Git
+consumers also check fresh explicit copies, actual derived evidence/provenance,
+no automatic Wiki write, exact retry and current withdrawal. These are named
+samples, not a hash of every source file or a claim about external model quality.
+
+## Whole-batch evidence and limits
+
+This record closes the service setup and Git CLI/MCP/Harness items. Earlier
+[service](cloud-read-service-verification-2026-10-26.md),
+[cloud client/browser](cloud-client-verification-2026-10-26.md) and
+[Git cache/browser](git-shared-wiki-verification-2026-10-26.md) records retain the
+remaining implementation, compatibility, actual browser and recovery evidence.
+Their historical statements that later work was pending describe those earlier
+checkpoints. This phase changes no UI; it does not claim a fresh browser run.
+
+No database or existing-record migration was performed. New private host/source
+configuration and separately provided keys/credentials are operator-managed;
+no real configuration, account, grant or service was installed. No push, npm
+publication or deployment occurred. Direct external Git/HTTPS operations and
+production load are not tested here; network fixtures are local and synthetic.
+Offline copies cannot be recalled, and uncommunicated remote key erasure cannot
+erase separately provisioned Git-cache keys, as documented in the guides.
+
+Final acceptance-text review remains pending. The overall roadmap goal remains
+active; human-authored integration/import adapters, optional OCR/visual-page work
+and final combined delivery are still pending in batches 4–6.

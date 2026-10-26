@@ -93,7 +93,8 @@ catalog/snapshot entry points use the transport selected by the host file. The
 browser never receives or stores cloud credentials.
 The service constructs readers with host-only `localOnly: true`, rejecting cloud
 and Git bindings before endpoint access. Version 2 accepts `local`, `cloud` and
-the owned-cache `git` candidate. Whole-batch delivery remains pending.
+the owned-cache `git` transport. Whole-batch verification is recorded in
+[the local acceptance record](../../../docs/cloud-host-verification-2026-10-26.md).
 
 ## Git remote
 

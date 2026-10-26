@@ -1,13 +1,14 @@
 # Cloud sharing — development candidate
 
 The user selected both a self-hosted service and Git remote sharing. The current
-branch contains a **self-hosted read service**, a **cloud client** and a **Git cache candidate**.
+branch contains a **self-hosted read service**, a **cloud client** and a **Git cache transport**.
 Version 2 client bindings and existing read adapters have passed the [client checkpoint](cloud-client-verification-2026-10-26.md).
 The [Git library and management checkpoint](git-shared-wiki-verification-2026-10-26.md)
 also passed locally. Git-specific CLI/MCP/Harness checks and native service/setup
-commands are implemented and under final verification. Whole-batch acceptance is
-still pending. This is not a deployment or full
-cloud-sharing acceptance.
+commands have passed their [combined local verification](cloud-host-verification-2026-10-26.md):
+both Git defaults, minimum Node 20 and the same installed artifact on Node 20/22.
+The final acceptance record is under independent review. No npm publication or
+deployment is implied; later roadmap batches remain pending.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
 and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
 
