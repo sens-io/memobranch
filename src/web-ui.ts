@@ -305,7 +305,7 @@ const pages = [['overview','总览','Overview'],['records','记忆库','Memory l
 const descriptions = {overview:'让每一条记忆有据可查，让知识持续生长。',records:'保存原始证据，浏览经过审核的长期记忆。原始资料不会被覆盖。',review:'让人决定方向。检查候选内容与来源，再将其纳入正式知识。',wiki:'摄取、查询、维护各司其职。所有写回都需要单独确认。',merges:'把历史与当前放在一起读。由你编辑，保留来源，再明确批准。',jobs:'编译进度加密保存在本机。执行、重试与批准，都由你明确决定。',settings:'调整知识管理策略。密钥、租户与身份仍由启动环境管理。',operations:'检查健康状态、查看 Git 历史，或明确发起维护与同步。'};
 descriptions.experiences='从真实经历中整理步骤，独立验证，再明确导出。成功一次不等于可普遍复用。';
 descriptions.availability='明确记录当前知识何时可读，再按时间重建有记录支持的版本。没有证据就保留未知。';
-descriptions.sharedWiki='查看明确授权的本机／Git 资料库，固定版本、保留来源，不自动复制或合并知识。';
+descriptions.sharedWiki='查看明确授权的本机及云端资料库，固定版本、保留来源，不自动复制或合并知识。';
 function el(tag, cls, text){const n=document.createElement(tag);if(cls){n.className=cls;if(cls.split(' ').includes('loading'))n.setAttribute('role','status');if(cls.split(' ').includes('error'))n.setAttribute('role','alert');}if(text!==undefined)n.textContent=String(text);return n;}
 function button(label,action,cls=''){const b=el('button',cls,label);b.type='button';b.addEventListener('click',action);return b;}
 function can(permission){return principal && (principal.permissions.includes('admin')||principal.permissions.includes(permission));}

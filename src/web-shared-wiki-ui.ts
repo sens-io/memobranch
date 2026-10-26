@@ -4,7 +4,7 @@ async function sharedWiki(){
  const epoch=session,current=generation,out=el('div','shared-workbench');let closed=false,turn=0,busy=false,active=null,sources=[];
  const live=()=>!closed&&epoch===session&&current===generation;
  pageCleanup=()=>{closed=true;turn++;active?.abort();sources=[];for(const input of out.querySelectorAll('input,textarea,select')){input.value='';input.checked=false;}out.replaceChildren();};
- out.append(card('固定版本，明确来源','只读取宿主已经配置、当前身份有权查看的本机／Git 资料库。提交由宿主固定，不自动跟随新版；仍检查当前来源、密钥、撤回与到期。这里不导入、合并、批准或修改共享授权。'));
+ out.append(card('固定版本，明确来源','只读取宿主已经配置、当前身份有权查看的本机及云端资料库。提交由宿主固定，不自动跟随新版；仍检查当前来源、密钥、撤回与到期。这里不导入、合并、批准或修改共享授权。'));
  const selection=card('01 / 选择共享来源','列表只显示当前身份有权查看的名称和限制，不显示路径、密钥或其他读者。来源是否实际可读，需要读取时重新核对。'),refresh=button('重新读取共享列表',load),source=field('sharedSource','共享资料库','text','',[]),sourceDetails=el('div','shared-source-details');
  source.input.required=false;selection.append(refresh,source.label,sourceDetails);out.append(selection);
  const query=card('02 / 读取固定版本','每行填写一个页面名称，最多 25 项。敏感／机密内容需明确选择，并满足调用方与共享来源的共同权限限制。'),form=el('form','forms'),keys=field('sharedKeys','Wiki 页面名称（每行一项）','textarea'),sensitive=field('sharedSensitive','明确读取敏感资料','checkbox',false),secret=field('sharedSecret','明确读取机密资料','checkbox',false),read=el('button','primary','读取共享知识');
