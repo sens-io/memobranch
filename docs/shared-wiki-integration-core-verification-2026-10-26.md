@@ -26,8 +26,10 @@ verify original raw sources. Copied artifacts remain explicitly identified as
 compiled material that cannot be recalled through a later remote grant change.
 
 Approval checks the current local artifact, source body hash, configuration,
-permissions and time. The target records the signed plan's origin hash for a
-successful no-op retry. Old programs reject the new plan kind. No database or
+permissions and time. The target's origin hash records provenance. Signed existing
+Wiki completion records with a new integration discriminator bind the actual
+affected graph and support for a successful no-op retry. Old programs reject the
+new plan kind and integration completion discriminator. No database or
 existing-record migration is performed, and no real grant/configuration is edited.
 
 ## Verification so far
@@ -56,7 +58,41 @@ existing lock deadline as well as source expiry, giving `LOCK_TIMEOUT`. The
 fixture now expires before that deadline and still requires `VALIDATION_FAILED`;
 product deadlines and assertions were not loosened.
 
-Compiled Node 20 checks and broader retained Wiki checks are in progress.
-Independent fixed-candidate review, package/native adapter verification and
+The initial `1c12f075ff4335365f0e0944b06bf8a312251ff9` candidate also passed
+47/47 compiled Node 20.0 checks (`wiki-integration-node20.log`) and 183/183
+broader retained Wiki checks (`wiki-integration-retained-1.log`). These passing
+checks did not cover the later confirmed review boundaries below.
+
+## Independent review and fixes under verification
+
+Two read-only reviewers covered the fixed candidate's 6/6 source files and 5/5
+test/documentation files, zero skipped. Local OCR scope/rules are retained in
+`.scratch/wiki-integration-review-{preview,rules}.json`; no external model was
+used by OCR. The root agent also checked the target's origin-only replay path.
+
+| Source branch | Confirmed issue | Correction |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | Ordinary preview lacked a final integration time check after outer lock cleanup. | Signed effective-time limits are checked after cleanup and at final commit/replay boundaries. |
+| `kevin/knowledge-expansion` | A successful replay could rebuild an unrelated expired memory's projections and create a commit. | The existing mutation no-commit rollback path now handles successful Wiki replays before projection rebuilding. |
+| `kevin/knowledge-expansion` | A retained origin hash could accept an already edited target as an unchanged integration. | Signed completion records bind actual affected pages, dependency closure, evidence and rules; unrelated later knowledge remains independent. |
+| `kevin/knowledge-expansion` | The spec still prohibited all networks despite accepted remote confirmation. | Distinguish local v1 from bounded fresh reads of host-configured cloud/Git bindings. |
+| `kevin/knowledge-expansion` | Allowed fields could produce a plan above the documented 1 MB UTF-8 bound. | Check the complete plan before signing and on preview/application; never truncate. |
+
+All three executable regressions genuinely failed against `1c12f075` in
+`wiki-integration-review-red.log` (0/3 passed). After the fix they passed 3/3 in
+`wiki-integration-review-green-2.log`. The first fix run passed 1/3: receipt
+validation correctly rejected an identity not matching the old compile-only
+canonical formula (`wiki-integration-review-green-1.log`). Integration completion
+identity and its optional operation tag are now explicit in the existing receipt
+schema; ordinary compilation receipts retain their old identities/format.
+
+`wiki-integration-review-combined-1.log` subsequently passed **235/235** related
+and retained checks, zero failures/cancellations/skips. This includes independent
+local-conflict retention and a true whole-plan UTF-8 bound before signing, plus
+above-limit preview/application refusal. Build/test types passed in
+`wiki-integration-build-8.log` / `wiki-integration-types-8.log`.
+
+Fixed-candidate Node 20.0 checks and re-review remain in progress.
+Package/native adapter verification and
 complete checks under both Git defaults remain to be recorded before batch 4
 acceptance. No push, publication, real account/service or deployment occurred.

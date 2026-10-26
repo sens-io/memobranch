@@ -38,11 +38,18 @@ literal source identity and retained page revisions, never executable instructio
 Standard inherited restriction/affected-page checks apply unchanged. Existing
 local evidence, conditions, uncertainty, links and unresolved conflicts survive.
 
-The signed integration origin stores the artifact ID, target key, classification
-and private selection. Classification cannot weaken the observed inputs; private
+The signed integration origin stores the artifact ID, target key, classification,
+effective-time limits and private selection. Classification cannot weaken the observed inputs; private
 output requires explicit private selection too. Application uses ordinary separate Wiki review, checks the current
-local artifact, its exact body hash, config and lifecycle, and records a target
-origin hash for an exact no-op retry. Old readers reject the new plan kind. A
+local artifact, its exact body hash, config and lifecycle. The target's origin hash
+is provenance, not proof that its current body is unchanged. Reuse existing Wiki
+completion records with an `operation: integrate` discriminator and a deterministic
+source/page identity. Their signature binds the actual affected pages, dependency
+closure, evidence and rules after writing; independent later knowledge does not
+invalidate the completed batch. Only a valid unchanged completion may take the
+existing no-commit rollback path before projections are rebuilt. Retain integration
+time checks through rollback and outer preview-lock cleanup. Old readers reject
+the new plan kind and completion discriminator. A
 completed offline copy needs no renewed remote access for local integration;
 removing the original source grant does not erase that retained copy. Preparation
 and review remain bounded and cancelled by the existing destination operations.

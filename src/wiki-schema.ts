@@ -41,7 +41,7 @@ export const wikiPageMetaSchema = z.object({
 }).strict();
 
 export const wikiRulesMetaSchema = z.object({ ...common, id: rulesId, type: z.literal('wiki-rules'), revision, purpose: z.string().trim().min(1).max(4000) }).strict();
-export const wikiReceiptMetaSchema = z.object({ ...common, id: receiptId, type: z.literal('wiki-receipt'), signature: digest, proof: digest, planHash: digest, sourceIds: uniqueArray(evidenceId).min(1), pageKeys: uniqueArray(key).min(1) }).strict();
+export const wikiReceiptMetaSchema = z.object({ ...common, id: receiptId, type: z.literal('wiki-receipt'), signature: digest, proof: digest, planHash: digest, sourceIds: uniqueArray(evidenceId).min(1), pageKeys: uniqueArray(key).min(1), operation: z.literal('integrate').optional() }).strict();
 
 export const wikiPlanSchema = z.object({
   version: z.literal(1), vaultId: clean(200), kind: z.enum(['compile', 'file', 'repair', 'merge', 'integrate']), sourceIds: uniqueArray(evidenceId),
@@ -54,7 +54,7 @@ export const wikiPlanSchema = z.object({
 }).strict().refine(plan => (plan.kind === 'merge') === Boolean(plan.merge)
   && (!plan.merge || !plan.receiptId && !plan.query && plan.pages.some(page => page.key === plan.merge!.key))
   && (plan.kind === 'integrate') === Boolean(plan.integration)
-  && (!plan.integration || !plan.receiptId && !plan.query && plan.sourceIds.includes(plan.integration.evidenceId)
+  && (!plan.integration || Boolean(plan.receiptId) && !plan.query && plan.sourceIds.includes(plan.integration.evidenceId)
     && plan.pages.some(page => page.key === plan.integration!.key && page.pageType !== 'source')), 'Invalid manual plan envelope');
 
 export const wikiQueryResultSchema = z.object({
@@ -69,6 +69,9 @@ export function wikiPageId(key: string): string { return `wp-${sha256(key).slice
 export function wikiPagePath(key: string): string { return `wiki/pages/${wikiPageId(key)}.md`; }
 export function wikiRulesId(scope: string, sensitivity: string): string { return `wr-${sha256(`${scope}\0${sensitivity}`).slice(0, 24)}`; }
 export function wikiReceiptId(sourceIds: string[]): string { return `wi-${sha256(JSON.stringify([...sourceIds].sort())).slice(0, 24)}`; }
+export function wikiIntegrationReceiptId(sourceIds: string[], pageKeys: string[]): string {
+  return `wi-${sha256(JSON.stringify({ domain: 'memobranch:integration:v1', sourceIds: [...sourceIds].sort(), pageKeys: [...pageKeys].sort() })).slice(0, 24)}`;
+}
 
 export function assertWikiDocument(document: MarkdownDocument<Record<string, unknown>>): void {
   const schema = document.meta.type === 'wiki-page' ? wikiPageMetaSchema : document.meta.type === 'wiki-rules' ? wikiRulesMetaSchema : document.meta.type === 'wiki-receipt' ? wikiReceiptMetaSchema : null;
@@ -80,7 +83,8 @@ export function assertWikiDocument(document: MarkdownDocument<Record<string, unk
   } else {
     if (document.path !== `wiki/.meta/${meta.id}.md`) fail();
     if (meta.type === 'wiki-rules' && meta.id !== wikiRulesId(meta.scope as string, meta.sensitivity as string)) fail();
-    if (meta.type === 'wiki-receipt' && meta.id !== wikiReceiptId(meta.sourceIds as string[])) fail();
+    if (meta.type === 'wiki-receipt' && meta.id !== (meta.operation === 'integrate'
+      ? wikiIntegrationReceiptId(meta.sourceIds as string[], meta.pageKeys as string[]) : wikiReceiptId(meta.sourceIds as string[]))) fail();
   }
 }
 

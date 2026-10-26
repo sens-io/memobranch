@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import fsPromises from 'node:fs/promises';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +15,7 @@ import { integrity, sharedFixture } from './shared-wiki-fixture.js';
 import { withFileLock } from '../src/utils.js';
 import type { WikiIntegrationOptions } from '../src/wiki-integration.js';
 import type { Sensitivity } from '../src/types.js';
+import { WikiProof } from '../src/wiki-proof.js';
 
 async function fixture(t: TestContext, sensitivity: Sensitivity = 'internal', conflicted = false, expiresAt?: string) {
   const data = await sharedFixture(t, sensitivity); data.principal.permissions = ['read', 'write', 'review'];
@@ -32,6 +35,18 @@ async function fixture(t: TestContext, sensitivity: Sensitivity = 'internal', co
     title: 'Reviewed integration', summary: 'A human-authored integration.', body: 'HUMAN_INTEGRATION_CANARY 中文 🧠',
     includeSecret: sensitivity === 'secret', includeSensitive: sensitivity === 'sensitive' };
   return { ...data, copied, input };
+}
+
+async function seedLocal(t: TestContext, data: Awaited<ReturnType<typeof fixture>>, status: 'active' | 'conflicted' = 'active') {
+  const local = await data.callerAdmin.capture({ content: 'LOCAL_ORIGINAL_CANARY', scope: 'project', sensitivity: 'internal', extract: false });
+  t.mock.method(data.callerAdmin.llm, 'wiki', async (_operation: string, value: object) => {
+    const sources = (value as { sources: Array<{ id: string; body: string }> }).sources;
+    return { pages: [{ key: 'source:' + local.evidenceId, pageType: 'source', title: 'Local original', summary: 'Local original', body: sources[0]!.body,
+      evidenceIds: [local.evidenceId], links: [], status: 'active', conditions: ['LOCAL_CONDITION'], uncertainty: ['LOCAL_UNCERTAINTY'] },
+    { key: data.input.pageKey, pageType: 'concept', title: 'Local concept', summary: 'Existing local knowledge', body: 'LOCAL_ORIGINAL_CANARY',
+      evidenceIds: [local.evidenceId], links: ['source:' + local.evidenceId], status, conditions: ['LOCAL_CONDITION'], uncertainty: ['LOCAL_UNCERTAINTY'] }] };
+  });
+  await data.callerAdmin.wikiIngest({ evidenceIds: [local.evidenceId], apply: true }); return local;
 }
 
 test('Wiki integration: complete signed comparison, grounded source summary, separate approval and exact retry preserve copied evidence', async t => {
@@ -55,16 +70,8 @@ test('Wiki integration: complete signed comparison, grounded source summary, sep
 });
 
 test('Wiki integration: updates retain existing local evidence, links, conditions and unresolved conflicts', async t => {
-  const { caller, callerAdmin, input, copied } = await fixture(t, 'internal', true);
-  const local = await callerAdmin.capture({ content: 'LOCAL_ORIGINAL_CANARY', scope: 'project', sensitivity: 'internal', extract: false });
-  t.mock.method(callerAdmin.llm, 'wiki', async (_operation: string, value: object) => {
-    const sources = (value as { sources: Array<{ id: string; body: string }> }).sources;
-    return { pages: [{ key: 'source:' + local.evidenceId, pageType: 'source', title: 'Local original', summary: 'Local original', body: sources[0]!.body,
-      evidenceIds: [local.evidenceId], links: [], status: 'active', conditions: ['LOCAL_CONDITION'], uncertainty: ['LOCAL_UNCERTAINTY'] },
-    { key: input.pageKey, pageType: 'concept', title: 'Local concept', summary: 'Existing local knowledge', body: 'LOCAL_ORIGINAL_CANARY',
-      evidenceIds: [local.evidenceId], links: ['source:' + local.evidenceId], status: 'active', conditions: ['LOCAL_CONDITION'], uncertainty: ['LOCAL_UNCERTAINTY'] }] };
-  });
-  await callerAdmin.wikiIngest({ evidenceIds: [local.evidenceId], apply: true });
+  const data = await fixture(t, 'internal', true), { caller, callerAdmin, input, copied } = data;
+  const local = await seedLocal(t, data);
   const before = await callerAdmin.get(wikiPageId(input.pageKey)), prepared = await caller.wikiIntegrationPrepare({ ...input, expectedRevision: 1 });
   assert.equal(prepared.comparison.current!.body, before.body);
   const target = prepared.preview.pages.find(page => page.key === input.pageKey)!;
@@ -175,6 +182,62 @@ test('Wiki integration: an author can add restrictions and confidential content 
   assert.ok(target.after.uncertainty.includes(importedWikiCaution));
   await caller.wikiApply(result.plan);
   const disk = await readFile(join(caller.root, 'wiki/pages', wikiPageId(input.pageKey) + '.md'), 'utf8'); assert.doesNotMatch(disk, /HUMAN_INTEGRATION_CANARY|AUTHOR_CAVEAT/);
+});
+
+test('Wiki integration regression: ordinary preview refuses expiry during outer read-lock cleanup', async t => {
+  const base = Date.now(); let shifted = false; t.mock.method(Date, 'now', () => base + (shifted ? 120000 : 0));
+  const { caller, input } = await fixture(t, 'internal', false, new Date(base + 60000).toISOString());
+  const prepared = await caller.wikiIntegrationPrepare(input), before = await integrity(caller), original = fsPromises.rm; let injected = false;
+  const hook = t.mock.method(fsPromises, 'rm', async (...args: Parameters<typeof fsPromises.rm>) => {
+    if (!injected && String(args[0]) === join(caller.root, '.amem/write.lock')) { injected = true; shifted = true; }
+    return original(...args);
+  }); syncBuiltinESMExports();
+  try { await assert.rejects(caller.wikiPreview(prepared.plan), { code: 'VALIDATION_FAILED' }); assert.equal(injected, true); }
+  finally { shifted = false; hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.deepEqual(await integrity(caller), before);
+});
+
+test('Wiki integration regression: a retained origin hash cannot approve a target edited after application', async t => {
+  const { caller, callerAdmin, input } = await fixture(t), prepared = await caller.wikiIntegrationPrepare(input);
+  await caller.wikiApply(prepared.plan); const current = await callerAdmin.get(wikiPageId(input.pageKey));
+  await writeFile(join(caller.root, current.path), serializeMarkdown(current.meta, current.body + '\n\nMANUAL_POST_APPROVAL_EDIT'));
+  await caller.git.commit('Synthetic manual target edit preserving origin', caller.principal, ['wiki']); const before = await integrity(caller);
+  await assert.rejects(caller.wikiApply(prepared.plan), { code: 'VALIDATION_FAILED' }); assert.deepEqual(await integrity(caller), before);
+});
+
+test('Wiki integration regression: successful retry cannot refresh an unrelated memory that expired after approval', async t => {
+  const { caller, callerAdmin, input } = await fixture(t), base = Date.now(); let shifted = false; t.mock.method(Date, 'now', () => base + (shifted ? 1001 : 0));
+  const prepared = await caller.wikiIntegrationPrepare(input); await caller.wikiApply(prepared.plan);
+  const raw = await callerAdmin.capture({ content: 'Unrelated later support', scope: 'project', extract: false });
+  const candidate = await callerAdmin.propose({ kind: 'fact', key: 'integration-unrelated', statement: 'INTEGRATION_UNRELATED_EXPIRY',
+    scope: 'project', sensitivity: 'internal', confidence: 1, explicit: true, conditions: [], tags: [], expiresAt: new Date(base + 1000).toISOString() }, [raw.evidencePath]);
+  await callerAdmin.approve(candidate.id); const before = await integrity(caller), resident = await readFile(join(caller.root, 'MEMORY.md'));
+  assert.match(resident.toString(), /INTEGRATION_UNRELATED_EXPIRY/); shifted = true;
+  assert.deepEqual(await caller.wikiApply(prepared.plan), { pageIds: [], commit: null });
+  assert.deepEqual(await integrity(caller), before); assert.deepEqual(await readFile(join(caller.root, 'MEMORY.md')), resident);
+});
+
+test('Wiki integration: an active imported source cannot clear an existing local conflict', async t => {
+  const data = await fixture(t), { caller, callerAdmin, input } = data; await seedLocal(t, data, 'conflicted');
+  const result = await caller.wikiIntegrationPrepare({ ...input, expectedRevision: 1, status: 'active' });
+  assert.equal(result.comparison.artifact.support.conflicted, false); assert.ok(result.comparison.artifact.pages.every(page => page.status === 'active'));
+  assert.equal(result.comparison.current!.meta.status, 'conflicted');
+  assert.equal(result.preview.pages.find(page => page.key === input.pageKey)!.after.status, 'conflicted');
+  await caller.wikiApply(result.plan); assert.equal((await callerAdmin.get(wikiPageId(input.pageKey))).meta.status, 'conflicted');
+});
+
+test('Wiki integration: complete UTF-8 plan size is bounded before signing and in preview/application', async t => {
+  const { caller, input } = await fixture(t), before = await integrity(caller), original = WikiProof.prototype.sign; let signed = 0;
+  t.mock.method(WikiProof.prototype, 'sign', async function(this: WikiProof, value: object) { signed++; return original.call(this, value); });
+  const oversized = Array.from({ length: 98 }, (_, index) => String(index) + '中'.repeat(3990));
+  await assert.rejects(caller.wikiIntegrationPrepare({ ...input, conditions: oversized }), { code: 'CONTENT_TOO_LARGE' }); assert.equal(signed, 0);
+  assert.deepEqual(await integrity(caller), before);
+  const prepared = await caller.wikiIntegrationPrepare({ ...input, conditions: Array.from({ length: 98 }, (_, index) => String(index) + 'a'.repeat(3990)) });
+  assert.ok(Buffer.byteLength(JSON.stringify(prepared.plan), 'utf8') <= 1_000_000);
+  const edited = { ...prepared.plan, pages: prepared.plan.pages.map(page => page.key === input.pageKey ? { ...page, conditions: oversized } : page) };
+  await assert.rejects(caller.wikiPreview(edited), { code: 'CONTENT_TOO_LARGE' });
+  await assert.rejects(caller.wikiApply(edited), { code: 'CONTENT_TOO_LARGE' });
+  assert.deepEqual(await integrity(caller), before);
 });
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }

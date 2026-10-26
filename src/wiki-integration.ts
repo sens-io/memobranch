@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { scopes, sensitivities } from './types.js';
+import { AgentMemoryError } from './errors.js';
+import { stableWikiJson } from './wiki-proof.js';
 
 const clean = (maximum: number) => z.string().trim().min(1).max(maximum)
   .regex(/^[^\u0000-\u001f\u007f]+$/u).refine(value => !/[\uD800-\uDFFF]/u.test(value));
@@ -20,5 +22,16 @@ export type WikiIntegrationOptions = z.input<typeof wikiIntegrationOptionsSchema
 export const wikiIntegrationOriginSchema = z.object({ evidenceId, key,
   scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
   selection: z.object({ includeSensitive: z.boolean(), includeSecret: z.boolean() }).strict(),
+  validFrom: z.string().datetime({ offset: true }).optional(), expiresAt: z.string().datetime({ offset: true }).optional(),
 }).strict();
 export type WikiIntegrationOrigin = z.infer<typeof wikiIntegrationOriginSchema>;
+
+export function assertWikiIntegrationTime(origin: WikiIntegrationOrigin): void {
+  const now = Date.now();
+  if (origin.validFrom && Date.parse(origin.validFrom) > now || origin.expiresAt && Date.parse(origin.expiresAt) <= now) {
+    throw new AgentMemoryError('VALIDATION_FAILED', 'Integration support is no longer currently effective; prepare again');
+  }
+}
+export function assertWikiIntegrationPlanSize(value: object): void {
+  if (Buffer.byteLength(stableWikiJson(value), 'utf8') > 1_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete Wiki integration plan exceeds 1000000 bytes');
+}

@@ -91,6 +91,7 @@ export interface WikiReceiptMeta {
   planHash: string;
   sourceIds: string[];
   pageKeys: string[];
+  operation?: 'integrate';
 }
 
 export interface WikiPlan {

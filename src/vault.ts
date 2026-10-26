@@ -46,7 +46,7 @@ import type { WikiPageMeta } from './wiki-types.js';
 import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiSnapshotSupport } from './wiki-snapshot.js';
 import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
 import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
-import { wikiIntegrationOptionsSchema, type WikiIntegrationOptions } from './wiki-integration.js';
+import { assertWikiIntegrationTime, wikiIntegrationOptionsSchema, type WikiIntegrationOptions } from './wiki-integration.js';
 import { reviewDiff } from './review-diff.js';
 import { assertWikiImportTime, isWikiImportUri, readWikiImportArtifact, wikiImportRestrictions } from './wiki-import-artifact.js';
 
@@ -131,8 +131,8 @@ export class MemoryVault {
         // Opaque identities only: this globally visible journal must not expose logical keys.
         await this.appendManaged('log.md', `\n<!-- wiki-event ${JSON.stringify({ version: 1, at: nowIso(), operation, actor: safeLogToken(this.principal.id), pageIds, parentCommit })} -->\n`);
       },
-      mutate: (permission, operation, action, validateBeforeCommit) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action,
-        undefined, validateBeforeCommit ? { validateBeforeCommit } : {}),
+      mutate: (permission, operation, action, validateBeforeCommit, noCommitIf) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action,
+        undefined, { ...(validateBeforeCommit ? { validateBeforeCommit } : {}), ...(noCommitIf ? { noCommitIf } : {}) }),
     });
   }
 
@@ -294,6 +294,7 @@ export class MemoryVault {
       throwIfCancelled(); authorize(this.principal, 'read'); authorize(this.principal, 'write');
       if (stableWikiJson(this.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Integration authority changed');
       assertWikiImportTime(wikiImportRestrictions(result.comparison.artifact));
+      assertWikiIntegrationTime(result.plan.integration!);
       return result;
     };
     if (!input.signal) return finish();
@@ -316,9 +317,14 @@ export class MemoryVault {
   async wikiPreview(plan: unknown) {
     const parsed = wikiPlanSchema.safeParse(plan);
     if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded Wiki data');
+    const identity = stableWikiJson(this.principal);
     const result = await this.settledRead(() => this.wikiEngine().preview(parsed.data));
     throwIfCancelled();
     if (parsed.data.merge) assertMergeTime(parsed.data.merge);
+    if (parsed.data.integration) {
+      assertWikiIntegrationTime(parsed.data.integration); authorize(this.principal, 'read');
+      if (stableWikiJson(this.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Integration authority changed');
+    }
     return result;
   }
   private wikiJobsEngine(): WikiJobs {
@@ -1523,7 +1529,7 @@ export class MemoryVault {
         await this.installRuntimeIgnore();
         const value = await action();
         if (options.noCommitIf?.(value)) {
-          // An exact import retry must not refresh unrelated time-dependent projections.
+          // A successful replay must not refresh unrelated time-dependent projections.
           if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
           options.validateBeforeCommit?.(); throwIfCancelled();
           await withoutCancellation(() => transaction.rollback()); rolledBack = true;

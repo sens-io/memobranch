@@ -57,8 +57,10 @@ Wiki preparation, approval and readable knowledge.
 
 ### Requirement: Import must preserve source and destination boundaries
 The system SHALL use current host-configured shared access, without concurrent
-source/destination locks, arbitrary paths, network operations or automatic source
-updates. It SHALL keep transaction, cancellation and time checks through the last
+source/destination locks, arbitrary paths, request-selected network targets or automatic source
+updates. Version 1 local bindings SHALL perform no network operation; explicitly
+host-configured cloud/Git bindings MAY perform their bounded fresh read for confirmation.
+It SHALL keep transaction, cancellation and time checks through the last
 destination wait and existing safe commit boundary.
 
 #### Scenario: Access changes between preview and approval

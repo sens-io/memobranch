@@ -86,7 +86,7 @@ await vault.wikiApply(integration.plan);
 
 Preparation requires read/write permission; ordinary separate Wiki application
 requires review permission. It calls no model and writes no canonical content.
-The signed `integrate` plan keeps its artifact ID, classification and private
+The signed `integrate` plan keeps its artifact ID, classification, time bounds and private
 selection. It adds a grounded source summary when absent, retains existing local
 evidence/links and keeps source/local conditions, uncertainty, conflict and expiry.
 Authors may add restrictions or raise sensitivity; lowering input classification
@@ -100,13 +100,21 @@ cannot change a page's purpose. Changed, foreign or edited plans refuse. An exac
 successful retry returns no pages/commit while checking the local artifact and
 current permissions, keys, configuration and time. The original remote grant is
 not needed after an explicit offline copy; it cannot recall retained plaintext.
-Old programs reject the new plan kind. The library signal cancels owned work,
+Signed completion records bind the actual affected pages and their support. A
+retained target origin hash alone does not establish an unchanged result. Exact
+replay rolls back pre-action housekeeping before projection rebuilds; unrelated
+later knowledge/expiry cannot turn it into a new commit. Old programs reject the
+new plan kind and integration-tagged completion record; stop older processes
+before enabling this operation. The library signal cancels owned work,
 including actual destination waits. CLI/agent/Web preparation adapters and their
 batch acceptance remain pending.
 
-Bounds: 25 requested/50 dependent pages, complete artifact and plan each at most
-1,000,000 UTF-8 bytes, destination's lower evidence limit, 100 inherited conditions/
-uncertainties and existing field bounds. Content is returned completely or refused.
+Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
+plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration
+has at most 40 affected pages, a 100,000-character authored body and 100 conditions/
+uncertainties of at most 4000 characters each, still subject to the complete byte
+limit. The destination's lower evidence limit and existing protocol bounds also
+apply. Content is returned completely or refused.
 Long ordinary-memory support is allowed when it fits the whole-artifact limit.
 
 Compatibility: imported evidence uses a distinct hash domain and `digestVersion: 4`.
