@@ -2,7 +2,8 @@
 
 已确认同时支持自托管服务和 Git 远端共享。当前分支增加了**自托管读取服务的库接口候选实现**。
 云端客户端配置、Git 远端缓存、命令行配置及管理网页、Agent 工具接入仍待完成，尚未通过整批验收。
-完整约束见 [OpenSpec 设计](../openspec/changes/add-cloud-shared-wiki/design.md)。
+完整约束见 [OpenSpec 设计](../openspec/changes/add-cloud-shared-wiki/design.md)，
+已执行的检查见 [服务验证记录](cloud-read-service-verification-2026-10-26.md)。
 
 ## 账号与授权
 

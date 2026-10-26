@@ -1,6 +1,6 @@
 ## Implementation
-- [ ] Add strict bounded service account file and server-owned read principals.
-- [ ] Add self-hosted read API with native TLS, complete responses, attenuation and live guards.
+- [x] Add strict bounded service account file and server-owned read principals.
+- [x] Add self-hosted read API with native TLS, complete responses, attenuation and live guards (library candidate; clients/setup and whole-batch acceptance remain below).
 - [ ] Add cloud client and version 2 host binding dispatch while preserving version 1.
 - [ ] Add owned Git cache refresh with current branch authority, fixed pin and safe materialization.
 - [ ] Extend import runtime guards to both transports without weakening separate approval.

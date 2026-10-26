@@ -4,7 +4,8 @@ The user selected both a self-hosted service and Git remote sharing. The current
 branch contains a **self-hosted read-service library candidate**. Cloud client
 bindings, remote Git caches, CLI setup and management/agent adapter integration
 are still pending. This is not a deployment or full cloud-sharing acceptance.
-See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md).
+See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
+and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
 
 ## Accounts and grants
 
