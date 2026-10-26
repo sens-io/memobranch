@@ -3,6 +3,9 @@
 Repository: `sens-io/memobranch`; branch: `kevin/knowledge-expansion`.
 Base: `1bc2b1ba3c994f62d6a1dba1e61751cbf972b64b`.
 This is a partial development checkpoint, **not batch acceptance or a release**.
+The Git library and management Web checkpoint passed locally. Git-specific
+CLI/MCP/Harness integration checks, service setup and whole-batch acceptance remain
+pending; roadmap batches 4–6 are also still open.
 
 ## Implemented scope
 
@@ -84,8 +87,8 @@ outdated audit-pending statement; both have been corrected. Independent delivery
 review at `5ad2b8dcbaa3b2be37d310192eb8160952610694` checked all 8 assigned files,
 including both screenshots, skipped 0 and found no new confirmed issue. It verified
 both requested corrections and retained helper assertions against the saved evidence.
-Serialized full default-branch gates remain pending; this review did not execute
-tests or turn the earlier failed gates into passing results.
+This review did not execute tests or turn the earlier failed gates into passing
+results. The subsequent complete gates are recorded below.
 
 Strict OpenSpec passed 31/31 in `shared-git-wiki-specs-final.log`; the production
 audit has 0 vulnerabilities in `shared-git-wiki-audit.json`.
@@ -129,7 +132,18 @@ deadline, quota, unchanged-data and elapsed-time assertions are retained.
 `shared-git-wiki-transport-system-combined.log`: 12/12 current Node 22 checks;
 `shared-git-wiki-final-system-node20.log`: 39/39 compiled current Node 20.0 checks
 (30 Git sharing plus 9 retained Git cancellation), no failures/cancellations/skips.
-New complete runs must execute separately before recording both defaults as passed.
+Subsequent complete runs were executed **serially**, with unchanged default test
+parallelism and deadlines, against code/test candidate `5ad2b8dc` (later report-only
+commit `bd6cf702` did not alter those inputs). Both passed:
+
+| Default Git branch | Log | Actual checks |
+| --- | --- | --- |
+| `main` | `.scratch/shared-git-wiki-final-main.log` | 944 functional + 14 release-script + 10 evaluation = **968**, all passed; 0 failed/cancelled/skipped in each phase |
+| `master` | `.scratch/shared-git-wiki-final-master.log` | 944 functional + 14 release-script + 10 evaluation = **968**, all passed; 0 failed/cancelled/skipped in each phase |
+
+The runner completed with exit 0. These passing gates supersede the failed runs
+for checkpoint acceptance; they do not erase their recorded failures or prove an
+unmeasured explanation for the startup delays.
 
 ## Actual management browser
 

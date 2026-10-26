@@ -2,7 +2,8 @@
 
 已确认同时支持自托管服务和 Git 远端共享。当前分支包含**自托管读取服务**、**云端客户端**和 **Git 缓存候选实现**。
 第 2 版客户端配置及现有读取入口已通过 [客户端检查](cloud-client-verification-2026-10-26.md)；
-Git 缓存验证、服务启动配置命令和整批验收仍待完成。
+[Git 库与管理页面检查](git-shared-wiki-verification-2026-10-26.md)也已通过本地验收；
+Git 的 CLI/MCP/Harness 专项检查、服务启动配置命令和整批验收仍待完成。
 完整约束见 [OpenSpec 设计](../openspec/changes/add-cloud-shared-wiki/design.md)，
 已执行的检查见 [服务验证记录](cloud-read-service-verification-2026-10-26.md)。
 
