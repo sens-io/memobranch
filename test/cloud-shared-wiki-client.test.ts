@@ -156,10 +156,12 @@ test('cloud client: committed metadata is preserved byte-for-byte and long ordin
   const artifact = wikiImportArtifact(view); assert.equal(artifact.pages.find(page => page.key === pageKey)!.recordHash, sha256(stableWikiJson(expected)));
   const raw = await source.capture({ content: 'Synthetic long legacy source', extract: false, scope: 'project' });
   const proposed = await source.propose({ key: 'k'.repeat(400), statement: 'b'.repeat(120_000), kind: 'fact', scope: 'project', sensitivity: 'internal',
-    confidence: 1, explicit: true, conditions: ['Legacy multiline\ncondition'], tags: [] }, [raw.evidencePath]);
+    confidence: 1, explicit: true, conditions: ['', 'Legacy multiline\ncondition'], tags: [] }, [raw.evidencePath]);
   const approved = await source.approve(proposed.id);
   binding.commit = brokerBinding.commit = await source.git.run(['rev-parse', 'HEAD']); await saveBindings(); await saveBrokerBindings();
   const legacy = await reader.snapshot({ ...data.selection, pageKeys: ['legacy:' + approved.memoryId], expectedCommit: binding.commit });
+  const localLegacy = await source.wikiSnapshot({ commit: binding.commit, pageKeys: ['legacy:' + approved.memoryId] });
+  assert.deepEqual(legacy.snapshot.pages, localLegacy.pages); assert.ok(legacy.snapshot.pages[0]!.meta.conditions.includes(''));
   assert.equal(legacy.snapshot.pages[0]!.meta.key.length, 400); assert.ok(legacy.snapshot.pages[0]!.body.includes('b'.repeat(120_000)));
 });
 

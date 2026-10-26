@@ -24,7 +24,7 @@ const legacyMeta = z.object({ id: text(200), type: z.literal('memory'), createdA
 const wikiMeta = z.custom<WikiPageMeta>(value => wikiPageMetaSchema.safeParse(value).success);
 const document = z.object({ path: text(1000), meta: z.union([wikiMeta, legacyMeta]), body: z.string().min(1).max(20_000_000), currentRevision: revision }).strict();
 const supportSchema = z.object({ scope: z.enum(scopes), sensitivity: z.enum(sensitivities),
-  conditions: list(prose, 20_000), uncertainty: list(prose, 20_000), conflicted: z.boolean(),
+  conditions: list(z.string().max(1_000_000), 20_000), uncertainty: list(prose, 20_000), conflicted: z.boolean(),
   validFrom: date.optional(), expiresAt: date.optional(),
 }).strict();
 const envelopeSchema = z.object({ version: z.literal(1), kind: z.literal('cloud-shared-wiki-snapshot'),
