@@ -178,6 +178,31 @@ test('cloud service: account and global request budgets apply independently', as
   assert.equal((await fetch(globallyLimited.url + '/healthz')).status, 429);
 });
 
+test('cloud service: concurrency and request deadline cover a real slow response until finish or close', async t => {
+  const { start, selection } = await fixture(t), handle = await start({ limits: { maxConcurrent: 1, perAccountConcurrent: 1, requestTimeoutMs: 500 } });
+  t.mock.method(SharedWikiReader.prototype, 'snapshotWithValidation', async () => ({
+    view: { body: 'x'.repeat(10_000_000) }, support: {}, validate() {}, async validateConfiguration() {},
+  }));
+  const response = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+    const req = httpRequest(handle.url + '/v1/shared-wiki/snapshot', { method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    }, res => { res.pause(); res.on('error', () => {}); resolve(res); });
+    req.once('error', reject); req.end(JSON.stringify(selection));
+  });
+  try {
+    assert.equal(response.statusCode, 200);
+    assert.equal((await call(handle, 'catalog', { attenuation })).status, 429);
+    await delay(650);
+    assert.equal((await call(handle, 'catalog', { attenuation })).status, 200);
+    let received = 0;
+    await new Promise<void>(resolve => {
+      response.on('data', chunk => { received += chunk.length; });
+      response.once('close', resolve); response.resume();
+    });
+    assert.equal(response.complete, false); assert.ok(received < 10_000_000, 'Deadline must close the unfinished response');
+  } finally { response.destroy(); }
+});
+
 test('cloud service: strict bytes, duplicate keys and duplicate credentials refuse before source access', async t => {
   const { start, selection } = await fixture(t), handle = await start(); let reads = 0;
   t.mock.method(SharedWikiReader.prototype, 'snapshotWithValidation', async () => { reads++; throw new Error('PRIVATE_SOURCE_ERROR'); });

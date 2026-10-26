@@ -76,9 +76,12 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
     if (countHeader(req, 'content-type') !== 1 || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(req.headers['content-type'] ?? '')) return fail(415, 'VALIDATION_FAILED');
     if (active.size >= options.limits.maxConcurrent) return fail(429, 'LOCK_TIMEOUT');
     const controller = new AbortController(); active.add(controller);
-    const abort = () => { if (!res.writableEnded) controller.abort(); };
+    const abort = () => { if (!res.writableFinished) controller.abort(); };
     res.once('close', abort);
-    const timeout = setTimeout(() => { controller.abort(); if (!req.complete) req.destroy(); }, options.limits.requestTimeoutMs); timeout.unref();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      if (!req.complete || res.headersSent) res.destroy();
+    }, options.limits.requestTimeoutMs); timeout.unref();
     let accountState: { active: number; budget: Budget } | undefined;
     try {
       await withOperation(controller.signal, async () => {
@@ -131,14 +134,14 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
         if (bytes.length > maximumResponseBytes) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete cloud Wiki response exceeds its byte limit');
         // Serialization can itself cross the source expiry; do not send an expired assembled body.
         throwIfCancelled(); validate();
-        sendBytes(res, 200, bytes);
+        await sendBytes(res, 200, bytes);
       });
     } catch (error) {
       const failure = toAgentMemoryError(error);
       const status = failure.code === 'AUTHORIZATION_DENIED' ? 403 : failure.code === 'NOT_FOUND' ? 404
         : failure.code === 'CONTENT_TOO_LARGE' ? 413 : failure.code === 'OPERATION_CANCELLED' ? 408
         : failure.code === 'LOCK_TIMEOUT' ? 429 : failure.code === 'VALIDATION_FAILED' ? 400 : 503;
-      fail(status, failure.code);
+      await fail(status, failure.code);
     } finally {
       if (accountState) accountState.active--; clearTimeout(timeout); res.off('close', abort); active.delete(controller);
     }
@@ -199,7 +202,15 @@ async function readBody(req: IncomingMessage) {
   throwIfCancelled(); return Buffer.concat(chunks);
 }
 function send(res: ServerResponse, status: number, data: unknown) { sendBytes(res, status, Buffer.from(JSON.stringify(data))); }
-function sendBytes(res: ServerResponse, status: number, bytes: Buffer) {
-  if (res.destroyed || res.writableEnded) return;
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': bytes.length }); res.end(bytes);
+function sendBytes(res: ServerResponse, status: number, bytes: Buffer): Promise<void> {
+  if (res.destroyed || res.writableEnded) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => { res.off('finish', finished); res.off('close', closed); res.off('error', failed); };
+    const finished = () => { cleanup(); resolve(); };
+    const closed = () => { cleanup(); if (res.writableFinished) resolve(); else reject(new AgentMemoryError('OPERATION_CANCELLED', 'Cloud Wiki response was interrupted')); };
+    const failed = () => { cleanup(); reject(new AgentMemoryError('REMOTE_TRANSPORT', 'Cloud Wiki response could not be sent')); };
+    res.once('finish', finished); res.once('close', closed); res.once('error', failed);
+    try { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': bytes.length }); res.end(bytes); }
+    catch { failed(); }
+  });
 }
