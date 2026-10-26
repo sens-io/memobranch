@@ -15,7 +15,7 @@ import { withFileLock } from '../src/utils.js';
 
 const exec = promisify(execFile);
 const roots: string[] = [];
-const fixture = fileURLToPath(new URL('./fixtures/slow-git-helper.cjs', import.meta.url));
+const fixture = fileURLToPath(new URL(process.platform === 'win32' ? './fixtures/slow-git-helper.cjs' : './fixtures/slow-git-helper.sh', import.meta.url));
 const actor = { id: 'test', name: 'Git cancellation test' };
 
 afterEach(async () => {
@@ -33,7 +33,7 @@ async function freshGit(): Promise<GitStore> {
 }
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
-function helperCommand(root: string): string { return `${quote(process.execPath)} ${quote(fixture)} parent ${quote(root)}`; }
+function helperCommand(root: string): string { return `${quote(process.platform === 'win32' ? process.execPath : '/bin/sh')} ${quote(fixture)} parent ${quote(root)}`; }
 function slowArgs(root: string): string[] { return ['-c', `alias.pause=!${helperCommand(root)}`, 'pause']; }
 function cancelled(error: unknown): boolean { return error instanceof AgentMemoryError && error.code === 'OPERATION_CANCELLED'; }
 

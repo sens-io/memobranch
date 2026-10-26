@@ -75,9 +75,13 @@ asserts that a second full stage cannot fit. Both focused checks passed on Node
 These focused results do not claim a new complete-suite run.
 
 The original core review agent's final fix-review execution was interrupted by
-the platform; no final result was obtained or counted as approval. Another
-read-only fix review is required. Full checks are running under both default Git
-branches; they have not yet been recorded as passing here.
+the platform; no final result was obtained or counted as approval. A second
+reviewer statically checked the cleanup in `17666dfc4f4e20b6e318c8f0d4f8f14a1221a328`
+and confirmed its ownership/type/key-preservation behavior and strengthened
+below-quota assertion. That review covered 5 files with 0 skipped and requested
+an actual imported-record check in the installed script and correction of an
+outdated audit-pending statement; both have been corrected. Final review of these
+delivery changes and serialized full default-branch gates remain pending.
 
 Strict OpenSpec passed 31/31 in `shared-git-wiki-specs-final.log`; the production
 audit has 0 vulnerabilities in `shared-git-wiki-audit.json`.
@@ -87,11 +91,71 @@ remote, old pin/current authority, byte comparison, unchanged source/client read
 and preparation, no stale offline fallback, separate derived copy/no Wiki write,
 exact retry and current withdrawal. This direct build run is not a passing
 installed-tarball gate. The package verifier now requires the Git JS/declarations
-and runs that consumer scenario; same-tarball runtime checks remain pending.
-Both Git-default full checks, production audit,
-the same installed package on both runtimes, actual browser checks and compatibility
-verification remain pending for this Git checkpoint. Earlier cloud verification
-does not prove the new Git gates. The overall goal remains active.
+and runs that consumer scenario.
+
+The same **441-entry** tarball subsequently passed the complete package verifier
+on Node 22.17.0 and Node 20.0 (`shared-git-wiki-package-node22.log` and
+`shared-git-wiki-package-node20.log`). The first Node 22 Git consumer did not yet
+inspect its copied record; the stronger consumer separately passed on **both**
+runtimes from an installation of the identical tarball (`shared-git-wiki-copy-node22.log`,
+`shared-git-wiki-copy-node20.log`). It reads the actual evidence and checks its
+immutable/digest-4 metadata, old body, source IDs, evidence ID and pin.
+Archive: `.scratch/git-shared-package.mX5NQT/memobranch-1.1.0.tgz`;
+SHA-256 before and after:
+`6e5b7620a51c70ceef7b0cdf6723151a0a1bbca934ae4efe85e9912025a268bb`.
+Its runtime matches `6371d433`, with draft verification text from `17666dfc`;
+later report text/screenshots and test-only helpers are not in that archive.
+It was not published.
+
+## Full-suite failures and helper verification
+
+Retain failed runs: initial `shared-git-wiki-full-main.log` had 942/944 functional
+checks pass (two existing MCP request timeouts); `shared-git-wiki-full-master.log`
+had 943/944 pass (Git quota helper startup timed out); `shared-git-wiki-full-main-recheck.log`
+had 942/944 pass (two existing Git helper readiness failures). Release/evaluation
+steps were not reached in these failed chains. The two MCP cases separately passed
+unchanged in `shared-git-wiki-mcp-timeout-isolated.log` (2/2). These are not green
+full-suite gates. Multiple verification processes were active; startup delay was
+also observed in a simple Node process, but its underlying cause is not proven.
+
+Unix synthetic transport helpers now use the installed system interpreter rather
+than starting an additional Node runtime; the Windows Node fallback remains.
+The original termination, TERM-resistant/closed-output descendant, delayed-write,
+deadline, quota, unchanged-data and elapsed-time assertions are retained.
+`shared-git-wiki-transport-system-combined.log`: 12/12 current Node 22 checks;
+`shared-git-wiki-final-system-node20.log`: 39/39 compiled current Node 20.0 checks
+(30 Git sharing plus 9 retained Git cancellation), no failures/cancellations/skips.
+New complete runs must execute separately before recording both defaults as passed.
+
+## Actual management browser
+
+Native browser checks used a disposable Git fixture and a local read-only Web
+session, not a real account or remote. It displayed the configured old page and
+current revision 2, conditions, uncertainty and source links without current-body
+text. During an actual cache refresh-lock wait, Stop cleared the old body and
+retained input; only explicit retry caused a new successful read. Logout cleared
+the view and returned an empty token input. The owned tab, viewport override and
+synthetic service were closed/reset.
+
+`git-shared-native-ui.json` records DOM dimensions 1280×720 (scroll width 1265) and
+375×812 (scroll width 360), with no horizontal overflow. Native JPEG images are
+1265×712 and 360×780: [desktop](assets/git-shared-web-desktop-2026-10-26.jpg),
+[mobile](assets/git-shared-web-mobile-2026-10-26.jpg).
+`git-shared-native-observations.json` records 3 reads, 2 completed, 1 cancelled,
+0 other errors. Both vaults' HEAD/refs/index hashes and clean status, one named
+source raw-evidence sample hash and model counter (3 before/after) are equal.
+
+## Legacy compatibility
+
+An archived old reader rejected an actual valid version 2 Git binding with
+`CONFIG_INVALID` and the actual copied digest-4 artifact with `VALIDATION_FAILED`.
+Source/client heads, refs, index hashes, a named raw sample and model count stayed
+equal: `shared-git-wiki-compat.log` / `shared-git-wiki-compat-observations.json`.
+Old archive SHA-256:
+`f71ae58885aa6b3c8c8fa82a520f5aca12c0ba501ecd5232608584a5a9fe5e90`.
+This used its extracted modules with the **workspace dependency tree**, not an
+independent installation of the old package. Broader old/new-version combinations
+are not proven. The overall roadmap goal remains active.
 
 ## Changes and authority
 

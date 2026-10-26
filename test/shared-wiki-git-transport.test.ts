@@ -11,9 +11,9 @@ import { gitFixture } from './shared-wiki-git-fixture.js';
 // Keep native transport environment changes isolated from filesystem/clock mocks.
 for (const mode of ['cancel', 'timeout'] as const) test(`shared Git: a real blocked SSH helper is terminated on ${mode}, with no cached fallback`, { timeout: 15000 }, async t => {
   const { reader, input, binding, saveBindings, caller } = await gitFixture(t);
-  const helper = join(caller.root, '.amem/synthetic-ssh.cjs'), started = helper + '.started';
-  await writeFile(helper, `require('node:fs').writeFileSync(${JSON.stringify(started)},String(process.pid));setInterval(()=>{},1000);`);
-  environment(t, { GIT_SSH_COMMAND: `${quote(process.execPath)} ${quote(helper)}`, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
+  const helper = join(caller.root, '.amem/synthetic-ssh'), started = helper + '.started';
+  const command = await helperCommand(helper, started);
+  environment(t, { GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
   binding.remote = 'ssh://git@synthetic.invalid/wiki'; binding.allowLocalFile = false; binding.timeoutMs = mode === 'timeout' ? 3500 : 10000; await saveBindings();
   const controller = new AbortController(), before = await integrity(caller), start = performance.now();
   const result = reader.snapshot({ ...input, signal: controller.signal }).then(() => null, error => error);
@@ -28,9 +28,9 @@ for (const mode of ['cancel', 'timeout'] as const) test(`shared Git: a real bloc
 
 test('shared Git: actual in-flight cache growth stops a blocked transport at the configured resource limit', { timeout: 15000 }, async t => {
   const { reader, input, binding, saveBindings, caller, cache } = await gitFixture(t);
-  const helper = join(caller.root, '.amem/synthetic-growing-ssh.cjs'), started = helper + '.started';
-  await writeFile(helper, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},String(process.pid));fs.writeFileSync(${JSON.stringify(join(cache, '.amem/growing-pack-canary'))},Buffer.alloc(80000));setInterval(()=>{},1000);`);
-  environment(t, { GIT_SSH_COMMAND: `${quote(process.execPath)} ${quote(helper)}`, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
+  const helper = join(caller.root, '.amem/synthetic-growing-ssh'), started = helper + '.started';
+  const command = await helperCommand(helper, started, join(cache, '.amem/growing-pack-canary'));
+  environment(t, { GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: 'ssh', GIT_TRACE: helper + '.trace' });
   binding.remote = 'ssh://git@synthetic.invalid/wiki'; binding.allowLocalFile = false; binding.maxCacheBytes = 64_000; binding.timeoutMs = 10000; await saveBindings();
   const before = await integrity(caller);
   try { await assert.rejects(reader.snapshot(input), { code: 'CONTENT_TOO_LARGE' }); }
@@ -42,6 +42,18 @@ function environment(t: TestContext, values: Record<string, string>) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); let done = false;
   const restore = () => { if (done) return; done = true; for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } };
   Object.assign(process.env, values); t.after(restore); return restore;
+}
+async function helperCommand(path: string, started: string, growing?: string): Promise<string> {
+  if (process.platform === 'win32') {
+    const script = path + '.cjs';
+    await writeFile(script, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},String(process.pid));${growing ? `fs.writeFileSync(${JSON.stringify(growing)},Buffer.alloc(80000));` : ''}setInterval(()=>{},1000);`);
+    return `${quote(process.execPath)} ${quote(script)}`;
+  }
+  // A transport-limit test should not depend on another Node runtime starting.
+  // The trusted system interpreter executes only this synthetic helper.
+  const script = path + '.sh';
+  await writeFile(script, `echo "$$" > ${quote(started)}\n${growing ? `/usr/bin/head -c 80000 /dev/zero > ${quote(growing)}\n` : ''}exec /bin/sleep 30\n`);
+  return `${quote('/bin/sh')} ${quote(script)}`;
 }
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 async function assertStopped(pid: number) {

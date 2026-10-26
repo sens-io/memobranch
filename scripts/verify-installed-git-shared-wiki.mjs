@@ -56,6 +56,11 @@ try {
   const { plan } = await importer.prepare(selection); assert.deepEqual(await state(), before);
   await assert.rejects(importer.apply(plan, { confirm: false }), { code: 'VALIDATION_FAILED' });
   const copied = await importer.apply(plan, { confirm: true }); assert.ok(copied.commit); assert.deepEqual(await client.wikiCatalog(), []);
+  const imported = await client.get(copied.evidenceId);
+  assert.equal(imported.meta.type, 'evidence'); assert.equal(imported.meta.immutable, true); assert.equal(imported.meta.digestVersion, 4);
+  assert.match(imported.body, /compiled-wiki-source-artifact/); assert.match(imported.body, /Installed Git version 1/);
+  assert.doesNotMatch(imported.body, /Installed Git version 2/);
+  for (const origin of [pin, sourceConfig.vaultId, sourceConfig.tenantId, first.evidenceId]) assert.ok(imported.body.includes(origin));
   const copiedState = await state(); assert.equal(copiedState.heads[0], before.heads[0]); assert.equal(copiedState.refs[0], before.refs[0]);
   assert.deepEqual(copiedState.indexes[0], before.indexes[0]); assert.deepEqual(copiedState.raw, before.raw); assert.equal(copiedState.calls, before.calls);
   const retry = await importer.apply(plan, { confirm: true }); assert.equal(retry.duplicate, true); assert.equal(retry.commit, null); assert.deepEqual(await state(), copiedState);
@@ -63,5 +68,5 @@ try {
   await assert.rejects(reader.snapshot(selection), { code: 'NOT_FOUND' });
   const clientHead = await client.git.run(['rev-parse', 'HEAD']); await assert.rejects(importer.apply(plan, { confirm: true }), { code: 'NOT_FOUND' });
   assert.equal(await client.git.run(['rev-parse', 'HEAD']), clientHead);
-  console.log('Installed Git sharing: public exports, real local bare remote, fixed old pin/current authority, exact bytes, unchanged two-vault reads/prepare, offline refusal, separate copy/no Wiki write/exact retry and current withdrawal passed (two named raw fixtures).');
+  console.log('Installed Git sharing: public exports, real local bare remote, fixed old pin/current authority, exact bytes, unchanged two-vault reads/prepare, offline refusal, actual derived evidence/content/origin, no Wiki write/exact retry and current withdrawal passed (two named raw fixtures).');
 } finally { await rm(temporary, { recursive: true, force: true }); }
