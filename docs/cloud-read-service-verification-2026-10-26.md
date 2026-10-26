@@ -32,7 +32,7 @@ deployment, push or npm publication was created.
 | Final full checks, Git default `master` | The same 917 retained checks passed: 893 functional + 14 release-script + 10 evaluation checks, zero failed/skipped/cancelled. |
 | Strict OpenSpec and production dependency audit | 31/31 specification items passed; production audit reported zero vulnerabilities. |
 | Same installed tarball, Node 22.17.0 / Node 20.0.0 | Both passed: 426 packed entries, Git defaults `main` / `master`, unchanged tarball SHA-256 before/after both final runs. |
-| Independent code/design review | Fixed-candidate reviews covered every changed file. Confirmed design and service issues below were fixed and reviewed again. Final checkpoint text review pending. |
+| Independent code/design review | Fixed-candidate reviews covered every changed file. Confirmed design and service issues below were fixed and reviewed again. Final checkpoint `d12317f8`: 5/5 files reviewed, zero skipped, no confirmed issue. |
 
 Full-check logs are `.scratch/cloud-shared-wiki-server-full-final-main.log` and
 `.scratch/cloud-shared-wiki-server-full-final-master.log`; strict validation and
@@ -94,7 +94,8 @@ a passing package run. No production behavior or retained assertion was weakened
 
 Review coverage: design `2b4bb5c8` 5/5, wording correction `65aaf927` 2/2; service
 `ab1cbac1` 2 core + 5 delivery files; `926bb2b` 2/2; `ccad1cbf` 2/2; installed
-checks `ad9be6d6` 2/2 and fixture correction `4aa6f7db` 1/1, with zero skipped.
+checks `ad9be6d6` 2/2, fixture correction `4aa6f7db` 1/1 and final checkpoint
+`d12317f8` 5/5, with zero skipped.
 OCR supplied deterministic file/rule selection only, with its existing older-Git
 warning retained; no external review model was called.
 
