@@ -7,11 +7,11 @@ import { z } from 'zod';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { LlmClient } from './llm.js';
 import { throwIfCancelled, withOperation } from './operation.js';
-import type { Principal } from './policy.js';
+import { authorize, permissions, type Principal } from './policy.js';
 import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
 import { cloudAttenuationSchema, cloudHostPathSchema, parseCloudJson, readCloudAccounts, readCloudHostFile,
   type CloudWikiAccount, type CloudWikiAttenuation } from './shared-wiki-cloud-config.js';
-import { sensitivities } from './types.js';
+import { scopes, sensitivities } from './types.js';
 import { sha256 } from './utils.js';
 import { MemoryVault } from './vault.js';
 
@@ -20,8 +20,13 @@ const maximumResponseBytes = 21_000_000;
 const catalogSchema = z.object({ attenuation: cloudAttenuationSchema }).strict();
 const snapshotSchema = sharedWikiSnapshotSchema.extend({ expectedCommit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   attenuation: cloudAttenuationSchema }).strict();
+const operatorSchema = z.object({ id: z.string().min(1).max(200), name: z.string().min(1).max(500), email: z.string().max(500).optional(),
+  tenantId: z.string().min(1).max(200).optional(), permissions: z.array(z.enum(permissions)).min(1).max(6),
+  scopes: z.array(z.enum(scopes)).min(1).max(4), maxSensitivity: z.enum(sensitivities) }).strict()
+  .transform(({ email, tenantId, ...base }): Principal => ({ ...base, ...(email === undefined ? {} : { email }), ...(tenantId === undefined ? {} : { tenantId }) }));
 const optionsSchema = z.object({ configPath: cloudHostPathSchema, host: z.string().refine(value => isIP(value) !== 0).default('127.0.0.1'),
   port: z.number().int().min(0).max(65535).default(0), publicOrigin: z.string().max(2048).optional(),
+  operator: operatorSchema.optional(),
   tls: z.object({ certificatePath: cloudHostPathSchema, keyPath: cloudHostPathSchema }).strict().optional(),
   limits: z.object({ requestTimeoutMs: z.number().int().min(100).max(120_000).default(30_000),
     maxConcurrent: z.number().int().min(1).max(32).default(16),
@@ -40,6 +45,7 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
   const parsed = optionsSchema.safeParse(raw);
   if (!parsed.success) throw new AgentMemoryError('CONFIG_INVALID', 'Invalid cloud Wiki service options');
   const options = parsed.data, loopback = options.host === '127.0.0.1' || options.host === '::1';
+  if (options.operator) authorize(options.operator, 'admin');
   if (!loopback && (!options.tls || !options.publicOrigin)) throw new AgentMemoryError('CONFIG_INVALID', 'Public cloud Wiki listeners require TLS and a public origin');
   const configuredOrigin = options.publicOrigin === undefined ? undefined : origin(options.publicOrigin, Boolean(options.tls));
   await readCloudAccounts(options.configPath); // Validate only the host account file, not account resources.
@@ -49,6 +55,10 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
   const accounts = new Map<string, { active: number; budget: Budget }>();
   const globalBudget = new Budget(options.limits.requestsPerMinute);
   let stopping = false, authority = '', url = '';
+  const operatorAllows = (account: CloudWikiAccount) => {
+    if (!options.operator) return;
+    for (const scope of account.scopes) authorize(options.operator, 'admin', { tenantId: account.tenantId, scope, sensitivity: account.maxSensitivity });
+  };
   const handler = (request: IncomingMessage, response: ServerResponse) => {
     const task = handle(request, response).catch(() => { response.destroy(); });
     pending.add(task); void task.finally(() => pending.delete(task));
@@ -91,6 +101,7 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
           if (timingSafeEqual(Buffer.from(candidate.tokenSha256, 'hex'), Buffer.from(tokenHash, 'hex'))) account = candidate;
         }
         if (!account) return fail(401, 'AUTHORIZATION_DENIED');
+        operatorAllows(account);
         // IDs can rotate indefinitely in the host file; do not retain an unbounded historical rate map.
         for (const [id, state] of accounts) if (!state.active && !initial.accounts.some(item => item.id === id)) accounts.delete(id);
         accountState = accounts.get(account.id);
@@ -127,13 +138,13 @@ export async function startCloudWikiServer(input: CloudWikiServerOptions): Promi
         } else result = await reader.catalog();
         // The account file is checked after every asynchronous broker/source/config read.
         if ((await readCloudAccounts(options.configPath)).hash !== initial.hash) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Cloud Wiki accounts changed');
-        throwIfCancelled(); validate();
+        throwIfCancelled(); operatorAllows(account); validate();
         const envelope = snapshotData ? { version: 1, kind: 'cloud-shared-wiki-snapshot', ...result as object,
           validForMs: Math.max(0, Math.min(30_000, expiresAt ? Date.parse(expiresAt) - Date.now() : 30_000)) } : result;
         const bytes = Buffer.from(JSON.stringify(envelope));
         if (bytes.length > maximumResponseBytes) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Complete cloud Wiki response exceeds its byte limit');
         // Serialization can itself cross the source expiry; do not send an expired assembled body.
-        throwIfCancelled(); validate();
+        throwIfCancelled(); operatorAllows(account); validate();
         await sendBytes(res, 200, bytes);
       });
     } catch (error) {

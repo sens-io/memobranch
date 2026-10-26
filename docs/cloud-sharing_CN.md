@@ -3,7 +3,7 @@
 已确认同时支持自托管服务和 Git 远端共享。当前分支包含**自托管读取服务**、**云端客户端**和 **Git 缓存候选实现**。
 第 2 版客户端配置及现有读取入口已通过 [客户端检查](cloud-client-verification-2026-10-26.md)；
 [Git 库与管理页面检查](git-shared-wiki-verification-2026-10-26.md)也已通过本地验收；
-Git 的 CLI/MCP/Harness 专项检查、服务启动配置命令和整批验收仍待完成。
+Git 的 CLI/MCP/Harness 专项检查与服务启动配置命令已实现，正在做最终验证；整批验收仍待完成。
 完整约束见 [OpenSpec 设计](../openspec/changes/add-cloud-shared-wiki/design.md)，
 已执行的检查见 [服务验证记录](cloud-read-service-verification-2026-10-26.md)。
 
@@ -43,7 +43,56 @@ node --input-type=module -e 'import { randomBytes, createHash } from "node:crypt
 分别唯一。账号文件最多 100 个账号、100000 字节，必须是普通 UTF-8 文件，文件本身不能是
 符号链接。配置应放在 Git 跟踪内容之外，并以原子替换方式更新。
 
-## 启动库接口候选实现
+## 本机服务配置命令
+
+以下命令属于开发源码，不代表已经包含在公开 npm 版本中。先构建当前源码。
+四条命令都要求管理员（`admin`）权限；只有读写权限的 Agent 不能操作服务配置，命令也不会
+修改当前操作者的权限设置。
+
+在操作者的私有终端中生成尚未生效的凭据及摘要：
+
+```sh
+amem cloud credentials
+```
+
+输出包含 `token` 和 `tokenSha256`。命令不会保存文件或增加授权。
+将令牌私下交给指定读者，服务账号文件只保存摘要。使用摘要生成配置模板：
+
+```sh
+amem cloud account-template --id team-reader \
+  --broker-root /srv/memobranch/reader-broker \
+  --sources-config /srv/memobranch/private/shared-wiki.json \
+  --token-sha256 '<64 位小写十六进制摘要>' \
+  --scopes project --max-sensitivity internal
+```
+
+用于识别读者的资料库必须已经存在，账号 ID 必须匹配来源文件中已有的读者授权。
+资料库与租户 ID 从真实配置读取，不会编造。模板只包含一个账号、私有路径和摘要；核对后再由
+操作者明确保存为服务账号文件，并设置私有文件权限，例如 0600。已有账号文件需要明确加入这条
+账号记录并保留其他账号；模板不会自动合并或修改授权。检查过程仍使用既有的本机读取锁。
+
+检查配置，再在前台启动服务：
+
+```sh
+amem cloud check --accounts /srv/memobranch/private/cloud-accounts.json
+amem cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
+```
+
+检查结果只列出账号名称与当前可读来源数量，不显示摘要或路径；数量为零时如实显示零，不代表
+页面已经可读或能解密。服务端来源只能使用本机配置。未知、重复、缺少值的选项和多余参数会被拒绝。
+收到 SIGINT 或 SIGTERM 后，服务会结束自己启动的读取和连接，包括启动检查过程；不会安装后台服务。
+
+启动时只输出 `status` 和 `url`。可选参数有 `--host`、`--port`、`--public-origin`、
+`--tls-certificate`、`--tls-key`、`--request-timeout-ms`、`--max-concurrent`、
+`--per-account-concurrent`、`--requests-per-minute` 和 `--per-account-requests-per-minute`，
+采用下方库接口相同的范围与默认值。非本机监听必须提供 TLS 证书、私钥和明确的 HTTPS 地址。
+服务保留启动时操作者的租户、范围和敏感级别上限；运行中把账号文件改为更宽权限，也不能超过这个上限。
+修改启动者上限需要重启。库接口也可明确传入 `operator` 身份；原有可信本机程序省略该字段时保留原行为。
+
+轮换凭据时，先生成新值，再由操作者用原子文件替换方式更新该账号的摘要，并私下更新客户端环境中的令牌。
+撤销时明确删除该账号。账号和来源授权在每次请求中重新读取；配置变化也会阻止旧配置下组装的内容继续返回。
+
+## 库接口启动
 
 在当前源码目录执行 `npm run build` 后，宿主程序可以使用本地构建。以下示例不表示已发布的
 npm 版本包含此功能：

@@ -21,6 +21,8 @@ only list configured readable aliases; availability is checked on an explicit re
 ## Self-hosted service
 
 Provide a separate Node service, initially through the library, then a CLI command.
+Native operator commands, authority limits and foreground lifecycle follow
+[the host setup design](host-setup.md).
 It serves only `POST /v1/shared-wiki/catalog`, `POST /v1/shared-wiki/snapshot` and a
 minimal `GET /healthz`. There is no management shell, upload, mutation, raw-file,
 model, credential creation or grant editing endpoint. Do not expose the local Web

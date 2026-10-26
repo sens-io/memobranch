@@ -4,8 +4,9 @@ The user selected both a self-hosted service and Git remote sharing. The current
 branch contains a **self-hosted read service**, a **cloud client** and a **Git cache candidate**.
 Version 2 client bindings and existing read adapters have passed the [client checkpoint](cloud-client-verification-2026-10-26.md).
 The [Git library and management checkpoint](git-shared-wiki-verification-2026-10-26.md)
-also passed locally. Git-specific CLI/MCP/Harness checks, service CLI setup and
-whole-batch acceptance are still pending. This is not a deployment or full
+also passed locally. Git-specific CLI/MCP/Harness checks and native service/setup
+commands are implemented and under final verification. Whole-batch acceptance is
+still pending. This is not a deployment or full
 cloud-sharing acceptance.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
 and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
@@ -52,7 +53,70 @@ files reload during each request. Keep account IDs and digests unique. Files mus
 be regular UTF-8 files, not final-path symlinks; account configuration is limited
 to 100 accounts and 100000 bytes. Update host files atomically.
 
-## Run the library candidate
+## Native operator commands
+
+These commands are in the development checkout; the published npm version is not
+claimed to contain them. Build the checkout first. All four commands require
+admin permission. A restricted agent's read/write policy does not authorize host
+setup. Use an authorized operator environment; the commands do not change it.
+
+Generate an inactive credential and digest on the operator's private terminal:
+
+```sh
+amem cloud credentials
+```
+
+The JSON contains `token` and `tokenSha256`. Generation writes no file or grant.
+Keep the token private and distribute it only to the intended reader. The service
+file stores the digest only. Prepare a service-file template using that digest:
+
+```sh
+amem cloud account-template --id team-reader \
+  --broker-root /srv/memobranch/reader-broker \
+  --sources-config /srv/memobranch/private/shared-wiki.json \
+  --token-sha256 '<64 lowercase hexadecimal characters>' \
+  --scopes project --max-sensitivity internal
+```
+
+The broker must already exist and the account ID must match an existing source
+reader tuple. Broker IDs are derived from the actual vault, never invented. The
+template contains one account, host paths and a digest; treat it as private
+configuration. Review it, then explicitly save the JSON with private permissions
+(for example 0600) as your service file. For an existing file, explicitly add its
+account entry while preserving the others. The command does not persist account
+or grant changes; read-lock bookkeeping still uses the private runtime.
+
+Check and run the foreground service:
+
+```sh
+amem cloud check --accounts /srv/memobranch/private/cloud-accounts.json
+amem cloud serve --accounts /srv/memobranch/private/cloud-accounts.json
+```
+
+Check reports broker identities and current readable alias counts. A zero count
+is reported as zero; it does not prove page availability or decryption. Output
+does not include account digests or roots. Source brokers accept local bindings
+only. Unknown/duplicate flags, missing flag values and extra positional arguments
+are refused. `SIGINT`/`SIGTERM` stop the service and its owned work, including
+startup checks. No background service installation is performed.
+
+`cloud serve` prints only `status` and `url`. Optional flags are `--host`, `--port`,
+`--public-origin`, `--tls-certificate`, `--tls-key`, `--request-timeout-ms`,
+`--max-concurrent`, `--per-account-concurrent`, `--requests-per-minute` and
+`--per-account-requests-per-minute`, using the library's bounds/defaults below.
+Non-loopback listeners need both TLS files and an explicit HTTPS origin. The
+service keeps a validated copy of the operator's tenant/scope/sensitivity ceiling;
+an account file widened later cannot exceed it. Changing this fixed ceiling needs
+a restart. Library hosts can also set the optional `operator` principal; existing
+trusted hosts that omit it retain their account-file authority.
+
+For rotation, generate a new credential, explicitly replace that account's digest
+with an atomic private-file update and privately update its client's environment.
+For revocation, explicitly remove the account. Accounts and source bindings reload
+per request; a file change also invalidates work assembled under its old version.
+Templates never merge into an existing file automatically.
+
+## Library startup
 
 Build this checkout with `npm run build`. A host program can import its local
 build; this example does not claim the published npm version contains the feature:

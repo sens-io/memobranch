@@ -15,15 +15,15 @@ export const cloudAttenuationSchema = z.object({
   scopes: z.array(z.enum(scopes)).min(1).max(scopes.length).refine(values => new Set(values).size === values.length),
   maxSensitivity: z.enum(sensitivities),
 }).strict();
-const accountSchema = z.object({ id: text, tokenSha256: z.string().regex(/^[a-f0-9]{64}$/),
+export const cloudWikiAccountSchema = z.object({ id: text, tokenSha256: z.string().regex(/^[a-f0-9]{64}$/),
   root: cloudHostPathSchema, vaultId: text, tenantId: text, sharedWikiConfig: cloudHostPathSchema,
   ...cloudAttenuationSchema.shape,
 }).strict();
-const accountsSchema = z.object({ version: z.literal(1), accounts: z.array(accountSchema).max(100)
+const accountsSchema = z.object({ version: z.literal(1), accounts: z.array(cloudWikiAccountSchema).max(100)
   .refine(values => new Set(values.map(value => value.id)).size === values.length)
   .refine(values => new Set(values.map(value => value.tokenSha256)).size === values.length),
 }).strict();
-export type CloudWikiAccount = z.infer<typeof accountSchema>;
+export type CloudWikiAccount = z.infer<typeof cloudWikiAccountSchema>;
 export type CloudWikiAttenuation = z.infer<typeof cloudAttenuationSchema>;
 
 /** Host-only regular files. The final path cannot be a link or change during the read. */

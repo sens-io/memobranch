@@ -1,5 +1,30 @@
 ## ADDED Requirements
 
+### Requirement: Explicit native host setup
+Native service/setup commands MUST require admin authority, retain operator tenant
+and classification ceilings, reject ambiguous arguments and never automatically
+persist credentials or grants. Foreground shutdown MUST close owned resources.
+
+#### Scenario: Account template without an existing source grant
+- **WHEN** an operator requests a template for an account absent from current local reader bindings
+- **THEN** generation refuses without modifying any file or source authorization
+
+#### Scenario: Unprivileged host operation
+- **WHEN** a caller without admin permission invokes a cloud host command
+- **THEN** it refuses before reading host files or opening a listener
+
+#### Scenario: Explicit foreground shutdown
+- **WHEN** the service receives SIGINT or SIGTERM during startup or active reads
+- **THEN** owned work and connections stop and no credential or canonical data is written
+
+#### Scenario: Configuration check has no readable pages
+- **WHEN** a valid account has no currently readable source aliases
+- **THEN** the check reports zero configured sources without claiming page availability
+
+#### Scenario: Account file grows beyond the startup operator ceiling
+- **WHEN** a running service authenticates an account whose edited tenant, scope or sensitivity exceeds its fixed operator ceiling
+- **THEN** it refuses before opening that account's broker and does not accept a request-selected replacement operator
+
 ### Requirement: Server-owned read accounts
 The self-hosted service MUST authenticate host-managed bearer credentials and MUST
 derive read-only authority from the current account configuration, existing broker

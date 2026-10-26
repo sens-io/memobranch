@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
-import { authorize, localAdminPrincipal, principalFromEnv } from './policy.js';
+import { authorize, localAdminPrincipal, principalFromEnv, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
 import { startWebServer } from './web.js';
@@ -18,6 +18,8 @@ import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImport
 import { mergeOptionsSchema } from './wiki-merge.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { SharedWikiReader } from './shared-wiki.js';
+import { createCloudWikiCredential, cloudWikiAccountTemplate, inspectCloudWikiAccounts } from './shared-wiki-cloud-host.js';
+import { startCloudWikiServer, type CloudWikiServerHandle } from './shared-wiki-cloud-server.js';
 
 interface ParsedArgs {
   command: string;
@@ -41,6 +43,9 @@ async function main(): Promise<void> {
   const vault = new MemoryVault(root, { principal });
 
   switch (parsed.command) {
+    case 'cloud':
+      await cloudCommand(principal, parsed);
+      return;
     case 'memory': {
       const action = requiredPositional(parsed, 0, 'at or validity');
       if (action === 'at') {
@@ -296,6 +301,64 @@ async function main(): Promise<void> {
     }
     default:
       throw new Error(`Unknown command: ${parsed.command}`);
+  }
+}
+
+async function cloudCommand(principal: Principal, args: ParsedArgs): Promise<void> {
+  authorize(principal, 'admin');
+  const action = args.positionals[0] ?? '', common = ['actor', 'actor-name', 'actor-email'];
+  const allowed: Record<string, string[]> = {
+    credentials: [],
+    'account-template': ['id', 'broker-root', 'sources-config', 'token-sha256', 'scopes', 'max-sensitivity'],
+    check: ['accounts'],
+    serve: ['accounts', 'host', 'port', 'public-origin', 'tls-certificate', 'tls-key', 'request-timeout-ms',
+      'max-concurrent', 'per-account-concurrent', 'requests-per-minute', 'per-account-requests-per-minute'],
+  };
+  const invalid = (): never => { throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid cloud command arguments'); };
+  if (!action || !Object.hasOwn(allowed, action) || args.positionals.length !== 1) invalid();
+  const names = new Set([...common, ...allowed[action]!]), seen = new Set<string>();
+  for (const value of process.argv.slice(3)) {
+    if (!value.startsWith('--')) continue;
+    const name = value.slice(2).split('=')[0]!;
+    if (seen.has(name)) invalid(); seen.add(name);
+  }
+  for (const [name, value] of args.flags) if (!names.has(name) || typeof value !== 'string' || !value.length) invalid();
+  const number = (name: string, fallback: number): number => {
+    const value = flagString(args, name); if (value === undefined) return fallback;
+    if (!/^\d+$/.test(value)) invalid(); const result = Number(value); if (!Number.isSafeInteger(result)) invalid(); return result;
+  };
+  const controller = new AbortController(), stop = () => controller.abort();
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  let service: CloudWikiServerHandle | undefined;
+  try {
+    await withOperation(controller.signal, async () => {
+      if (action === 'credentials') { print(createCloudWikiCredential(principal)); return; }
+      if (action === 'account-template') {
+        print(await cloudWikiAccountTemplate(principal, { id: requiredFlag(args, 'id'), root: resolve(requiredFlag(args, 'broker-root')),
+          sharedWikiConfig: resolve(requiredFlag(args, 'sources-config')), tokenSha256: requiredFlag(args, 'token-sha256'),
+          scopes: (flagString(args, 'scopes') ?? 'project').split(',').map(value => value.trim()) as Scope[],
+          maxSensitivity: enumFlag(args, 'max-sensitivity', sensitivities, 'internal'),
+        })); return;
+      }
+      const configPath = resolve(requiredFlag(args, 'accounts'));
+      const checked = await inspectCloudWikiAccounts(principal, configPath);
+      if (action === 'check') { print(checked); return; }
+      const certificate = flagString(args, 'tls-certificate'), key = flagString(args, 'tls-key');
+      if (Boolean(certificate) !== Boolean(key)) invalid();
+      const stopped = new Promise<void>(resolveStop => { controller.signal.addEventListener('abort', () => resolveStop(), { once: true }); });
+      service = await startCloudWikiServer({ configPath, operator: principal, host: flagString(args, 'host') ?? '127.0.0.1', port: number('port', 0),
+        ...(args.flags.has('public-origin') ? { publicOrigin: requiredFlag(args, 'public-origin') } : {}),
+        ...(certificate && key ? { tls: { certificatePath: resolve(certificate), keyPath: resolve(key) } } : {}),
+        limits: { requestTimeoutMs: number('request-timeout-ms', 30000), maxConcurrent: number('max-concurrent', 16),
+          perAccountConcurrent: number('per-account-concurrent', 2), requestsPerMinute: number('requests-per-minute', 120),
+          perAccountRequestsPerMinute: number('per-account-requests-per-minute', 60) },
+      });
+      if (!controller.signal.aborted) { print({ status: 'cloud-serving', url: service.url }); await stopped; }
+    });
+  } finally {
+    controller.abort();
+    try { await service?.stop(); }
+    finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
   }
 }
 
@@ -708,6 +771,11 @@ Usage:
   amem wiki revoke <page-key> --reason TEXT
   amem serve [--host 127.0.0.1] [--port 0]
   amem web [--port 0] --root PATH
+  amem cloud credentials
+  amem cloud account-template --id ACCOUNT --broker-root VAULT --sources-config FILE --token-sha256 HASH [--scopes project] [--max-sensitivity internal]
+  amem cloud check --accounts FILE
+  amem cloud serve --accounts FILE [--host 127.0.0.1] [--port 0] [--public-origin HTTPS_ORIGIN] [--tls-certificate FILE --tls-key FILE]
+    Cloud host commands require admin; templates/credentials only print data. Service runs in the foreground; public listeners require TLS.
 
 Common options: --root PATH, --actor ID, --actor-name NAME, --actor-email EMAIL.
 LLM: AMEM_LLM_API_KEY, AMEM_LLM_MODEL, AMEM_LLM_BASE_URL, AMEM_EMBEDDING_MODEL.
