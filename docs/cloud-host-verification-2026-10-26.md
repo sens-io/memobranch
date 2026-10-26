@@ -89,9 +89,20 @@ installed CLI. This is a documentation correction, not a runtime change.
 Strict validation passed 31/31 items in `.scratch/cloud-host-specs.log` and the
 production audit reported zero vulnerabilities in `.scratch/cloud-host-audit.json`.
 
+## Complete retained checks
+
+The final runs were serialized after the corrected minimum-runtime gate, with
+the default concurrency and all retained assertions unchanged. Runtime/tests
+match `3b113867`; later commits only update documentation. The runner exited 0.
+
+| Default Git branch | Log | Observed result |
+| --- | --- | --- |
+| `main` | `.scratch/cloud-host-full-main.log` | 963 functional + 14 release-script + 10 evaluation = **987**, zero failed/cancelled/skipped in each phase. |
+| `master` | `.scratch/cloud-host-full-master.log` | The same **987**, zero failed/cancelled/skipped in each phase. |
+
 ## Pending gates
 
-Complete checks under both Git defaults, the same fresh installed archive on
-Node 20/22, and final verification-text review remain to be recorded. Earlier browser and Git
+The same fresh installed archive on Node 20/22 and final verification-text review
+remain to be recorded. Earlier browser and Git
 transport checkpoints are retained separately; this phase changes no browser UI.
 Roadmap batches 4–6 remain pending even after the cloud batch is accepted.
