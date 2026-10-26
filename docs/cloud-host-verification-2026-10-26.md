@@ -2,8 +2,9 @@
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 This record covers local development, not an npm release, push or deployment.
-All executable cloud-batch gates below have passed; final acceptance-text review
-is pending. Roadmap batches 4–6 are not accepted by this checkpoint.
+All executable cloud-batch gates and independent acceptance-text review below
+have passed. This accepts roadmap batch 3b locally; batches 4–6 are not accepted
+by this checkpoint.
 
 ## Candidate and behavior
 
@@ -81,7 +82,7 @@ Runtime review found no confirmed issue. Documentation review found one inaccura
 English sentence: check validates broker identities but reports account IDs and
 source counts, rather than reporting the broker identities. The sentence is fixed;
 the implementation and the Chinese guide already matched that behavior. Final
-text/verification review remains pending until the gates are recorded.
+text/verification review is recorded below.
 
 The final guide examples also invoke `node dist/cli.js` from the repository root,
 so building a checkout does not accidentally direct users to an older globally
@@ -147,6 +148,10 @@ production load are not tested here; network fixtures are local and synthetic.
 Offline copies cannot be recalled, and uncommunicated remote key erasure cannot
 erase separately provisioned Git-cache keys, as documented in the guides.
 
-Final acceptance-text review remains pending. The overall roadmap goal remains
-active; human-authored integration/import adapters, optional OCR/visual-page work
-and final combined delivery are still pending in batches 4–6.
+Independent final acceptance-text review inspected fixed candidate
+`3c22972e4a18dc752596ddc45541ef8831ee5c0f` on source branch
+`kevin/knowledge-expansion`: 8/8 files, zero skipped, no confirmed issue. It checked
+the actual logs, archive hashes, draft-report contents and earlier correction.
+This closes batch 3b locally. The overall roadmap goal remains active;
+human-authored integration/import adapters, optional OCR/visual-page work and
+final combined delivery are still pending in batches 4–6.

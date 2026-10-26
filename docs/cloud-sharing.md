@@ -7,8 +7,8 @@ The [Git library and management checkpoint](git-shared-wiki-verification-2026-10
 also passed locally. Git-specific CLI/MCP/Harness checks and native service/setup
 commands have passed their [combined local verification](cloud-host-verification-2026-10-26.md):
 both Git defaults, minimum Node 20 and the same installed artifact on Node 20/22.
-The final acceptance record is under independent review. No npm publication or
-deployment is implied; later roadmap batches remain pending.
+The cloud batch is accepted locally after independent review. No npm publication
+or deployment is implied; later roadmap batches remain pending.
 See the [design and acceptance gates](../openspec/changes/add-cloud-shared-wiki/design.md)
 and the [service verification checkpoint](cloud-read-service-verification-2026-10-26.md).
 
