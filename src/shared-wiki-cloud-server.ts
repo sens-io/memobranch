@@ -201,7 +201,7 @@ async function readBody(req: IncomingMessage) {
   }
   throwIfCancelled(); return Buffer.concat(chunks);
 }
-function send(res: ServerResponse, status: number, data: unknown) { sendBytes(res, status, Buffer.from(JSON.stringify(data))); }
+function send(res: ServerResponse, status: number, data: unknown) { return sendBytes(res, status, Buffer.from(JSON.stringify(data))); }
 function sendBytes(res: ServerResponse, status: number, bytes: Buffer): Promise<void> {
   if (res.destroyed || res.writableEnded) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {

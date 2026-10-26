@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect } from 'node:net';
 import { join } from 'node:path';
@@ -223,6 +223,22 @@ test('cloud service: complete output budget refuses instead of returning partial
     view: { body: '界'.repeat(7_000_001) }, support: {}, validate() {}, async validateConfiguration() {},
   }));
   const response = await call(handle, 'snapshot', selection); assert.equal(response.status, 413); assert.ok(JSON.stringify(response.body).length < 200);
+});
+
+test('cloud service: failed error-response delivery is handled and the service remains usable', async t => {
+  const { start } = await fixture(t), handle = await start();
+  const end = ServerResponse.prototype.end; let failed = false;
+  t.mock.method(ServerResponse.prototype, 'end', function(this: ServerResponse, ...args: Parameters<typeof end>) {
+    if (this.statusCode === 401 && !failed) {
+      failed = true;
+      this.emit('error', new Error('SYNTHETIC_PRIVATE_SOCKET_ERROR')); this.destroy(); return this;
+    }
+    return end.apply(this, args);
+  });
+  // Native HTTP does not retry a failed connection and exposes this single injected send failure.
+  await assert.rejects(rawCall(handle, Buffer.from('{}'), ['Authorization', 'Bearer wrong']));
+  assert.equal(failed, true);
+  assert.equal((await call(handle, 'catalog', { attenuation })).status, 200);
 });
 
 test('cloud service: stop cancels an actual source wait and closes unfinished request bodies', async t => {
