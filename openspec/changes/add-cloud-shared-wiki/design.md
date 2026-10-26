@@ -2,9 +2,10 @@
 
 ## Common contract
 
-All modes select a host-configured source alias, 1–25 distinct page keys and a
-complete displayed commit precondition. The precondition refuses a changed pin;
-it cannot choose an arbitrary revision. Preserve current tenant, reader grant,
+All modes select a host-configured source alias and 1–25 distinct page keys. New
+cloud/Git transports require a complete displayed commit precondition; the accepted
+version 1 local API retains its optional precondition. The precondition refuses a
+changed pin; it cannot choose an arbitrary revision. Preserve current tenant, reader grant,
 scope, sensitivity, explicit private selection, key, dependency, withdrawal,
 conflict and time checks. Source identity and relative provenance remain visible;
 absolute roots, credentials, host account lists and environment variable names do

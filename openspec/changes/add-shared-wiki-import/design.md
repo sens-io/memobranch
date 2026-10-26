@@ -90,7 +90,11 @@ source change, cancel, navigation or logout invalidates the review/confirmation.
 
 No request/source-selected subprocess, shell, evaluator or model runs for import/
 manual merge. Only the existing bounded, controlled local Git read/write commands
-are retained; network fetch/push and arbitrary command execution remain forbidden.
+are retained. Local version 1 bindings perform no network fetch. The subsequent
+`add-cloud-shared-wiki` change additionally permits bounded read-only HTTPS or Git
+fetch from explicitly host-configured remote bindings, including a fresh read for
+import confirmation; requests and sources cannot choose arbitrary network targets.
+Push and arbitrary command execution remain forbidden in every import mode.
 Tests use synthetic vaults and existing fixture compilers only. No real host
 binding is modified by development. Fixed-candidate independent review, both Git
 defaults, same-package Node 20/22, native Web and bilingual records are required
