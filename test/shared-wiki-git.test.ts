@@ -215,12 +215,16 @@ test('shared Git: a preexisting refresh queue symlink refuses before writing any
 });
 
 test('shared Git: abandoned owned staging files cannot consume the next refresh quota or delete separately provisioned keys', async t => {
-  const { reader, input, binding, saveBindings, cache, slot } = await gitFixture(t); await reader.snapshot(input);
+  const { reader, input, binding, saveBindings, cache, slot, source, publish } = await gitFixture(t);
+  await writeFile(join(source.root, 'AGENTS.md'), 'Synthetic staging-size fixture only.\n'.repeat(1600));
+  await source.git.commit('Synthetic minimum recovery staging size', source.principal, ['AGENTS.md']); await publish();
+  await reader.snapshot(input);
   const stage = join(cache, '.amem/stage-76ec9c03-bded-4d77-bcaf-9fde7a9bf037'), keys = join(cache, '.amem/keys.json');
   await writeFile(keys, 'HOST_KEY_RETENTION_CANARY');
   const baseline = await fixtureBytes(slot), tree = await new GitStore(cache).run(['ls-tree', '-r', '-l', 'HEAD']);
   const stageBytes = tree.split('\n').reduce((total, line) => total + Number(/^\d+ blob [a-f0-9]+\s+(\d+)\t/.exec(line)![1]), 0);
   binding.maxCacheBytes = Math.max(64_000, baseline + stageBytes + 4096); await saveBindings();
+  assert.ok(baseline + 2 * stageBytes > binding.maxCacheBytes, 'an abandoned full stage prevents a second stage without cleanup');
   await mkdir(stage); await writeFile(join(stage, '0'.repeat(64)), Buffer.alloc(stageBytes)); await writeFile(join(cache, '.amem/shared-cache-pending.json'), '{}');
   assert.ok(await fixtureBytes(slot) < binding.maxCacheBytes, 'interrupted cache fits before rebuilding');
   assert.match(JSON.stringify(await reader.snapshot(input)), /DATED_WIKI_OLD_CANARY/); assert.equal(existsSync(stage), false);

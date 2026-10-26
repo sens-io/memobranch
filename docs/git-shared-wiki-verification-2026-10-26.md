@@ -63,8 +63,31 @@ final review of its fix remains pending.
 | `kevin/knowledge-expansion` | P2: crashed `stage-*` files could leave a cache below its quota but unable to allocate another full stage; retry repeatedly failed `CONTENT_TOO_LARGE`. | Validate ownership/types, remove only reserved abandoned staging files before budgeting, retain keys/unknown private files. Parent regression failed before the fix (`shared-git-wiki-orphan-before.log`) and both new regressions passed after (`shared-git-wiki-orphan-after.log`, 2/2). The independent fixed-candidate reproduction measured baseline 71915, stage 57444 and valid limit 133455; the interrupted cache occupied 129661 yet could not rebuild until the old stage was removed. |
 
 Latest staging-fix build and types passed (`shared-git-wiki-build-5.log`,
-`shared-git-wiki-types-5.log`). Both runtime whole-run gates must be repeated after
-the fix; the earlier 28/100 counts do not prove these additional two tests.
+`shared-git-wiki-types-5.log`). The complete compiled staging-fix Node 20.0 suite
+passed **30/30**, with zero failures/cancellations/skips, in
+`.scratch/shared-git-wiki-node20-corrected.log`.
+Review then found the small default fixture could fit two stages beneath the
+64000-byte minimum: the product fix was present, but the below-quota regression
+needed stronger data. It now publishes a larger valid managed file and explicitly
+asserts that a second full stage cannot fit. Both focused checks passed on Node
+22 (`shared-git-wiki-orphan-strengthened.log`, 2/2) and compiled Node 20.0
+(`shared-git-wiki-node20-strengthened.log`, 2 passed, 25 deliberately filtered).
+These focused results do not claim a new complete-suite run.
+
+The original core review agent's final fix-review execution was interrupted by
+the platform; no final result was obtained or counted as approval. Another
+read-only fix review is required. Full checks are running under both default Git
+branches; they have not yet been recorded as passing here.
+
+Strict OpenSpec passed 31/31 in `shared-git-wiki-specs-final.log`; the production
+audit has 0 vulnerabilities in `shared-git-wiki-audit.json`.
+The new installed-consumer Git scenario passed directly against this build
+(`shared-git-wiki-installed-direct.log`): public exports, real disposable bare
+remote, old pin/current authority, byte comparison, unchanged source/client reads
+and preparation, no stale offline fallback, separate derived copy/no Wiki write,
+exact retry and current withdrawal. This direct build run is not a passing
+installed-tarball gate. The package verifier now requires the Git JS/declarations
+and runs that consumer scenario; same-tarball runtime checks remain pending.
 Both Git-default full checks, production audit,
 the same installed package on both runtimes, actual browser checks and compatibility
 verification remain pending for this Git checkpoint. Earlier cloud verification

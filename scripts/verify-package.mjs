@@ -52,6 +52,7 @@ try {
     'dist/shared-wiki-cloud-config.js', 'dist/shared-wiki-cloud-config.d.ts',
     'dist/shared-wiki-cloud-server.js', 'dist/shared-wiki-cloud-server.d.ts', 'docs/cloud-sharing.md', 'docs/cloud-sharing_CN.md',
     'dist/shared-wiki-cloud-client.js', 'dist/shared-wiki-cloud-client.d.ts', 'dist/shared-wiki-cloud-wire.js', 'dist/shared-wiki-cloud-wire.d.ts',
+    'dist/shared-wiki-git.js', 'dist/shared-wiki-git.d.ts',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -317,6 +318,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(cloudSharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-git-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-git-shared-wiki.mjs')));
+  const gitSharedWiki = await exec(process.execPath, ['verify-installed-git-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(gitSharedWiki.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
