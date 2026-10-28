@@ -136,8 +136,10 @@ design reviews are recorded above and in the OCR design checkpoint.
 The last combined task remains unchecked because the original full compiled
 minimum Node 20 adapter collection still failed **35/37**. Passing full Node 22,
 installed Node 20 consumers, or additional Node 20 recovery tests cannot substitute
-for that failed result. Final acceptance-text review remains pending; no batch or
-complete-roadmap acceptance is claimed.
+for that failed result. Independent final record review of `8a4dd8a8` covered all
+7/7 changed files in two disjoint scopes (3/3 and 4/4), zero skipped, and found no
+confirmed new issue in those records. It confirmed that the failed minimum-runtime
+gate remains open; no batch or complete-roadmap acceptance is claimed.
 
 Database changes: none. Data migration: none. Configuration changes: none.
 Only synthetic local grant/config files were used. No real access, push, npm
