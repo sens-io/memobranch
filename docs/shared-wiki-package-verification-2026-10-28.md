@@ -1,11 +1,12 @@
-# Wiki import/integration installed-package verification — in progress
+# Wiki import/integration installed-package verification
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Product source checkpoint: `e558e4624812321a7a9f1634f71b9efaed61c91e`.
-The additional consumer verification program is under development. This report
-does not accept batch 4, supersede failed checks, publish npm or deploy anything.
+Installed consumers and the final repository checks at `982cb567` have completed.
+This report does not accept batch 4, supersede failed checks, publish npm or deploy
+anything. Supplemental minimum-runtime failures remain open below.
 
-## Artifact and intended checks
+## Artifact and executed checks
 
 The locally packed archive is `.scratch/wiki-import-package/memobranch-1.1.0.tgz`.
 Its SHA-256 before both Node 22 attempts is
@@ -25,7 +26,7 @@ retries, unchanged source/raw evidence/model count and local integration after
 sharing removal. These are synthetic functional checks, not semantic correctness
 or independent verification of original sources.
 
-## Actual results so far
+## Actual results
 
 The first Node 22/main run (`.scratch/wiki-import-package-node22.log`) passed all
 previous installed consumer programs through Git sharing. It then failed while
@@ -77,9 +78,18 @@ that failure. The exact list now includes the new tool, and its false read-only,
 idempotent and destructive annotations are checked. Existing exact equality and
 all other assertions remain; the failure is retained. The affected retained file
 passed **10/10** (`wiki-import-adapter-catalog-fix.log`), zero failures,
-cancellations or skips. Both complete repository Git-default reruns and the
-following strict-spec/audit stages are still in progress; do not treat the
-targeted result as the full repository result.
+cancellations or skips. Independent read-only review of `982cb567` covered 2/2
+files, zero skipped, and found no confirmed issue in that correction/report scope.
+
+Both complete repository reruns then exited 0. Each Git-default run passed
+**1009 functional + 14 release + 10 evaluation = 1033 checks**, with zero failures,
+cancellations or skips. Build and all test types passed in both runs. The complete
+logs are `.scratch/wiki-import-full-main-2.log` and
+`.scratch/wiki-import-full-master-2.log`. Strict OpenSpec passed **31/31**
+(`wiki-import-final-specs-2.log`); the production audit reported **0 vulnerabilities**
+(`wiki-import-final-audit-2.json`). These are the `982cb567` checkpoint results;
+later supplemental tests are recorded separately in the
+[recovery/concurrency record](shared-wiki-import-recovery-verification-2026-10-28.md).
 The compiled Node 20 CLI startup failures remain documented in the
 [agent checkpoint](shared-wiki-agent-verification-2026-10-28.md); an installed
 consumer result must not be substituted for that failed run.

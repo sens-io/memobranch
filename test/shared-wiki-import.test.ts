@@ -189,6 +189,8 @@ test('shared Wiki import: raw inspection works while ordinary-memory proposal/ex
   for(const record of [memory,oldCandidate]){const meta=record.meta as unknown as MemoryMeta|CandidateMeta;meta.evidence=[captured.evidencePath];await writeFile(join(callerAdmin.root,record.path),serializeMarkdown(meta,record.body));}
   await callerAdmin.git.commit('Synthetic older invalid ordinary import support',callerAdmin.principal,['wiki','candidates']);const forged=await integrity(callerAdmin);
   for(const action of [()=>callerAdmin.get(approved.memoryId),()=>callerAdmin.get(candidate.id),()=>callerAdmin.approve(candidate.id),()=>callerAdmin.consolidate()])await assert.rejects(action(),{code:'VALIDATION_FAILED'});
+  const health=await callerAdmin.doctor();assert.equal(health.healthy,false);assert.ok(health.documents);assert.equal(health.documents.healthy,false);
+  assert.ok(health.documents.errors.length>=2,'Health validation must report both forged ordinary records');
   assert.ok(await callerAdmin.get(captured.evidenceId));assert.deepEqual(await integrity(callerAdmin),forged);
 });
 
