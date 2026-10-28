@@ -45,8 +45,10 @@ consolidation/read refusal assertions remain unchanged.
 
 The two previously failed Node 20 adapter startup checks are distinct and remain
 failed. No test/runtime upgrade, deadline increase, fixture removal or substitution
-of an installed consumer for that aggregate occurred. No Node Linux image is
-currently installed locally, so no additional Linux result is claimed.
+of an installed consumer for that aggregate occurred. At that earlier core
+checkpoint no Node Linux image was installed locally and no Linux result was
+claimed. The later [Linux supplement](shared-wiki-import-linux-verification-2026-10-28.md)
+records the separately downloaded test image and actual corrected runs.
 
 Independent read-only review of `ed144b9b` covered 5/5 files, zero skipped, and
 confirmed the real crash/recovery boundaries and receipts. It found a verification

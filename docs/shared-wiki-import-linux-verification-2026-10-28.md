@@ -74,8 +74,16 @@ No fresh dependency install, audit, complete Linux repository suite or installed
 npm consumer is claimed by this selected compiled-suite check. In particular this
 is Debian arm64, not a GitHub-hosted Ubuntu x64 CI result.
 
-Fixed-candidate independent review of this supplement is pending. An independently
-passing platform does not establish the cause of the macOS
+Independent read-only review of `dc520a18` covered all 7/7 changed files in disjoint
+3/3 and 4/4 scopes, zero skipped. It independently matched the bundle/runner
+digests, all 330 inventory entries and the four original tests to the input Git
+checkpoint, and verified both probed defaults and 37/37 results. It found one
+stale present-tense sentence in the prior recovery record saying no Linux image
+was installed; that sentence now identifies its historical checkpoint and links
+to this later supplement. No product defect or weakened test was found. Re-review
+of that wording correction remains pending.
+
+An independently passing platform does not establish the cause of the macOS
 startup waits. The original failed command/output and diagnostic samples remain
 part of the [agent record](shared-wiki-agent-verification-2026-10-28.md) and
 [recovery checkpoint](shared-wiki-import-recovery-verification-2026-10-28.md).
