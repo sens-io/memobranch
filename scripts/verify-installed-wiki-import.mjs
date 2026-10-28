@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -15,6 +16,8 @@ import * as plugin from 'memobranch/deepseek-harness';
 const exec = promisify(execFile);
 await mkdir('.scratch', { recursive: true });
 const temporary = await mkdtemp(resolve('.scratch/installed-wiki-import-'));
+const modelMethods = ['embed', 'extractMemories', 'answer', 'wiki'];
+const originalModelMethods = new Map();
 try {
   let version = 1, calls = 0;
   const llm = new LlmClient({ apiKey: '', embeddingModel: '' });
@@ -46,15 +49,31 @@ try {
   const state = async vault => ({ head: await vault.git.run(['rev-parse', 'HEAD']), refs: await vault.git.run(['show-ref']),
     index: await readFile(join(vault.git.gitDir, 'index')), status: await vault.git.run(['status', '--porcelain']) });
   const sourceBefore = await state(source), raw = await readFile(join(source.root, first.evidencePath)), count = calls;
-  const importer = new SharedWikiImporter(caller, { configPath }); let retained, retainedPlan;
+  // Trap every public model entry point in this consumer and in actual CLI/MCP
+  // children. A caught model error still leaves a marker and fails the assertion.
+  const modelLog = join(temporary, 'unexpected-model-calls.txt'), modelGuard = join(temporary, 'reject-model-calls.mjs');
+  await writeFile(modelLog, '', { mode: 0o600 });
+  const trap = method => function () { appendFileSync(modelLog, method + '\n'); throw new Error('Import/integration must not invoke a model'); };
+  for (const method of modelMethods) { originalModelMethods.set(method, LlmClient.prototype[method]); LlmClient.prototype[method] = trap(method); }
+  await writeFile(modelGuard, `import { appendFileSync } from 'node:fs';
+import { LlmClient } from 'memobranch';
+for (const method of ${JSON.stringify(modelMethods)}) LlmClient.prototype[method] = function () {
+  appendFileSync(${JSON.stringify(modelLog)}, method + '\\n');
+  throw new Error('Import/integration must not invoke a model');
+};`, { mode: 0o600 });
+  const importer = new SharedWikiImporter(caller, { configPath }); let retained;
+  const retainedIds = new Set();
   const exercise = async (adapter, invoke) => {
+    // Distinct explicit fixture bindings produce distinct artifacts, so each
+    // real adapter must exercise a first capture as well as its duplicate path.
+    binding.id = 'installed-import-' + adapter.toLowerCase(); selection.sourceId = binding.id; await saveBindings([binding]);
     const before = await state(caller), prepared = await invoke('copy-prepare', selection);
     assert.equal(prepared.plan.selection.expectedCommit, pin); assert.match(JSON.stringify(prepared), /INSTALLED_SOURCE_VERSION_1/);
     assert.doesNotMatch(JSON.stringify(prepared), /INSTALLED_SOURCE_VERSION_2/); assert.deepEqual(await state(caller), before);
     await assert.rejects(invoke('copy-apply', { plan: prepared.plan, confirm: false }));
-    const copied = await invoke('copy-apply', { plan: prepared.plan, confirm: true });
-    if (!retained) { retained = copied; retainedPlan = prepared.plan; assert.ok(copied.commit); assert.deepEqual(await caller.wikiCatalog(), []); }
-    else { assert.equal(copied.evidenceId, retained.evidenceId); assert.equal(copied.duplicate, true); assert.equal(copied.commit, null); }
+    const catalogBefore = await caller.wikiCatalog(), copied = await invoke('copy-apply', { plan: prepared.plan, confirm: true });
+    assert.equal(copied.duplicate, false); assert.ok(copied.commit); assert.equal(retainedIds.has(copied.evidenceId), false);
+    retainedIds.add(copied.evidenceId); retained = copied; assert.deepEqual(await caller.wikiCatalog(), catalogBefore);
     const evidence = await readFile(join(caller.root, copied.evidencePath)), afterCopy = await state(caller);
     const duplicate = await invoke('copy-apply', { plan: prepared.plan, confirm: true });
     assert.equal(duplicate.duplicate, true); assert.equal(duplicate.commit, null); assert.deepEqual(await state(caller), afterCopy);
@@ -72,8 +91,10 @@ try {
     assert.ok((await invoke('apply', { plan: integrated.plan, confirm: true })).commit);
     assert.deepEqual(await invoke('apply', { plan: integrated.plan, confirm: true }), { pageIds: [], commit: null });
     const targetMeta = (await caller.wikiCatalog()).find(page => page.key === input.pageKey);
-    assert.equal((await caller.get(targetMeta.id)).body, target.after.body); assert.deepEqual(await readFile(join(caller.root, copied.evidencePath)), evidence);
-    assert.deepEqual(await state(source), sourceBefore); assert.equal(calls, count);
+    const persisted = await caller.get(targetMeta.id); assert.equal(persisted.body, target.after.body);
+    for (const field of ['evidence', 'conditions', 'uncertainty', 'scope', 'sensitivity', 'status', 'expiresAt']) assert.deepEqual(persisted.meta[field], target.after[field], `${adapter} persisted ${field}`);
+    assert.deepEqual(await readFile(join(caller.root, copied.evidencePath)), evidence);
+    assert.deepEqual(await state(source), sourceBefore); assert.equal(calls, count); assert.equal(await readFile(modelLog, 'utf8'), '');
     console.log(`Installed ${adapter} Wiki import/integration: complete fixed source, separate confirmations, authored comparison, inherited limits, forged refusal, exact retries and unchanged evidence passed.`);
   };
   await exercise('Library', async (operation, input) => {
@@ -83,7 +104,7 @@ try {
     if (operation === 'preview') return caller.wikiPreview(input.plan);
     return caller.wikiApply(input.plan);
   });
-  const cli = async args => JSON.parse((await exec(process.execPath, [resolve('node_modules/memobranch/dist/cli.js'), 'wiki', ...args, '--root', caller.root], { env, maxBuffer: 10 * 1_048_576 })).stdout);
+  const cli = async args => JSON.parse((await exec(process.execPath, ['--import', modelGuard, resolve('node_modules/memobranch/dist/cli.js'), 'wiki', ...args, '--root', caller.root], { env, maxBuffer: 10 * 1_048_576 })).stdout);
   let fileNumber = 0;
   await exercise('CLI', async (operation, input) => {
     if (operation === 'copy-prepare') return cli(['import-prepare', input.sourceId, ...input.pageKeys, '--expected-commit', input.expectedCommit]);
@@ -95,7 +116,7 @@ try {
   const names = { 'copy-prepare': 'memory_shared_wiki_import_prepare', 'copy-apply': 'memory_shared_wiki_import_apply', integrate: 'memory_wiki_integration_prepare', preview: 'memory_wiki_preview', apply: 'memory_wiki_apply' };
   const client = new Client({ name: 'installed-import', version: '1' });
   try {
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('node_modules/memobranch/dist/mcp.js'), caller.root], env, stderr: 'pipe' }));
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: ['--import', modelGuard, resolve('node_modules/memobranch/dist/mcp.js'), caller.root], env, stderr: 'pipe' }));
     await exercise('MCP', async (operation, input) => {
       const args = operation === 'apply' ? { plan: input.plan } : input;
       const result = await client.callTool({ name: names[operation], arguments: args });
@@ -121,11 +142,17 @@ try {
       if (result.isError) throw new Error(JSON.stringify(result.error)); return result.value;
     });
   } finally { await ctx.fiber.dispose(); for (const name of Object.keys(process.env)) if (!(name in savedEnv)) delete process.env[name]; Object.assign(process.env, savedEnv); }
-  assert.equal((await caller.wikiCatalog()).length, 6);
+  assert.equal(retainedIds.size, 5); assert.equal((await caller.wikiCatalog()).length, 10);
+  const retainedPlan = (await importer.prepare(selection)).plan;
+  assert.equal((await importer.apply(retainedPlan, { confirm: true })).duplicate, true);
   await saveBindings([]); await assert.rejects(importer.apply(retainedPlan, { confirm: true }), { code: 'NOT_FOUND' });
   const offline = await caller.wikiIntegrationPrepare({ evidenceId: retained.evidenceId, pageKey: 'concept:installed-offline', expectedRevision: 0,
     title: 'Retained offline integration', summary: 'Remote sharing removed', body: 'Explicitly retained copies remain usable under current local restrictions.' });
-  assert.equal(offline.plan.kind, 'integrate'); assert.equal((await caller.wikiCatalog()).length, 6);
+  assert.equal(offline.plan.kind, 'integrate'); assert.equal((await caller.wikiCatalog()).length, 10);
   assert.deepEqual(await state(source), sourceBefore); assert.deepEqual(await readFile(join(source.root, first.evidencePath)), raw); assert.equal(calls, count);
+  assert.equal(await readFile(modelLog, 'utf8'), '');
   console.log('Installed Wiki import/integration: retained local copy remains independently reviewable after sharing removal; no automatic Wiki approval or model calls.');
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally {
+  for (const [method, original] of originalModelMethods) LlmClient.prototype[method] = original;
+  await rm(temporary, { recursive: true, force: true });
+}

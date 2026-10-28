@@ -38,9 +38,35 @@ were not weakened. Retain this failed run.
 The full second Node 22/main run passed in
 `.scratch/wiki-import-package-node22-2.log` (**457 packed entries**, process exit
 0), including all five new actual consumer paths and all retained consumer
-programs. Node 20/master execution of this same
-archive, before/between/after hash checks, both complete repository Git-default
-runs, production audit and independent committed-verifier review are pending.
+programs. The same 457-entry archive also passed the complete Node 20/master
+consumer run with exit 0 (`wiki-import-package-node20.log`). The before/retry/
+between hash files and the later strengthened check all have the same digest above.
+
+Independent read-only review of `3abcff8b` covered 3/3 files, zero skipped. It found
+three verification scope limitations, rather than a product-function defect:
+
+| Source branch | Scope limitation | Strengthening |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | Only the library performed a first capture; the other adapters reused it. | Five explicit synthetic source aliases now produce five unique artifacts: every adapter must first capture with a commit, leave the Wiki catalog unchanged, and separately prove exact-copy retry. |
+| `kevin/knowledge-expansion` | The model counter observed the source fixture only. | All four public model entry points are guarded in the parent and native CLI/MCP children; even a caught model error appends a marker which must remain empty. The independent source stub counter must also remain unchanged. |
+| `kevin/knowledge-expansion` | Saved content was compared only by body; restrictions were checked in preview. | Each saved target now also matches preview evidence, conditions, uncertainty, scope, sensitivity, status and optional expiry. |
+
+The strengthened program passed on both **Node 22/main and Node 20/master**,
+in a new independently installed consumer of that unchanged archive, using the
+same SDK versions from the root lock. All five first captures, five separate Wiki
+applications, exact retries, forged refusals, model guards and saved-field checks
+executed. It retained ten Wiki pages (five targets and five source summaries).
+After confirming a current duplicate still worked, removing the fixture binding
+refused that exact plan while allowing a new local integration preview from its
+retained artifact without applying it. Logs:
+`.scratch/wiki-import-strengthened-{node22,node20}.log`; the serialized runner
+exited 0 and cleaned its temporary consumer. Before/after archive hashes are in
+`wiki-import-strengthened-hashes.json`; the runner also asserted equality after
+each runtime. This strengthens the earlier consumer checks without replacing or
+weakening their existing assertions.
+
+Both complete repository Git-default runs, production audit and independent
+fixed-candidate re-review of the strengthened verifier remain pending.
 The compiled Node 20 CLI startup failures remain documented in the
 [agent checkpoint](shared-wiki-agent-verification-2026-10-28.md); an installed
 consumer result must not be substituted for that failed run.
