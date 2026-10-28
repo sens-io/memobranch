@@ -76,12 +76,13 @@ is Debian arm64, not a GitHub-hosted Ubuntu x64 CI result.
 
 Independent read-only review of `dc520a18` covered all 7/7 changed files in disjoint
 3/3 and 4/4 scopes, zero skipped. It independently matched the bundle/runner
-digests, all 330 inventory entries and the four original tests to the input Git
-checkpoint, and verified both probed defaults and 37/37 results. It found one
+digests and all 330 archived file hashes against the recorded inventory.
+Separately it matched 69 tracked inputs and the four original tests to the input
+Git checkpoint, and verified both probed defaults and 37/37 results. It found one
 stale present-tense sentence in the prior recovery record saying no Linux image
 was installed; that sentence now identifies its historical checkpoint and links
-to this later supplement. No product defect or weakened test was found. Re-review
-of that wording correction remains pending.
+to this later supplement. The review found no changed test assertions; its scope
+is this evidence record, rather than a new product-wide code review.
 
 An independently passing platform does not establish the cause of the macOS
 startup waits. The original failed command/output and diagnostic samples remain
