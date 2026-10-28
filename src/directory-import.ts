@@ -63,10 +63,11 @@ export async function readDirectoryImportPlan(path: string): Promise<DirectoryIm
   return await readImportPreview(path) as DirectoryImportPlan;
 }
 
-export async function readImportPreview(path: string): Promise<unknown> {
+export async function readImportPreview(path: string, maximum = MAX_PLAN_BYTES): Promise<unknown> {
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 9 * 1_048_576) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid import preview byte limit');
   const canonical = await realpath(resolve(path));
-  const bytes = await readBoundedFile(dirname(canonical), canonical, MAX_PLAN_BYTES);
-  if (bytes.length > MAX_PLAN_BYTES) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds the 1 MB limit');
+  const bytes = await readBoundedFile(dirname(canonical), canonical, maximum);
+  if (bytes.length > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import preview exceeds its byte limit');
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
 }
 
@@ -176,7 +177,7 @@ async function readBoundedFile(root: string, path: string, maximum = MAX_FILE_BY
   try {
     const start = await handle.stat();
     if (!start.isFile()) throw new AgentMemoryError('VALIDATION_FAILED', 'Import supports regular files only');
-    if (start.size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
+    if (start.size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds its byte limit');
     const chunks: Buffer[] = [];
     let size = 0;
     while (true) {
@@ -185,7 +186,7 @@ async function readBoundedFile(root: string, path: string, maximum = MAX_FILE_BY
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
       size += bytesRead;
-      if (size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds the 1 MB limit');
+      if (size > maximum) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Import file exceeds its byte limit');
       chunks.push(buffer.subarray(0, bytesRead));
     }
     const end = await handle.stat();

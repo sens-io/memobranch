@@ -10,10 +10,11 @@ import { combineSignals, throwIfCancelled, withOperation } from './operation.js'
 import { authorize, principalFromEnv, type Permission, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
-import { wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
+import { wikiIntegrationToolSchema, wikiMergeToolSchema, wikiSnapshotToolSchema, wikiToolInput, wikiToolResult } from './wiki-tool.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema, experienceToolInput, experienceToolResult } from './experience-tool.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
+import { SharedWikiImporter, sharedWikiImportApplySchema, sharedWikiImportPrepareSchema } from './shared-wiki-import.js';
 import { VERSION } from './version.js';
 
 export const name = 'memobranch-deepseek-harness';
@@ -126,6 +127,35 @@ function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Pr
       includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret content; source keys remain required.' },
     }, output: jsonOutput,
     async execute(args, exec) { return runJson(vault, exec.signal, async () => wikiToolResult(await shared.snapshot(wikiToolInput(sharedWikiSnapshotSchema, args)))); },
+  }));
+  if (!granted(principal, 'write')) return;
+  const importer = new SharedWikiImporter(vault, { configPath: config.sharedWikiConfig });
+  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_import_prepare',
+    description: 'Prepare a complete signed copy proposal from a configured source and required catalog expectedCommit. Read/write required; no capture, extraction, model or approval. Compiled material, not original raw evidence. Inspect the whole proposal before separate import_apply with confirm:true; plaintext offline copies cannot be recalled. Paths, identities and grants remain host-owned.',
+    parameters: {
+      sourceId: { type: 'string', required: true, description: 'Host-configured source name from the shared catalog.' },
+      expectedCommit: { type: 'string', required: true, description: 'Full catalog pin, not a selectable commit override.' },
+      pageKeys: { type: 'array', items: { type: 'string' }, required: true, description: '1–25 distinct Wiki keys, at most 200 characters each.' },
+      scope: { type: 'string', enum: scopes, description: 'Optional tighter destination scope; never broadens source scope.' },
+      sensitivity: { type: 'string', enum: sensitivities, description: 'Optional higher destination sensitivity.' },
+      includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive content.' },
+      includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret content; keys remain required.' },
+    }, output: jsonOutput,
+    async execute(args, exec) { return runJson(vault, exec.signal, async () => {
+      const prepared = await importer.prepare(wikiToolInput(sharedWikiImportPrepareSchema, args));
+      return wikiToolResult(prepared, prepared.plan, 'memory_shared_wiki_import_apply');
+    }); },
+  }));
+  if (granted(principal, 'review')) ctx.tools.register(defineTool({ name: 'memory_shared_wiki_import_apply',
+    description: 'Explicitly confirm a completely reviewed signed copy with read/write/review authority and confirm:true. Rechecks current host source, pin, grants and keys. Retains immutable compiled evidence only, no Wiki approval or integration. Plaintext offline copies cannot be recalled.',
+    parameters: {
+      plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete unchanged copy plan returned by import_prepare.' },
+      confirm: { type: 'boolean', required: true, description: 'Must be true after explicit approval of the complete copy proposal.' },
+    }, output: jsonOutput,
+    async execute(args, exec) { return runJson(vault, exec.signal, () => {
+      const input = wikiToolInput(sharedWikiImportApplySchema, args);
+      return importer.apply(input.plan, { confirm: input.confirm });
+    }); },
   }));
 }
 
@@ -266,6 +296,30 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   }
   if (granted(principal, 'write')) {
     if (granted(principal, 'read')) ctx.tools.register(defineTool({
+      name: 'memory_wiki_integration_prepare',
+      description: 'Prepare human-authored Wiki integration from a retained imported evidence ID and exact target revision (zero creates). Keeps local support and imported restrictions/conflicts. No model, remote read or automatic approval. Inspect the complete comparison and preview before separate memory_wiki_apply with review permission. Private output requires explicit selection and keys.',
+      parameters: {
+        evidenceId: { type: 'string', required: true, description: 'Retained imported Wiki artifact evidence ID, not an ordinary raw evidence ID.' },
+        pageKey: { type: 'string', required: true, description: 'Target Wiki key, at most 200 characters; not source: or legacy:.' },
+        expectedRevision: { type: 'integer', required: true, description: 'Zero creates a new page; otherwise the exact current revision read by the caller.' },
+        title: { type: 'string', required: true, description: 'Human-authored title, 1–300 characters.' },
+        summary: { type: 'string', required: true, description: 'Human-authored summary, 1–2000 characters.' },
+        body: { type: 'string', required: true, description: 'Complete human-authored Markdown body, 1–100000 characters.' },
+        pageType: { type: 'string', enum: ['entity', 'concept', 'synthesis', 'comparison', 'query'], description: 'Optional page purpose; cannot change an existing target purpose.' },
+        scope: { type: 'string', enum: scopes, description: 'Optional tighter scope.' },
+        sensitivity: { type: 'string', enum: sensitivities, description: 'Optional higher sensitivity for authored content.' },
+        status: { type: 'string', enum: ['active', 'conflicted'], description: 'May add a conflict; cannot clear an existing one.' },
+        conditions: { type: 'array', items: { type: 'string' }, description: 'Up to 100 distinct additional conditions, each 1–4000 characters.' },
+        uncertainty: { type: 'array', items: { type: 'string' }, description: 'Up to 100 distinct additional uncertainties, each 1–4000 characters.' },
+        includeSensitive: { type: 'boolean', description: 'Explicitly select authorized sensitive input and output.' },
+        includeSecret: { type: 'boolean', description: 'Explicitly select authorized secret input and output; keys remain required.' },
+      }, output: jsonOutput,
+      async execute(args, exec) { return runJson(vault, exec.signal, async () => {
+        const prepared = await vault.wikiIntegrationPrepare(wikiToolInput(wikiIntegrationToolSchema, args));
+        return wikiToolResult(prepared, prepared.plan);
+      }); },
+    }));
+    if (granted(principal, 'read')) ctx.tools.register(defineTool({
       name: 'memory_wiki_merge_prepare',
       description: 'With read/write authority, prepare a signed same-vault historical/current merge from manually authored text. No model call, approval or apply flag. Inspect all comparison/preview text, then separately approve with memory_wiki_apply and review authority. No branch/shared-vault import. Complete escaped review and approval envelope must fit 9 MiB.',
       parameters: {
@@ -350,7 +404,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
   if (granted(principal, 'review')) {
     ctx.tools.register(defineTool({
       name: 'memory_wiki_apply',
-      description: 'Validate and atomically apply an explicit Wiki ingest, filing, repair or human-authored merge plan. Requires review permission. Call only after explicit approval of the complete reviewed plan.',
+      description: 'Validate and atomically apply an explicit Wiki ingest, filing, repair, human-authored merge or imported-evidence integration plan. Requires review permission. Call only after explicit approval of the complete reviewed plan.',
       parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete untrusted Wiki plan; paths, citations, authorization, and revisions are revalidated.' } },
       output: jsonOutput,
       async execute(args, exec) {

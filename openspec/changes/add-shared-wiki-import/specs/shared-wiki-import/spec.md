@@ -79,3 +79,26 @@ destination wait and existing safe commit boundary.
 - **WHEN** a complete source artifact or plan exceeds bounds, is malformed, or tries to include an attachment/credential
 - **THEN** the operation refuses the complete result without truncation or execution
 - **AND** accepted copies remain clearly identified as compiled material that cannot be recalled from offline recipients
+
+### Requirement: Native adapters must preserve separate review and host authority
+The CLI, MCP, Harness and Web adapters SHALL expose complete copy preparation,
+explicit copy confirmation and human-authored integration preparation, with
+ordinary Wiki preview and separate approval. They SHALL accept strict bounded
+inputs without caller-selected paths, identities, network targets, grants or
+JSON cancellation signals. The CLI MAY read operator-selected bounded local
+proposal files; these SHALL NOT select source bindings or authorization.
+
+#### Scenario: A complete proposal is passed through the native adapter
+- **WHEN** an authorized caller prepares and separately confirms a fixed-version copy, authors integration and separately approves its Wiki plan
+- **THEN** the actual CLI/SDK/HTTP result preserves full comparison and provenance without model calls or automatic approval
+- **AND** complete reviews and resubmittable approval envelopes fit their adapter byte limits or are refused without truncation
+
+#### Scenario: Formatted proposal files and unrelated imports have different bounds
+- **WHEN** a CLI copy approval file exceeds the compact canonical plan size solely through representation but remains within its documented 9 MiB bound
+- **THEN** the original signed plan may be validated without weakening its 1,000,000-byte canonical bound
+- **AND** existing directory and experience input file bounds remain unchanged
+
+#### Scenario: Cancellation or obsolete Web selection cannot approve
+- **WHEN** native cancellation, disconnection or provider disposal interrupts an actual source/destination wait, or Web input/source/navigation/session changes invalidate a preview
+- **THEN** only owned work is cancelled and stale results cannot restore an approval control
+- **AND** no partial write occurs before readiness; already safely committed operations keep existing completion/recovery behavior

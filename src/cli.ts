@@ -18,6 +18,8 @@ import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImport
 import { mergeOptionsSchema } from './wiki-merge.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { SharedWikiReader } from './shared-wiki.js';
+import { SharedWikiImporter, sharedWikiImportPrepareSchema } from './shared-wiki-import.js';
+import { wikiIntegrationToolSchema, wikiToolResult } from './wiki-tool.js';
 import { createCloudWikiCredential, cloudWikiAccountTemplate, inspectCloudWikiAccounts } from './shared-wiki-cloud-host.js';
 import { startCloudWikiServer, type CloudWikiServerHandle } from './shared-wiki-cloud-server.js';
 
@@ -374,6 +376,59 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'import-prepare':
+    case 'import-apply':
+    case 'integration-prepare': {
+      const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
+        ...(action === 'import-prepare' ? ['expected-commit', 'scope', 'sensitivity', 'include-sensitive', 'include-secret']
+          : action === 'import-apply' ? ['file', 'confirm'] : ['file', 'include-sensitive', 'include-secret'])]);
+      for (const flag of args.flags.keys()) if (!allowed.has(flag)) throw new Error(`Unsupported Wiki import/integration flag: --${flag}`);
+      for (const flag of ['confirm', 'include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      authorize(vault.principal, 'read'); authorize(vault.principal, 'write');
+      if (action === 'import-apply') {
+        authorize(vault.principal, 'review');
+        if (!flagBoolean(args, 'confirm')) throw new Error('Copy approval requires --confirm after reviewing the complete plan');
+      }
+      if (action !== 'import-prepare' && input.positionals.length) throw new Error('This operation takes a JSON file without positional arguments');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        if (action === 'integration-prepare') {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Integration input requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file, 9 * 1_048_576);
+          if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('An integration object is required');
+          const parsed = wikiIntegrationToolSchema.safeParse({ ...document,
+            ...(args.flags.has('include-sensitive') ? { includeSensitive: flagBoolean(args, 'include-sensitive') } : {}),
+            ...(args.flags.has('include-secret') ? { includeSecret: flagBoolean(args, 'include-secret') } : {}) });
+          if (!parsed.success) throw new Error('Invalid bounded human-authored Wiki integration input');
+          const prepared = await vault.wikiIntegrationPrepare(parsed.data);
+          print(wikiToolResult(prepared, prepared.plan)); return;
+        }
+        const configPath = process.env.AMEM_SHARED_WIKI_CONFIG;
+        if (!configPath) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+        const importer = new SharedWikiImporter(vault, { configPath });
+        if (action === 'import-apply') {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Copy approval requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file, 9 * 1_048_576);
+          const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
+          print(await importer.apply(plan, { confirm: true })); return;
+        }
+        const parsed = sharedWikiImportPrepareSchema.safeParse({ sourceId: requiredPositional(input, 0, 'configured shared source ID'),
+          pageKeys: input.positionals.slice(1), expectedCommit: requiredFlag(args, 'expected-commit'),
+          ...(args.flags.has('scope') ? { scope: requiredFlag(args, 'scope') } : {}),
+          ...(args.flags.has('sensitivity') ? { sensitivity: requiredFlag(args, 'sensitivity') } : {}),
+          includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') });
+        if (!parsed.success) throw new Error('Invalid fixed-version Wiki import selection');
+        const prepared = await importer.prepare(parsed.data);
+        print(wikiToolResult(prepared, prepared.plan, 'memory_shared_wiki_import_apply'));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
     case 'shared-list':
     case 'shared-snapshot': {
       const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
@@ -754,6 +809,9 @@ Usage:
   amem wiki shared-list --root CALLER_VAULT
   amem wiki shared-snapshot <configured-source-id> <page-key...> --root CALLER_VAULT [--expected-commit CATALOG_PIN] [--include-sensitive] [--include-secret]
   amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
+  amem wiki import-prepare <configured-source-id> <page-key...> --expected-commit CATALOG_PIN [--scope SCOPE] [--sensitivity LEVEL] [--include-sensitive] [--include-secret]
+  amem wiki import-apply --file COPY.json --confirm  (retains evidence only)
+  amem wiki integration-prepare --file INTEGRATION.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
   amem wiki jobs enqueue <evidence-id...> [--max-pages N]

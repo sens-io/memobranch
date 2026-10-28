@@ -14,6 +14,7 @@ export const sharedWikiImportPrepareSchema = selectionSchema.extend({ scope: z.e
 const planBody = z.object({ version: z.literal(1), kind: z.literal('shared-wiki-import-plan'), vaultId: identity, tenantId: identity, configHash: hash,
   selection: selectionSchema, artifact: wikiImportArtifactSchema, scope: z.enum(scopes), sensitivity: z.enum(sensitivities) }).strict();
 export const sharedWikiImportPlanSchema = planBody.extend({ proof: hash }).strict();
+export const sharedWikiImportApplySchema = z.object({ plan: sharedWikiImportPlanSchema, confirm: z.literal(true) }).strict();
 export type SharedWikiImportPlan = z.infer<typeof sharedWikiImportPlanSchema>;
 export type SharedWikiImportPrepareOptions = z.input<typeof sharedWikiImportPrepareSchema> & { signal?: AbortSignal | undefined };
 

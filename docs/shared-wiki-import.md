@@ -1,7 +1,7 @@
 # Explicit compiled Wiki imports (development candidate)
 
-The library copy operation is implemented. Human-authored library integration is
-implemented and under verification; CLI/MCP/Harness/Web import adapters are still pending. This is not
+The library, CLI, MCP and Harness copy/integration operations are implemented.
+The agent/CLI adapters are under verification; Web import controls remain pending. This is not
 batch acceptance, an npm release, Git branch merge or a cloud sharing service.
 
 Reuse the [host-owned pinned sharing configuration](pinned-shared-wiki.md). Do not
@@ -106,8 +106,64 @@ replay rolls back pre-action housekeeping before projection rebuilds; unrelated
 later knowledge/expiry cannot turn it into a new commit. Old programs reject the
 new plan kind and integration-tagged completion record; stop older processes
 before enabling this operation. The library signal cancels owned work,
-including actual destination waits. CLI/agent/Web preparation adapters and their
-batch acceptance remain pending.
+including actual destination waits. Web preparation controls and whole-batch
+acceptance remain pending.
+
+## CLI and Agent tools (development source)
+
+The host supplies `AMEM_SHARED_WIKI_CONFIG` using the existing local/cloud/Git
+sharing configuration. Requests never select that file, a source root, a network
+endpoint, identity, grant or encryption key. Copy preparation and integration
+preparation need read/write; copy confirmation needs read/write/review; ordinary
+Wiki application needs review plus the plan's current read access.
+
+```sh
+# Use your already configured destination and host identity.
+amem wiki shared-list --root "$DESTINATION"
+amem wiki import-prepare team-wiki concept:deployment --root "$DESTINATION" \
+  --expected-commit "$CATALOG_PIN" > "$PRIVATE_COPY_FILE"
+# Inspect the COMPLETE copy proposal before confirming it.
+amem wiki import-apply --root "$DESTINATION" --file "$PRIVATE_COPY_FILE" --confirm
+
+# Write an integration JSON object with the returned evidenceId, pageKey,
+# expectedRevision, title, summary and body; use the library example's fields.
+amem wiki integration-prepare --root "$DESTINATION" --file "$PRIVATE_DRAFT_FILE" \
+  > "$PRIVATE_INTEGRATION_FILE"
+amem wiki preview --root "$DESTINATION" --file "$PRIVATE_INTEGRATION_FILE"
+# Inspect all comparison/preview pages, then approve in a separate operation.
+amem wiki apply --root "$DESTINATION" --file "$PRIVATE_INTEGRATION_FILE"
+```
+
+The variables above name operator-selected private files; keep them outside
+versioned knowledge with owner-only access. Preparation does not save a proposal
+file automatically. `import-prepare` requires the exact full catalog pin and
+1–25 distinct keys, with optional tighter `--scope` / `--sensitivity` and private
+selection flags. `integration-prepare` accepts the strict human-authored JSON
+fields shown above and optional private selection flags; it never accepts an
+apply option. An explicit flag overrides the corresponding file selection.
+Copy confirmation and integration input require bounded local JSON files, not
+stdin. Their saved representation is limited to 9 MiB (including formatting),
+while canonical signed plans retain the stricter 1,000,000-byte bound. Existing
+directory/experience import file limits remain 1 MB. Complete escaped reviews and
+approval envelopes must also fit 9 MiB; oversized results are refused, never cut.
+SIGINT/SIGTERM cancels owned source/destination waits under existing safe commit
+rules; it does not kill another operation's lock owner.
+
+MCP and DeepSeek Harness provide:
+
+| Tool | Arguments and effect |
+| --- | --- |
+| `memory_shared_wiki_import_prepare` | `sourceId`, required `expectedCommit`, `pageKeys`, optional classification/private selection. Returns the complete signed copy `plan`; no capture. |
+| `memory_shared_wiki_import_apply` | `{ plan, confirm: true }`. Rechecks the current remote/local source and retains evidence only. |
+| `memory_wiki_integration_prepare` | The strict library input without a JSON `signal`. Returns the complete artifact/current-target comparison, preview and signed integration plan. |
+| `memory_wiki_preview` / `memory_wiki_apply` | Existing separate Wiki review/application with `{ plan }`. Never submit a copy plan here. |
+
+The copy tools are registered only when host sharing is configured and the current
+principal has the required preparation/confirmation permissions. Harness also
+hides integration preparation without read/write; MCP rechecks authority on the
+registered tool. Integration of an already retained artifact works without remote
+sharing configuration. Transport/lifecycle cancellation belongs to the host; JSON
+`signal`, roots, principals and extra apply/authority fields are refused.
 
 Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
 plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration
