@@ -76,6 +76,24 @@ cancellations or skips (`wiki-import-recovery-related-2.log` and
 `wiki-import-recovery-types-2.log` and `wiki-import-recovery-compile-3.log`.
 Corrected full checks and fixed-candidate re-review remain pending.
 
+Read-only re-review of `f5e5ad89` covered 4/4 files, zero skipped, and confirmed
+the worker guard, per-path health assertions and capture barrier. It found one
+narrow remaining observation gap: the opposite-direction fixture's own Wiki stub
+bypasses prototype mocking, and its source counters were recorded after prepare.
+The counter baselines now precede both preparations; no behavioral assertion or
+deadline was removed. The final recovery file passed **8/8** on Node 22 and compiled
+Node 20.0.0, with zero failures/cancellations/skips, in
+`wiki-import-recovery-counter-{node22,node20}.log`. Corrected test compilation
+passed (`wiki-import-recovery-counter-compile.log`). Final full/re-review remains pending.
+
+The original complete compiled Node 20 adapter collection was also rerun from the
+current compilation, without substitutions: **35/37**, the same two actual CLI
+source-wait observations failed at their original 10-second bounds, exit 1
+(`wiki-import-adapters-node20-current-full.log`, 134722.676459 ms). The recorded
+child outcomes were `code null`, `signal SIGTERM`, empty stderr. Earlier macOS
+stack samples remain relevant diagnostics, not a new causal finding or a passed
+gate. The stronger recovery tests do not turn this failed aggregate into success.
+
 Database changes: none. Data migration: none. Configuration changes: none.
 Only synthetic local grant/config files were used. No real access, push, npm
 publication, deployment, external service or account was configured.

@@ -54,13 +54,20 @@ unavailable hard operating-system memory guarantee.
 - **AND** exact retry and authorized original/page retrieval preserve immutable bytes
 
 ### Requirement: Local processing must preserve adapter and disclosure boundaries
+The system SHALL preserve the existing local-operator and server disclosure boundaries.
 Local library/CLI use MAY accept operator-selected paths; MCP/Harness/Web requests
 SHALL NOT gain arbitrary filesystem readers, executable choices, credentials,
 grant editing or automatic model calls through this capability. Public/Agent
-DTOs and model inputs SHALL omit encoded original and page image blobs unless a
-separately authorized bounded media read explicitly requests them.
+DTOs and all model inputs SHALL always omit encoded original and page image blobs.
+A separately authorized bounded local library/CLI media read MAY return verified
+bytes to its operator; it SHALL NOT add a model-facing or remote media endpoint.
 
 #### Scenario: A server caller attempts a local file or executable override
 - **WHEN** a request supplies a local source path, processor path, arbitrary command, output path or model URL through a server tool
 - **THEN** the unsupported fields are rejected before local file access or process execution
 - **AND** normal authorized evidence inspection retains existing redaction and size limits
+
+#### Scenario: Local media inspection precedes Wiki ingestion
+- **WHEN** an authorized local operator reads retained original/page bytes and later prepares Wiki knowledge from the evidence
+- **THEN** the local media read retains its own authority and byte limits
+- **AND** the subsequent model input and Agent DTOs still omit all original and page image encodings

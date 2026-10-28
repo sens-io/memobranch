@@ -189,9 +189,10 @@ test('Wiki import recovery: both opposite vault imports reach capture together a
   await writeFile(pathA, JSON.stringify({ version: 1, sources: [{ ...b.binding, readers: [{ id: a.source.principal.id, tenantId: configA.tenantId }] }] }));
   await writeFile(pathB, JSON.stringify({ version: 1, sources: [{ ...a.binding, readers: [{ id: b.source.principal.id, tenantId: configB.tenantId }] }] }));
   const importerA = new SharedWikiImporter(a.source, { configPath: pathA }), importerB = new SharedWikiImporter(b.source, { configPath: pathB });
+  const countA = a.calls(), countB = b.calls();
   const [pa, pb] = await Promise.all([importerA.prepare({ ...b.input, expectedCommit: b.binding.commit }), importerB.prepare({ ...a.input, expectedCommit: a.binding.commit })]);
   const beforeA = await files(a.source.root), beforeB = await files(b.source.root);
-  const headA = await a.source.git.run(['rev-parse', 'HEAD']), headB = await b.source.git.run(['rev-parse', 'HEAD']), countA = a.calls(), countB = b.calls();
+  const headA = await a.source.git.run(['rev-parse', 'HEAD']), headB = await b.source.git.run(['rev-parse', 'HEAD']);
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
   const both = deferred(), entered = new Set<string>(), capture = MemoryVault.prototype.captureWikiImport;
   t.mock.method(MemoryVault.prototype, 'captureWikiImport', async function(this: MemoryVault, ...args: Parameters<typeof capture>) {
