@@ -100,7 +100,10 @@ model-call observations. Its final corrected `833a330c` candidate passed **1041
 checks under each Git default**, with strict specs **32/32** after adding the
 pending OCR proposal. Product/dependencies/verifiers and the archive digest remain
 unchanged. These later results still retain the separately failed **35/37**
-compiled minimum Node 20 adapter aggregate; batch 4 is not accepted.
+compiled macOS minimum Node 20 adapter aggregate; batch 4 is not accepted.
+The later [Linux supplement](shared-wiki-import-linux-verification-2026-10-28.md)
+passed that complete collection 37/37 on Node 20.0.0 under each actually verified
+Git default. It does not repeat installed consumers or erase the macOS failure.
 
 Database changes: none. Data migration: none. Configuration changes: no new format
 or real configuration edits. No push, npm publication, deployment, account/grant

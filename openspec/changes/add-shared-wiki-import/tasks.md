@@ -19,5 +19,9 @@
 The first eight checks cover their recorded functional scenarios, not full batch
 acceptance. See the [requirement/evidence mapping](../../../docs/shared-wiki-import-recovery-verification-2026-10-28.md#task-verification-mapping).
 The last combined gate stays open: the complete minimum Node 20 adapter collection
-still fails 2/37 actual CLI wait observations. Do not substitute isolated passing
-subsets, installed consumers or stronger recovery tests for that result.
+on macOS still fails 2/37 actual CLI wait observations. The same complete collection
+passed 37/37 on Linux Node 20.0.0 under both actually probed defaults
+([supplement](../../../docs/shared-wiki-import-linux-verification-2026-10-28.md));
+that result does not erase the retained macOS failures or prove their cause.
+Do not substitute isolated passing subsets, installed consumers or stronger
+recovery tests for the failed macOS result.

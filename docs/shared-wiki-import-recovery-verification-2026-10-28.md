@@ -134,12 +134,20 @@ the recorded production audit of 0 vulnerabilities. Fixed-candidate test/spec/
 design reviews are recorded above and in the OCR design checkpoint.
 
 The last combined task remains unchecked because the original full compiled
-minimum Node 20 adapter collection still failed **35/37**. Passing full Node 22,
+minimum Node 20 adapter collection on macOS still failed **35/37**. Passing full Node 22,
 installed Node 20 consumers, or additional Node 20 recovery tests cannot substitute
 for that failed result. Independent final record review of `8a4dd8a8` covered all
 7/7 changed files in two disjoint scopes (3/3 and 4/4), zero skipped, and found no
 confirmed new issue in those records. It confirmed that the failed minimum-runtime
 gate remains open; no batch or complete-roadmap acceptance is claimed.
+
+The [supplemental Linux check](shared-wiki-import-linux-verification-2026-10-28.md)
+later ran that same complete collection under **Node 20.0.0** with unchanged
+assertions/deadlines: **37/37 under each actually probed Git default**, no failures,
+cancellations or skips. The initial environment-only default labels were found
+insufficient and are not counted as both defaults; corrected runs first performed
+actual implicit initialization. This is additional Debian arm64 evidence, not a
+GitHub CI result or a claim that the retained macOS startup waits are fixed.
 
 Database changes: none. Data migration: none. Configuration changes: none.
 Only synthetic local grant/config files were used. No real access, push, npm
