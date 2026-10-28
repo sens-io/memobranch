@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import { SharedWikiImporter, type SharedWikiImportPlan } from '../src/shared-wiki-import.js';
 import { MemoryVault } from '../src/vault.js';
+import { LlmClient } from '../src/llm.js';
 import { operationSignal } from '../src/operation.js';
 import { withFileLock } from '../src/utils.js';
 import { integrity, pageKey, sharedFixture } from './shared-wiki-fixture.js';
@@ -17,6 +18,7 @@ import type { EvidenceMeta } from '../src/types.js';
 async function fixture(t: TestContext) {
   const f = await sharedFixture(t);
   f.principal.permissions = ['read', 'write', 'review'];
+  noModels(t);
   const importer = new SharedWikiImporter(f.caller, { configPath: f.configPath, env: f.env });
   const { plan } = await importer.prepare({ ...f.input, expectedCommit: f.binding.commit });
   return { ...f, importer, plan };
@@ -48,10 +50,18 @@ async function settled(root: string) {
 // all JavaScript cleanup. The reopened vault must use the on-disk transaction.
 const suffix = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
 const worker = `
+import { appendFileSync } from 'node:fs';
 import { MemoryVault } from ${JSON.stringify(new URL('../src/vault' + suffix, import.meta.url).href)};
+import { LlmClient } from ${JSON.stringify(new URL('../src/llm' + suffix, import.meta.url).href)};
 import { SharedWikiImporter } from ${JSON.stringify(new URL('../src/shared-wiki-import' + suffix, import.meta.url).href)};
 import { VaultTransaction } from ${JSON.stringify(new URL('../src/transaction' + suffix, import.meta.url).href)};
 const [root, configPath, encodedPlan, boundary] = process.argv.slice(1);
+for (const method of ['embed', 'extractMemories', 'answer', 'wiki']) {
+  LlmClient.prototype[method] = async function() {
+    appendFileSync(root + '/.amem/import-worker-model-calls', method + '\\n');
+    throw new Error('Unexpected model entry point during import recovery');
+  };
+}
 const vault = new MemoryVault(root, { masterKey: '31'.repeat(32) });
 const plan = JSON.parse(encodedPlan);
 const message = value => new Promise(resolve => process.send(value, resolve));
@@ -77,8 +87,9 @@ process.disconnect();
 `;
 
 async function crash(root: string, configPath: string, plan: SharedWikiImportPlan, boundary: string) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AMEM_') && key !== 'OPENAI_API_KEY'));
   const child = spawn(process.execPath, [...(suffix === '.ts' ? ['--import', 'tsx'] : []), '--input-type=module', '--eval', worker,
-    root, configPath, JSON.stringify(plan), boundary], { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    root, configPath, JSON.stringify(plan), boundary], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const messages: unknown[] = []; let stderr = '';
   child.on('message', value => messages.push(value)); child.stdout!.resume();
   child.stderr!.on('data', value => { stderr += value.toString(); });
@@ -88,6 +99,8 @@ async function crash(root: string, configPath: string, plan: SharedWikiImportPla
   }).finally(() => clearTimeout(timer));
   assert.deepEqual(result, { code: null, signal: 'SIGKILL' }, stderr);
   assert.deepEqual(messages, [{ boundary }], `The actual requested boundary must be reached: ${stderr}`);
+  const marker = join(root, '.amem/import-worker-model-calls');
+  assert.equal(existsSync(marker) ? await readFile(marker, 'utf8') : '', '', 'Even a swallowed worker model call must fail verification');
 }
 
 for (const boundary of ['evidence', 'log', 'ready', 'commit']) {
@@ -168,8 +181,9 @@ test('Wiki import recovery: cancellation during the actual destination writer wa
   assert.deepEqual(await integrity(f.source), sourceBefore); await settled(f.caller.root);
 });
 
-test('Wiki import recovery: opposite vault imports complete concurrently without holding source and destination locks together', { timeout: 15_000 }, async t => {
+test('Wiki import recovery: both opposite vault imports reach capture together and complete without deadlock', { timeout: 15_000 }, async t => {
   const a = await sharedFixture(t), b = await sharedFixture(t);
+  noModels(t);
   const configA = await a.source.config(), configB = await b.source.config();
   const pathA = join(a.source.root, '.amem/shared-opposite-import.json'), pathB = join(b.source.root, '.amem/shared-opposite-import.json');
   await writeFile(pathA, JSON.stringify({ version: 1, sources: [{ ...b.binding, readers: [{ id: a.source.principal.id, tenantId: configA.tenantId }] }] }));
@@ -179,9 +193,23 @@ test('Wiki import recovery: opposite vault imports complete concurrently without
   const beforeA = await files(a.source.root), beforeB = await files(b.source.root);
   const headA = await a.source.git.run(['rev-parse', 'HEAD']), headB = await b.source.git.run(['rev-parse', 'HEAD']), countA = a.calls(), countB = b.calls();
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
+  const both = deferred(), entered = new Set<string>(), capture = MemoryVault.prototype.captureWikiImport;
+  t.mock.method(MemoryVault.prototype, 'captureWikiImport', async function(this: MemoryVault, ...args: Parameters<typeof capture>) {
+    assert.ok([a.source.root, b.source.root].includes(this.root));
+    entered.add(this.root); if (entered.size === 2) both.resolve();
+    let abort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      abort = () => reject(controller.signal.reason);
+      if (controller.signal.aborted) abort(); else controller.signal.addEventListener('abort', abort, { once: true });
+    });
+    try { await Promise.race([both.promise, cancelled]); }
+    finally { controller.signal.removeEventListener('abort', abort); }
+    return capture.call(this, ...args);
+  });
   let result: Awaited<ReturnType<SharedWikiImporter['apply']>>[];
   try {
     result = await Promise.all([importerA.apply(pa.plan, { confirm: true, signal: controller.signal }), importerB.apply(pb.plan, { confirm: true, signal: controller.signal })]);
+    assert.deepEqual(entered, new Set([a.source.root, b.source.root]));
     assert.equal(controller.signal.aborted, false); assert.equal(result.every(copy => !!copy.commit && !copy.duplicate), true);
   } finally { clearTimeout(timer); controller.abort(); }
   for (const [vault, before, head, copy, plan] of [[a.source, beforeA, headA, result[0]!, pa.plan], [b.source, beforeB, headB, result[1]!, pb.plan]] as const) {
@@ -196,6 +224,13 @@ test('Wiki import recovery: opposite vault imports complete concurrently without
 });
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+function noModels(t: TestContext) {
+  const calls: string[] = [];
+  for (const method of ['embed', 'extractMemories', 'answer', 'wiki'] as const) {
+    t.mock.method(LlmClient.prototype, method, async () => { calls.push(method); throw new Error('Unexpected model entry point during import recovery'); });
+  }
+  t.after(() => assert.deepEqual(calls, [], 'Even a swallowed parent model call must fail verification'));
+}
 async function until(predicate: () => Promise<boolean>) {
   const end = performance.now() + 5000;
   while (!await predicate()) { assert.ok(performance.now() < end, 'Expected the actual destination queue contender'); await delay(10); }
