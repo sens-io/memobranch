@@ -977,3 +977,78 @@ test('shared UI: logout clears selected names and drafts and suppresses pending 
   ui.run('logout()');assert.equal(request.signal?.aborted,true);assert.equal(keys.value,'');assert.equal(source.value,'');
   pending.resolve(success(sharedResult('team-one','AFTER_LOGOUT_SHARED_SECRET')));await settle();assert.doesNotMatch(ui.body.textContent,/AFTER_LOGOUT_SHARED_SECRET|Team one/);
 });
+
+const importArtifact={source:{id:'team-one',title:'Imported team <script>title()</script>',commit:'a'.repeat(40)},pages:[
+ {key:'concept:shared',title:'Imported page',revision:1,scope:'user',sensitivity:'internal',body:'COMPLETE_IMPORTED_BODY <script>data()</script>',conditions:['Source condition'],uncertainty:['Unverified original']}],
+ sources:[{id:'ev-original',sha256:'source-hash'}],rules:[{id:'rule-original',revision:1}],support:{conditions:['Current source condition']}};
+const importPlan={kind:'shared-wiki-import-plan',proof:'signed-copy-proof',selection:{sourceId:'team-one',expectedCommit:'a'.repeat(40)},artifact:importArtifact,scope:'user',sensitivity:'internal'};
+const integratedPlan={...plan,kind:'integrate',proof:'signed-integration-proof',integration:{evidenceId:'ev-123456789abc'}};
+const integratedResult={plan:integratedPlan,comparison:{artifact:importArtifact,current:wikiDocument},preview:{...preview,kind:'integrate'}};
+function importRoute(request:Request){return success(request.operation==='shared-catalog'?sharedCatalog:request.operation==='shared-import-prepare'?{plan:importPlan}
+ :request.operation==='shared-import-apply'?{evidenceId:'ev-123456789abc',commit:'c'.repeat(40),duplicate:false}:request.operation==='integration-prepare'?integratedResult
+ :request.operation==='preview'?integratedResult.preview:{pageIds:['wiki-result'],commit:'d'.repeat(40)});}
+async function importsPage(ui:ReturnType<typeof harness>){const output=await ui.run('wikiImports()') as Element;ui.app.append(output);await settle();return output;}
+async function prepareImportCopy(output:Element){named(output,'importKeys').value='concept:shared';await named(output,'importKeys').closest('form')!.fire('submit');await settle();}
+async function prepareImportIntegration(output:Element){
+ for(const [name,value] of Object.entries({importEvidenceId:'ev-123456789abc',integrationKey:'return-policy',integrationRevision:'2',integrationTitle:'Reviewed title',integrationSummary:'Human summary',integrationBody:'HUMAN_DRAFT <script>literal()</script>'}))named(output,name).value=value;
+ await named(output,'integrationBody').closest('form')!.fire('submit');await settle();
+}
+
+test('import UI: opening only lists sources; full copy and human integration use two checked, separate approvals',async()=>{
+ const ui=harness(importRoute),output=await importsPage(ui);assert.deepEqual(ui.requests.map(request=>request.operation),['shared-catalog']);
+ await prepareImportCopy(output);assert.match(output.textContent,/COMPLETE_IMPORTED_BODY <script>data\(\)<\/script>/);assert.match(output.textContent,/Current source condition/);
+ const copy=button(output,'确认复制为证据');assert.equal(copy.disabled,true);named(output,'copyChecked').checked=true;await named(output,'copyChecked').fire('change');
+ ui.context.confirmResult=false;await copy.fire('click');assert.equal(ui.requests.length,2);ui.context.confirmResult=true;await copy.fire('click');await settle();
+ assert.equal(ui.requests[2]!.operation,'shared-import-apply');assert.deepEqual(ui.requests[2]!.data,{plan:importPlan,confirm:true});
+ assert.equal(named(output,'importEvidenceId').value,'ev-123456789abc');assert.equal(ui.requests.some(request=>request.operation==='integration-prepare'||request.operation==='apply'),false);
+ await prepareImportIntegration(output);assert.match(output.textContent,/COMPLETE_IMPORTED_BODY/);assert.match(output.textContent,/旧政策|新政策/);assert.match(output.textContent,/受影响页面/);
+ assert.equal(ui.requests[3]!.operation,'integration-prepare');assert.equal(ui.requests[3]!.data.body,'HUMAN_DRAFT <script>literal()</script>');assert.equal(ui.requests[4]!.operation,'preview');
+ const approve=button(output,'批准并保存整合知识');assert.equal(approve.disabled,true);named(output,'integrationChecked').checked=true;await named(output,'integrationChecked').fire('change');
+ await approve.fire('click');await settle();assert.deepEqual(ui.requests.slice(-2).map(request=>request.operation),['preview','apply']);assert.deepEqual(ui.requests.at(-1)!.data,{plan:integratedPlan,confirm:true});
+ assert.match(output.textContent,/整合审核已完成/);assert.equal(nodes(output).some(node=>node.tagName==='script'),false);
+});
+
+test('import UI: source/classification edits and authored changes invalidate old approvals without automatic retry',async()=>{
+ const ui=harness(importRoute),output=await importsPage(ui);await prepareImportCopy(output);named(output,'copyChecked').checked=true;await named(output,'copyChecked').fire('change');
+ const copy=button(output,'确认复制为证据');named(output,'importSource').value='team-two';await named(output,'importSource').fire('change');assert.equal(copy.disabled,true);
+ await copy.fire('click');assert.equal(ui.requests.some(request=>request.operation==='shared-import-apply'),false);
+ await prepareImportIntegration(output);named(output,'integrationChecked').checked=true;await named(output,'integrationChecked').fire('change');
+ const approval=button(output,'批准并保存整合知识');named(output,'integrationSensitivity').value='public';await named(output,'integrationSensitivity').fire('change');assert.equal(approval.disabled,true);assert.doesNotMatch(output.textContent,/COMPLETE_IMPORTED_BODY/);
+ await approval.fire('click');assert.equal(ui.requests.some(request=>request.operation==='apply'),false);
+ await prepareImportIntegration(output);named(output,'integrationBody').value='Edited after preview';await named(output,'integrationBody').fire('input');assert.equal(approval.disabled,true);assert.equal(named(output,'integrationBody').value,'Edited after preview');
+});
+
+test('import UI: late copy or integration responses cannot restore approvals after edits, stop, navigation or logout',async()=>{
+ for(const operation of ['shared-import-prepare','integration-prepare'])for(const action of ['edit','stop','navigation','logout']){
+  const pending=deferred<Response>(),ui=harness(request=>request.operation===operation?pending.promise:importRoute(request)),output=await importsPage(ui);
+  const preparation=operation==='shared-import-prepare'?prepareImportCopy(output):prepareImportIntegration(output);await settle();
+  const request=ui.requests.find(request=>request.operation===operation)!;assert.ok(request);
+  if(action==='edit'){const input=named(output,operation==='shared-import-prepare'?'importKeys':'integrationBody');input.value='Changed while preparing';await input.fire('input');}
+  else if(action==='stop')await button(output,'停止当前操作').fire('click');else ui.run(action==='logout'?'logout()':'pageCleanup();generation++');
+  assert.equal(request.signal?.aborted,true);pending.resolve(success(operation==='shared-import-prepare'?{plan:importPlan}:integratedResult));await preparation;await settle();
+  assert.doesNotMatch(ui.body.textContent,/COMPLETE_IMPORTED_BODY|signed-copy-proof|signed-integration-proof/);assert.equal(ui.requests.some(request=>request.operation==='shared-import-apply'||request.operation==='apply'),false);
+ }
+});
+
+test('import UI: retained evidence works without sharing setup and read-only users cannot prepare or approve',async()=>{
+ const ui=harness(request=>request.operation==='shared-catalog'?success({configured:false,sources:[]}):importRoute(request)),output=await importsPage(ui);
+ assert.match(output.textContent,/已有的本机导入证据仍可/);assert.equal(button(output,'预览复制方案').disabled,true);
+ await prepareImportIntegration(output);assert.ok(ui.requests.some(request=>request.operation==='integration-prepare'));assert.match(output.textContent,/COMPLETE_IMPORTED_BODY/);
+ const read=harness(importRoute,['read']),view=await importsPage(read);assert.equal(button(view,'预览复制方案').disabled,true);assert.equal(button(view,'生成整合审核方案').disabled,true);
+ await named(view,'importKeys').closest('form')!.fire('submit');await prepareImportIntegration(view);assert.deepEqual(read.requests.map(request=>request.operation),['shared-catalog']);
+});
+
+test('import UI: exact explicit retry retains the original integration plan after uncertain application and clears on edit',async()=>{
+ let applies=0;const ui=harness(request=>request.operation==='apply'&&++applies===1?failure('OPERATION_CANCELLED'):importRoute(request)),output=await importsPage(ui);
+ await prepareImportIntegration(output);named(output,'integrationChecked').checked=true;await named(output,'integrationChecked').fire('change');await button(output,'批准并保存整合知识').fire('click');await settle();
+ assert.match(output.textContent,/保存结果未确认/);const before=ui.requests.length;await button(output,'重试原整合方案').fire('click');await settle();
+ assert.equal(ui.requests.length,before+1);assert.equal(ui.requests.at(-1)!.operation,'apply');assert.deepEqual(ui.requests.at(-1)!.data.plan,integratedPlan);assert.match(output.textContent,/整合审核已完成/);
+});
+
+test('import UI: source mismatch, key errors and completed-copy identifiers remain literal and never auto-confirm',async()=>{
+ const stale=harness(request=>request.operation==='shared-import-prepare'?success({plan:{...importPlan,selection:{...importPlan.selection,expectedCommit:'b'.repeat(40)}}}):importRoute(request)),output=await importsPage(stale);
+ await prepareImportCopy(output);assert.match(output.textContent,/来源或固定提交已变化/);assert.equal(button(output,'确认复制为证据').disabled,true);assert.doesNotMatch(output.textContent,/COMPLETE_IMPORTED_BODY/);
+ const ui=harness(request=>request.operation==='shared-import-apply'?{ok:false,json:async()=>({error:{code:'AUTHORIZATION_DENIED',completedImport:{evidenceId:'ev-123456789abc',commit:'c'.repeat(40),duplicate:false}}})}:importRoute(request)),view=await importsPage(ui);
+ await prepareImportCopy(view);named(view,'copyChecked').checked=true;await named(view,'copyChecked').fire('change');await button(view,'确认复制为证据').fire('click');await settle();
+ assert.match(view.textContent,/已保留导入证据（请先核查）/);assert.equal(ui.requests.length,3);assert.equal(named(view,'importEvidenceId').value,'');assert.equal(button(view,'重试原复制方案').disabled,false);
+});

@@ -130,7 +130,7 @@ flowchart LR
 
 > **固定版本的共享 Wiki（开发源码）：** [按明确配置的读者权限，读取本机／Git 来源的固定提交](docs/pinned-shared-wiki_CN.md)，继续检查来源、密钥、撤回和到期。库、命令行、MCP/Harness 及网页均已通过本地验收；不新增云端账号，不导入、合并或追回离线明文，尚未发布 npm。
 
-> **明确复制与人工整合 Wiki（开发源码）：** [复制和 Wiki 批准分别进行](docs/shared-wiki-import_CN.md)，保留已编译材料的来源、本机证据和继承限制。库核心已验证，命令行／MCP／Harness 接口正在验证；网页及整批验收待完成，尚未发布 npm。
+> **明确复制与人工整合 Wiki（开发源码）：** [复制和 Wiki 批准分别进行](docs/shared-wiki-import_CN.md)，保留已编译材料的来源、本机证据和继承限制。库核心已验证，命令行／MCP／Harness／网页接口正在验证；整批验收待完成，尚未发布 npm。
 
 > **云端与 Git 远端共享（开发源码）：** [自行运行读取服务，或先更新私有 Git 缓存再读取固定版本](docs/cloud-sharing_CN.md)。管理员命令可生成私有账号模板、检查已有授权并在前台启动服务，继续检查当前权限、撤回和到期。[本地验证和独立复核](docs/cloud-host-verification-2026-10-26.md)已通过，尚未发布到 npm。
 

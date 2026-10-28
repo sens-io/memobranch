@@ -1,7 +1,7 @@
 # Explicit compiled Wiki imports (development candidate)
 
 The library, CLI, MCP and Harness copy/integration operations are implemented.
-The agent/CLI adapters are under verification; Web import controls remain pending. This is not
+The agent/CLI adapters and Web import controls are under verification. This is not
 batch acceptance, an npm release, Git branch merge or a cloud sharing service.
 
 Reuse the [host-owned pinned sharing configuration](pinned-shared-wiki.md). Do not
@@ -106,8 +106,7 @@ replay rolls back pre-action housekeeping before projection rebuilds; unrelated
 later knowledge/expiry cannot turn it into a new commit. Old programs reject the
 new plan kind and integration-tagged completion record; stop older processes
 before enabling this operation. The library signal cancels owned work,
-including actual destination waits. Web preparation controls and whole-batch
-acceptance remain pending.
+including actual destination waits. Adapter and whole-batch acceptance remain pending.
 
 ## CLI and Agent tools (development source)
 
@@ -164,6 +163,24 @@ hides integration preparation without read/write; MCP rechecks authority on the
 registered tool. Integration of an already retained artifact works without remote
 sharing configuration. Transport/lifecycle cancellation belongs to the host; JSON
 `signal`, roots, principals and extra apply/authority fields are refused.
+
+## Management UI (development source)
+
+Open “知识导入” after connecting to the local management UI. Shared browsing stays
+read-only. First preview the configured source/pin and complete copy material;
+check the review box and explicitly confirm to retain evidence only. Then enter
+that evidence ID (or a previously retained import), target key and exact revision,
+and author the integration. Inspect the complete source/current/proposed contents,
+check the second review box and separately approve Wiki changes. No automatic
+integration, model call or approval follows copying.
+
+Source/form/classification changes clear stale approval; stopping, navigating or
+logging out cancels owned work and clears late results. Drafts/plans are not saved
+automatically. Uncertain saves require inspecting records/history first; any retry
+is explicit and uses the unchanged signed plan. Web keeps its existing 16 MiB
+complete review/request allowance in addition to the core's lower canonical plan
+limit. [HTTP/DOM verification](shared-wiki-web-verification-2026-10-28.md) is recorded;
+native browser and whole-batch acceptance are still pending.
 
 Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
 plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration

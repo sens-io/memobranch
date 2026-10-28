@@ -50,9 +50,26 @@ and extra arguments; changed grants; retained-copy use after sharing removal;
 actual source/destination waits cancelled through all three entry points;
 Harness disposal; and full-result refusal at real CLI/MCP transport boundaries.
 
-The larger retained set, minimum supported runtime, strict OpenSpec and independent
-committed-candidate review remain pending at this record's creation. There was no
-failed test in the two adapter runs above. Earlier library red/green regression
+The larger retained set passed **63/63** in
+`.scratch/wiki-import-adapters-retained.log`, zero failures/cancellations/skips.
+Independent read-only review of `6e820526000c4b23b3b178405605ce1cdbb4b659`
+covered 14/14 candidate files and the 3/3 preceding core-checkpoint text files,
+zero skipped, with no confirmed new P1/P2 in that scope. Scope/rules are retained
+in `wiki-import-adapters-review-{preview,rules}.json`.
+
+Minimum Node 20.0 verification has **not passed**. The first combined 37-check
+run passed 35 and failed two CLI source-wait cancellation cases
+(`wiki-import-adapters-node20.log`). Running that 19-check new adapter file alone
+still passed 17 and failed the same two (`wiki-import-adapters-node20-serial-wiki-import-adapters.log`).
+An isolated name-filtered diagnostic passed the three CLI cancellation cases,
+with 16 unrelated cases explicitly skipped; it is not a passing full file.
+The failure also repeats after preceding Harness tests, so cross-file parallelism
+is not a sufficient explanation. Additional child-start/exit and read/lock traces
+are under investigation; do not classify an empty child stderr as proof of a
+runtime or product cause. Product/test deadlines and assertions remain unchanged.
+The strict OpenSpec stage after the first failed minimum-runtime run did not run.
+
+There was no failed test in the two Node 22 adapter runs above. Earlier library red/green regression
 evidence remains in the [core record](shared-wiki-integration-core-verification-2026-10-26.md).
 
 ## Remaining batch work

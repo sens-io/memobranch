@@ -130,7 +130,7 @@ flowchart LR
 
 > **Pinned shared Wiki (development source):** [Read an explicitly configured local/Git source at a fixed commit](docs/pinned-shared-wiki.md), under current reader grants and source/key/lifecycle checks. Library, CLI, MCP/Harness and Web passed local verification. No cloud accounts, import/merge or offline plaintext revocation. Not yet published to npm.
 
-> **Explicit Wiki copies and human integration (development source):** [Separate copy and Wiki approval](docs/shared-wiki-import.md) preserve compiled provenance, local evidence and inherited restrictions. Library core verified; CLI/MCP/Harness adapters under verification, Web and whole-batch acceptance pending. Not yet published to npm.
+> **Explicit Wiki copies and human integration (development source):** [Separate copy and Wiki approval](docs/shared-wiki-import.md) preserve compiled provenance, local evidence and inherited restrictions. Library core verified; CLI/MCP/Harness/Web adapters under verification, whole-batch acceptance pending. Not yet published to npm.
 
 > **Cloud and remote Git sharing (development source):** [Run a self-hosted read service or refresh a private Git cache before reading a fixed version](docs/cloud-sharing.md). Admin commands generate private account templates, check existing grants and start the foreground service. Current access and lifecycle checks remain required. [Local verification and independent review](docs/cloud-host-verification-2026-10-26.md) passed. Not yet published to npm.
 

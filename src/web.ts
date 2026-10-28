@@ -10,11 +10,12 @@ import { memoryKinds, scopes, sensitivities } from './types.js';
 import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
-import { wikiSnapshotToolSchema } from './wiki-tool.js';
+import { wikiIntegrationToolSchema, wikiSnapshotToolSchema } from './wiki-tool.js';
 import { experiencePlanSchema, experienceSuiteSchema, type ExperienceRunner } from './experience.js';
 import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema } from './experience-tool.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
+import { SharedWikiImporter, sharedWikiImportApplySchema, sharedWikiImportPrepareSchema } from './shared-wiki-import.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -87,6 +88,7 @@ const routes: Record<string, Route> = {
   'wiki-observe': route('write', availabilityObserveSchema, (vault, data) => vault.wikiObserveAvailability(data)),
   'wiki-as-known-at': route('read', availabilityAtSchema, (vault, data) => vault.wikiAsKnownAt(data)),
   'merge-prepare': route('write', mergeOptionsSchema.omit({ signal: true }), (vault, data) => vault.wikiMergePrepare(data)),
+  'integration-prepare': route('write', wikiIntegrationToolSchema, (vault, data) => vault.wikiIntegrationPrepare(data)),
   'jobs-list': route('read', empty, vault => vault.wikiJobs()),
   'jobs-show': route('read', jobReference, (vault, data) => vault.wikiJob(data.id)),
   'jobs-enqueue': route('write', z.object({ evidenceIds: z.array(z.string().regex(/^ev-[a-f0-9]{12,64}$/)).min(1).max(40),
@@ -169,6 +171,14 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
       }
       return new SharedWikiReader(vault, { configPath: sharedWikiConfig }).snapshot(input);
     }),
+    'shared-import-prepare': route('write', sharedWikiImportPrepareSchema, async (vault, input) => {
+      if (!sharedWikiConfig) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      return new SharedWikiImporter(vault, { configPath: sharedWikiConfig }).prepare(input);
+    }),
+    'shared-import-apply': route('review', sharedWikiImportApplySchema, async (vault, input) => {
+      if (!sharedWikiConfig) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      return new SharedWikiImporter(vault, { configPath: sharedWikiConfig }).apply(input.plan, { confirm: input.confirm });
+    }),
     'experience-status': route('read', empty, async () => ({ evaluatorAvailable: typeof experienceRunner === 'function' })),
     'experience-validate': route('review', z.object({ plan: experiencePlanSchema, suite: experienceSuiteSchema,
       includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
@@ -249,7 +259,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
     try {
       const chunks: Buffer[] = [];
       let size = 0;
-      const maximum = name === 'apply' || name === 'file' || name === 'preview' || name === 'experience-validate' ? reviewRequestBytes : smallRequestBytes;
+      const maximum = ['apply', 'file', 'preview', 'experience-validate', 'shared-import-apply', 'integration-prepare'].includes(name) ? reviewRequestBytes : smallRequestBytes;
       for await (const chunk of req) {
         size += Buffer.byteLength(chunk);
         if (size > maximum) {
@@ -268,7 +278,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
       });
       // A successful preview must be resubmittable through the same adapter.
       // Fail closed before showing a plan that can never pass its approval route.
-      if (name === 'ingest' || name === 'file' || name === 'lint' || name === 'correct' || name === 'merge-prepare') {
+      if (['ingest', 'file', 'lint', 'correct', 'merge-prepare', 'shared-import-prepare', 'integration-prepare'].includes(name)) {
         const preview = result as { plan?: unknown; plans?: unknown[] };
         for (const plan of preview.plan ? [preview.plan] : preview.plans ?? []) {
           assertReviewBytes({ plan, confirm: true });
@@ -276,7 +286,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
       }
       if (name === 'preview') assertReviewBytes(result);
       if (name === 'jobs-review') assertReviewBytes(result);
-      if (name === 'wiki-snapshot' || name === 'merge-prepare' || name === 'wiki-as-known-at' || name === 'shared-snapshot') assertReviewBytes({ result });
+      if (['wiki-snapshot', 'merge-prepare', 'wiki-as-known-at', 'shared-snapshot', 'shared-import-prepare', 'integration-prepare'].includes(name)) assertReviewBytes({ result });
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
       if (name === 'experience-prepare') assertReviewBytes({ plan: result, suite: { name: '', cases: [] }, confirm: true });
       if (name === 'experience-export' || name === 'experience-validate') assertReviewBytes(result);
@@ -290,6 +300,7 @@ export async function startWebServer(root: string, options: WebOptions = {}): Pr
         ...(normalized.code === 'OPERATION_CANCELLED' && normalized.safeDetails?.committed ? { committed: normalized.safeDetails.committed } : {}),
         ...(name === 'experience-validate' ? safeCompletedValidation(normalized.safeDetails?.completedValidation) : {}),
         ...(name === 'wiki-observe' ? safeCompletedAvailability(normalized.safeDetails?.completedAvailability) : {}),
+        ...(name === 'shared-import-apply' ? safeCompletedImport(normalized.safeDetails?.completedImport) : {}),
       } });
     } finally {
       clearTimeout(timeout);
@@ -332,6 +343,12 @@ function safeCompletedValidation(value: unknown): { completedValidation?: { evid
 function safeCompletedAvailability(value: unknown): { completedAvailability?: { evidenceId: string; commit: string | null } } {
   const result = safeCompletedValidation(value).completedValidation;
   return result ? { completedAvailability: result } : {};
+}
+
+function safeCompletedImport(value: unknown): { completedImport?: { evidenceId: string; commit: string | null; duplicate: boolean } } {
+  const parsed = z.object({ evidenceId: z.string().regex(/^ev-[a-f0-9]{12,64}$/),
+    commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable(), duplicate: z.boolean() }).strict().safeParse(value);
+  return parsed.success ? { completedImport: parsed.data } : {};
 }
 
 function assertReviewBytes(value: unknown): void {
