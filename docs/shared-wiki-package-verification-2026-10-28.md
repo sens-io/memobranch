@@ -65,8 +65,21 @@ exited 0 and cleaned its temporary consumer. Before/after archive hashes are in
 each runtime. This strengthens the earlier consumer checks without replacing or
 weakening their existing assertions.
 
-Both complete repository Git-default runs, production audit and independent
-fixed-candidate re-review of the strengthened verifier remain pending.
+Independent re-review of the strengthened `121b825c` candidate covered 2/2 files,
+zero skipped, confirmed all three scope limitations closed, and found no confirmed
+new P1/P2 in that verifier/report scope.
+
+The first complete main run (`wiki-import-full-main.log`) passed **1008/1009**
+functional tests and failed one retained MCP test whose exact tool-name list had
+not been updated for `memory_wiki_integration_prepare`. Build/test types passed;
+release/evaluation, master, later strict-spec and audit stages did not run after
+that failure. The exact list now includes the new tool, and its false read-only,
+idempotent and destructive annotations are checked. Existing exact equality and
+all other assertions remain; the failure is retained. The affected retained file
+passed **10/10** (`wiki-import-adapter-catalog-fix.log`), zero failures,
+cancellations or skips. Both complete repository Git-default reruns and the
+following strict-spec/audit stages are still in progress; do not treat the
+targeted result as the full repository result.
 The compiled Node 20 CLI startup failures remain documented in the
 [agent checkpoint](shared-wiki-agent-verification-2026-10-28.md); an installed
 consumer result must not be substituted for that failed run.

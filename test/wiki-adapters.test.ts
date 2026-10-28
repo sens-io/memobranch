@@ -126,13 +126,15 @@ test('G03/G04 real MCP Wiki tools have truthful annotations and preserve service
     try {
       await client.connect(transport);
       const listed = (await client.listTools()).tools;
-      assert.deepEqual(listed.map((tool) => tool.name).filter((name) => name.startsWith('memory_wiki_')).sort(), [...Object.values(wikiCategories).flat(), 'memory_wiki_correct', 'memory_wiki_merge_prepare', 'memory_wiki_observe'].sort());
+      assert.deepEqual(listed.map((tool) => tool.name).filter((name) => name.startsWith('memory_wiki_')).sort(), [...Object.values(wikiCategories).flat(), 'memory_wiki_correct', 'memory_wiki_merge_prepare', 'memory_wiki_integration_prepare', 'memory_wiki_observe'].sort());
       for (const name of ['catalog', 'rules', 'query', 'lint', 'preview', 'snapshot', 'as_known_at']) {
         assert.equal(listed.find((tool) => tool.name === `memory_wiki_${name}`)?.annotations?.readOnlyHint, true);
       }
-      for (const name of ['ingest', 'file', 'apply', 'migrate', 'set_rules', 'revoke', 'correct', 'merge_prepare', 'observe']) {
+      for (const name of ['ingest', 'file', 'apply', 'migrate', 'set_rules', 'revoke', 'correct', 'merge_prepare', 'integration_prepare', 'observe']) {
         assert.equal(listed.find((tool) => tool.name === `memory_wiki_${name}`)?.annotations?.readOnlyHint, false);
       }
+      assert.equal(listed.find(tool => tool.name === 'memory_wiki_integration_prepare')?.annotations?.idempotentHint, false);
+      assert.equal(listed.find(tool => tool.name === 'memory_wiki_integration_prepare')?.annotations?.destructiveHint, false);
       assert.equal(listed.find((tool) => tool.name === 'memory_wiki_revoke')?.annotations?.destructiveHint, true);
       const invoke = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name: `memory_wiki_${name}`, arguments: args });
       assert.equal((await invoke('migrate')).isError, undefined);
