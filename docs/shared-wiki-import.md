@@ -179,8 +179,8 @@ logging out cancels owned work and clears late results. Drafts/plans are not sav
 automatically. Uncertain saves require inspecting records/history first; any retry
 is explicit and uses the unchanged signed plan. Web keeps its existing 16 MiB
 complete review/request allowance in addition to the core's lower canonical plan
-limit. [HTTP/DOM verification](shared-wiki-web-verification-2026-10-28.md) is recorded;
-native browser and whole-batch acceptance are still pending.
+limit. [HTTP/DOM and actual-browser verification](shared-wiki-web-verification-2026-10-28.md)
+is recorded; final minimum-runtime/package and whole-batch acceptance are still pending.
 
 Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
 plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration

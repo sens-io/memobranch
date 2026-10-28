@@ -56,8 +56,35 @@ awaited its unresolved simulated submit before performing cancellation; the
 fixture now starts the handler, cancels/changes the page, then resolves and joins
 the same handler. No product deadline or assertion was weakened.
 
-Actual browser/wide and 375px checks, minimum runtime, installed package, both
-Git defaults, strict OpenSpec/audit and independent fixed-candidate review are
+Independent read-only review of `19cabe2d4ce37e3921c547f6ebc8012161a3e799`
+covered **11/11** changed files, zero skipped, with no confirmed new P1/P2 in the
+assigned implementation/test/documentation scope. Scope/rules are retained in
+`wiki-import-web-review-{preview,rules}.json`. Strict OpenSpec passed **31/31** in
+`.scratch/wiki-import-current-specs.log`.
+
+Actual IAB verification against committed candidate `19cabe2d` completed with two
+synthetic vaults: catalog-only opening; disabled approval before the first checked
+review; full old-version material; separately retained evidence; authored Chinese
+and emoji text; old approval disappearing immediately after editing; regeneration
+and a second checked approval; and the completed Wiki commit
+`076d3ee7ae72d70b2537615adb91c485be5b5093`. Navigation cleared the authored body;
+logout returned to the token screen and removed the local-only unsaved draft.
+The browser recorded no console error. The copy click's observation timed out
+around the browser confirmation; inspecting actual state showed the successful
+copy, so it was not clicked again. The final confirmation similarly required
+inspection before continuing; actual completion, not the attempted click, is the
+evidence.
+
+The 1280px viewport had a document width of 1265px; the 375px viewport had a
+document width of 368px, with no page-wide horizontal overflow. Both saved states
+were visually inspected; the viewport override was reset and the temporary tab
+closed. Screenshots are `.scratch/wiki-import-native-{wide,mobile}.jpg`, also in
+the app-designated visualization folder. `.scratch/wiki-import-native-result.json`
+records identical source HEAD/refs/index/status, unchanged source model-call count,
+and exactly two destination Wiki pages (target plus its grounded source summary).
+The temporary fixture stopped with exit 0 and removed its synthetic vaults.
+
+Minimum runtime, installed package, both Git defaults and final audit remain
 pending. The CLI/agent minimum-runtime cancellation failures recorded in the
 [adapter checkpoint](shared-wiki-agent-verification-2026-10-28.md) remain under
 investigation; these passing Web checks do not close that gate.

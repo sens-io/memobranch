@@ -65,8 +65,23 @@ An isolated name-filtered diagnostic passed the three CLI cancellation cases,
 with 16 unrelated cases explicitly skipped; it is not a passing full file.
 The failure also repeats after preceding Harness tests, so cross-file parallelism
 is not a sufficient explanation. Additional child-start/exit and read/lock traces
-are under investigation; do not classify an empty child stderr as proof of a
-runtime or product cause. Product/test deadlines and assertions remain unchanged.
+are retained. Two actual failed child process samples
+(`wiki-import-child-39666.sample.txt` and `wiki-import-child-41313.sample.txt`)
+show only macOS `_dyld_start`, with a 96 KB footprint; a synchronous preload
+bootstrap marker was never emitted by either child. These particular attempts
+were stopped before Node/project JavaScript ran. This does not identify the cause
+of the loader wait or prove the complete minimum-runtime gate has passed. A
+byte-identical staging copy of the existing Node 20 binary also passed 35/37,
+failing the same two source-wait cases (`wiki-import-adapters-node20-staged-runtime.log`);
+moving it out of the npm cache did not solve this. Both binary SHA-256 values are
+`ddd82d5e23efa1ac08ecae9c6abd7b4459da903d1946b9c9a2568df010a9f534`.
+There was no runtime download, upgrade or security-setting change. Product/test
+deadlines and assertions remain unchanged. Portable early-exit diagnostics remain
+in the test; macOS process/stack sampling was diagnostic-only and is not shipped.
+After removing those diagnostic-only platform calls, test types and all **19/19**
+new adapter cases passed on Node 22 (`wiki-import-checkpoint-types.log`,
+`wiki-import-checkpoint-adapters.log`), zero failures/cancellations/skips. This
+does not replace the failed minimum-runtime check.
 The strict OpenSpec stage after the first failed minimum-runtime run did not run.
 
 There was no failed test in the two Node 22 adapter runs above. Earlier library red/green regression
@@ -74,9 +89,10 @@ evidence remains in the [core record](shared-wiki-integration-core-verification-
 
 ## Remaining batch work
 
-Web copy/integration controls and their invalidation, HTTP/native-browser checks,
-same installed package verification on Node 20/22, both Git defaults, final audit
-and complete batch review are pending. Passing the adapter checks does not prove
+Web controls and HTTP/DOM/native-browser checks are recorded in the
+[Web checkpoint](shared-wiki-web-verification-2026-10-28.md). Same installed package
+verification on Node 20/22, the unresolved full minimum-runtime run, both Git
+defaults, final audit and complete batch review are pending. Passing the adapter checks does not prove
 semantic correctness of arbitrary authored text or independent raw-source verification.
 
 Database changes: none. Data migration: none. Configuration changes: no new config

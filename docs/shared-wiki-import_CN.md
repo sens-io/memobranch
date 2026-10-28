@@ -1,7 +1,7 @@
 # 明确批准的 Wiki 复制与人工整合（开发源码）
 
 库、命令行、MCP、DeepSeek Harness 与网页的复制及人工整合功能已实现，接口正在验证。
-最低运行时、实际浏览器、安装包及整批验收仍待完成，尚未发布 npm。
+实际浏览器检查已有记录，最低运行时、安装包及整批验收仍待完成，尚未发布 npm。
 [English](shared-wiki-import.md) · [路线图](remaining-roadmap.md) ·
 [核心验证记录](shared-wiki-integration-core-verification-2026-10-26.md)
 
@@ -145,8 +145,8 @@ amem wiki apply --root "$DESTINATION" --file "$PRIVATE_INTEGRATION_FILE"
 不能恢复旧方案；草稿与方案只在当前页面内存中，不自动保存。保存结果未确认时先查
 记忆库及运维记录；重试需要明确操作，且只重复原签名方案。网页继续使用既有 16 MiB
 完整预览和请求限制，方案本身仍受更低的完整字节上限约束。
-[HTTP 与页面事件检查](shared-wiki-web-verification-2026-10-28.md)已有记录，实际浏览器
-及整批验收仍待完成。
+[HTTP、页面事件和实际浏览器检查](shared-wiki-web-verification-2026-10-28.md)已有记录，
+最低运行时、安装包及整批验收仍待完成。
 
 数据库变更：无。数据迁移：无。资料库配置版本变更：无。
 不自动授予真实共享权限，不推送、不发布、不部署，也不安装导出的技能。

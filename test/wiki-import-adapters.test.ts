@@ -225,7 +225,17 @@ for (const action of ['import-prepare', 'import-apply', 'integration-prepare']) 
   const owner = withFileLock(lock, async () => { acquired.resolve(); await release.promise; }); let command: ReturnType<typeof exec> | undefined;
   try {
     await acquired.promise; command = run([action, ...args]); const outcome = command.then(() => null, error => error);
-    await waitFor(async () => (await readdir(lock + '.queue')).length === 2); command.child.kill('SIGTERM');
+    try {
+      await Promise.race([
+        waitFor(async () => (await readdir(lock + '.queue')).length === 2),
+        outcome.then(error => assert.fail('CLI exited before reaching its source/destination waiter: ' + (error?.stderr ?? 'unexpected success'))),
+      ]);
+    } catch (cause) {
+      command.child.kill('SIGTERM');
+      const failure = await outcome;
+      throw new Error('CLI waiter observation failed; child code ' + failure?.code + ' signal ' + failure?.signal + '; stderr: ' + (failure?.stderr ?? 'unexpected success'), { cause });
+    }
+    command.child.kill('SIGTERM');
     const error = await outcome; assert.equal(error?.code, 130); assert.match(error.stderr, /OPERATION_CANCELLED/);
     await waitFor(async () => (await readdir(lock + '.queue')).length === 1); assert.equal(existsSync(lock), true);
   } finally { command?.child.kill('SIGTERM'); release.resolve(); await owner; }
