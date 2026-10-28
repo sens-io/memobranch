@@ -104,8 +104,22 @@ cleanup. `wiki-integration-replay-cleanup-red.log` genuinely failed 0/1 against
 `5ef77408`. Duplicate-only validation now also runs after the mutation returns;
 normally committed operations retain their existing safe-commit semantics.
 `wiki-integration-replay-cleanup-green.log` passed 1/1. All earlier regressions
-remain. The final 236-check combined run, 53-check compiled Node 20 run and this
-last fix's independent review are still in progress.
+remain. The final `10aeef6a80009813c5b95c1941c4af31e090983d` candidate passed
+**236/236** combined checks (`wiki-integration-review-combined-2.log`) and
+**53/53** compiled Node 20.0 checks (`wiki-integration-final-node20.log`), zero
+failed/cancelled/skipped. The original runner handle is no longer available;
+both retained test outputs include their complete terminal passing summaries.
+Build/test types passed in `wiki-integration-build-9.log` and
+`wiki-integration-types-9.log`. Strict OpenSpec passed **31/31** in
+`wiki-integration-final-specs.log`.
+
+Final read-only review of that committed fix covered 3/3 changed files, zero
+skipped. It confirmed that final replay validation runs after the real outer lock
+cleanup while leaving normal committed-result behavior unchanged; no confirmed
+P1/P2 remains in this library-core review scope. The deterministic local review
+scope/rules are retained in `wiki-integration-final-review-{preview,rules}.json`.
+This is a library checkpoint, not acceptance of unimplemented adapters or the
+whole batch.
 
 Package/native adapter verification and
 complete checks under both Git defaults remain to be recorded before batch 4

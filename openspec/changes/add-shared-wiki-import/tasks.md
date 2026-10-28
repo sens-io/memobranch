@@ -1,7 +1,7 @@
 ## Implementation
-- [ ] Add bounded derived-source artifact schema, deterministic URI and inherited restrictions.
-- [ ] Add signed preparation and separately confirmed import through current sharing and transaction guards.
-- [ ] Add human-authored integration preparation using exact local revisions and ordinary separate Wiki approval.
+- [x] Add bounded derived-source artifact schema, deterministic URI and inherited restrictions.
+- [x] Add signed preparation and separately confirmed import through current sharing and transaction guards.
+- [x] Add human-authored integration preparation using exact local revisions and ordinary separate Wiki approval (library checkpoint in `docs/shared-wiki-integration-core-verification-2026-10-26.md`; adapter and whole-batch gates remain below).
 - [ ] Add CLI, MCP, Harness and Web adapters with invalidation and separate confirmations.
 - [ ] Document local branch checkout setup, provenance, private copies, limits and compatibility in both languages.
 
