@@ -1,8 +1,9 @@
 # Explicit compiled Wiki imports (development candidate)
 
 The library, CLI, MCP and Harness copy/integration operations are implemented.
-The agent/CLI adapters and Web import controls are under verification. This is not
-batch acceptance, an npm release, Git branch merge or a cloud sharing service.
+Installed consumers and actual browser checks have passed their recorded scopes.
+Two minimum Node 20 CLI wait observations still fail in the complete adapter set.
+This is not batch acceptance, an npm release, Git branch merge or a cloud sharing service.
 
 Reuse the [host-owned pinned sharing configuration](pinned-shared-wiki.md). Do not
 give requests source paths, keys, identities or grants. Configuring real access
@@ -180,7 +181,8 @@ automatically. Uncertain saves require inspecting records/history first; any ret
 is explicit and uses the unchanged signed plan. Web keeps its existing 16 MiB
 complete review/request allowance in addition to the core's lower canonical plan
 limit. [HTTP/DOM and actual-browser verification](shared-wiki-web-verification-2026-10-28.md)
-is recorded; final minimum-runtime/package and whole-batch acceptance are still pending.
+is recorded; the [same installed archive passed Node 20/22 consumers](shared-wiki-package-verification-2026-10-28.md).
+The failed minimum-runtime aggregate and whole-batch acceptance remain pending.
 
 Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
 plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration

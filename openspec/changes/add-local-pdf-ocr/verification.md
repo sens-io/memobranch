@@ -25,8 +25,10 @@ and requirement structure, not runtime functionality.
 ## Implementation evidence still required
 
 `design.md` describes the intended local processor/configuration, bounds,
-ownership, immutable evidence, compatibility and disclosure decisions. Its own
-fixed-candidate review is pending. Actual process, file, permission, encryption,
+ownership, immutable evidence, compatibility and disclosure decisions. Independent
+read-only review of `9ae54606` covered the complete design and this record (2/2,
+zero skipped), compared the current PDF implementation and agreed scenarios, and
+found no confirmed new P1/P2 in that design scope. Actual process, file, permission, encryption,
 transaction, package/runtime/default-branch and recognition checks have not run
 for an implementation of this batch. Existing PDF and Wiki-import checks cannot
 substitute for those future results.

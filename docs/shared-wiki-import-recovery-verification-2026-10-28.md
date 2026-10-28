@@ -74,7 +74,7 @@ checks passed on both Node 22 and compiled Node 20.0.0, zero failures,
 cancellations or skips (`wiki-import-recovery-related-2.log` and
 `wiki-import-recovery-node20-2.log`). Types and corrected compilation passed in
 `wiki-import-recovery-types-2.log` and `wiki-import-recovery-compile-3.log`.
-Corrected full checks and fixed-candidate re-review remain pending.
+Corrected full checks and fixed-candidate re-review are recorded below.
 
 Read-only re-review of `f5e5ad89` covered 4/4 files, zero skipped, and confirmed
 the worker guard, per-path health assertions and capture barrier. It found one
@@ -84,7 +84,7 @@ The counter baselines now precede both preparations; no behavioral assertion or
 deadline was removed. The final recovery file passed **8/8** on Node 22 and compiled
 Node 20.0.0, with zero failures/cancellations/skips, in
 `wiki-import-recovery-counter-{node22,node20}.log`. Corrected test compilation
-passed (`wiki-import-recovery-counter-compile.log`). Final full/re-review remains pending.
+passed (`wiki-import-recovery-counter-compile.log`). Final full/re-review is recorded below.
 
 The original complete compiled Node 20 adapter collection was also rerun from the
 current compilation, without substitutions: **35/37**, the same two actual CLI
@@ -93,6 +93,51 @@ source-wait observations failed at their original 10-second bounds, exit 1
 child outcomes were `code null`, `signal SIGTERM`, empty stderr. Earlier macOS
 stack samples remain relevant diagnostics, not a new causal finding or a passed
 gate. The stronger recovery tests do not turn this failed aggregate into success.
+
+Independent final re-review of `833a330c` covered the counter correction and this
+record (2/2, zero skipped); the last fixture observation gap was closed, with no
+new confirmed issue in that scope. Its separate OCR specification correction was
+reviewed independently (1/1); it is not an import-product change.
+
+## Task verification mapping
+
+These entries map the first eight functional tasks to actual scenarios. They do
+not replace the still-failed final minimum-runtime aggregate or accept the batch.
+
+| Task | Inspected executable evidence |
+| --- | --- |
+| Two vaults, fixed version, origin, no source writes/model calls, retry | `shared-wiki-import.test.ts` first capture/no-write and retry cases; installed consumer's five first captures, source/raw/model guards and persisted-field checks in the [package record](shared-wiki-package-verification-2026-10-28.md). |
+| Current authority, keys/grants/pin/config and plan/classification refusal | `shared-wiki-import.test.ts` independent permissions, source change/withdrawal and current-secret floor cases; `shared-wiki.test.ts` key erasure/selection and changed binding guards; `wiki-integration.test.ts` stale/foreign/secret and classification cases. The related core checkpoint passed 236 checks. |
+| Final waits, lifecycle, cancellation, rollback/recovery and two-way concurrency | Actual source-expiry destination wait in `shared-wiki-import.test.ts`; `wiki-integration.test.ts` destination waits and expiry; the eight real child/ready/cancel/dual-capture cases above, including final 8/8 under each runtime. |
+| Restrictions through model/manual/apply/read/public paths | `shared-wiki-import.test.ts` restriction-dropping compiler, current conflict/expiry, public projection refusal; `wiki-integration.test.ts` stricter authored classification, local conflict and retained provenance. |
+| Duplicate expiry/concurrent capture | `shared-wiki-import.test.ts` unrelated-memory expiry and concurrent identical confirmations; `wiki-integration.test.ts` post-approval expiry replay. Canonical bytes and generated content remain unchanged on retry. |
+| Ordinary-memory support refusal | `shared-wiki-import.test.ts` extraction/proposal/approval/consolidation/get refusals plus public health validation matching both forged record paths. Raw artifact inspection remains authorized and unchanged. |
+| Manual create/update, stale revisions and conflict/provenance | The 14 `wiki-integration.test.ts` cases, 36/36 related run, installed library/CLI/MCP/Web/Harness separately authored/applied targets and source summaries. |
+| Complete strict adapter output and actual UI cleanup | 63 retained CLI/SDK checks in the [agent record](shared-wiki-agent-verification-2026-10-28.md); 90 HTTP/DOM checks and actual 1280px/375px review, invalidation/navigation/logout in the [Web record](shared-wiki-web-verification-2026-10-28.md). The minimum Node 20 aggregate remains separately failed. |
+
+## Final corrected checkpoint
+
+Both complete repository checks of the `833a330c` correction exited 0, serialized:
+**1017 functional + 14 release + 10 evaluation = 1041 per Git default**, zero
+failures, cancellations or skips. Build and all test types passed in both logs:
+`.scratch/wiki-import-full-main-4.log` and `wiki-import-full-master-4.log`.
+The later `9ae54606` commit changed only OCR design/verification documents.
+Strict specs passed **32/32**, including the new pending OCR proposal.
+
+Product code, dependency manifests and package verifiers have no changes relative
+to the previously verified `982cb567` checkpoint. The same installed archive still
+has SHA-256 `07d621aa54a5d6455f5b9a2d98014d1641acd38b8f9016f3dd8471e1d30b40af`;
+its complete Node 20/22 consumers and strengthened public-entry-point checks
+remain the [recorded installed results](shared-wiki-package-verification-2026-10-28.md).
+No fresh package run or new audit is invented: the unchanged dependencies retain
+the recorded production audit of 0 vulnerabilities. Fixed-candidate test/spec/
+design reviews are recorded above and in the OCR design checkpoint.
+
+The last combined task remains unchecked because the original full compiled
+minimum Node 20 adapter collection still failed **35/37**. Passing full Node 22,
+installed Node 20 consumers, or additional Node 20 recovery tests cannot substitute
+for that failed result. Final acceptance-text review remains pending; no batch or
+complete-roadmap acceptance is claimed.
 
 Database changes: none. Data migration: none. Configuration changes: none.
 Only synthetic local grant/config files were used. No real access, push, npm
