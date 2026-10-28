@@ -54,6 +54,9 @@ try {
     'dist/shared-wiki-cloud-client.js', 'dist/shared-wiki-cloud-client.d.ts', 'dist/shared-wiki-cloud-wire.js', 'dist/shared-wiki-cloud-wire.d.ts',
     'dist/shared-wiki-cloud-host.js', 'dist/shared-wiki-cloud-host.d.ts',
     'dist/shared-wiki-git.js', 'dist/shared-wiki-git.d.ts',
+    'dist/shared-wiki-import.js', 'dist/shared-wiki-import.d.ts', 'dist/wiki-import-artifact.js', 'dist/wiki-import-artifact.d.ts',
+    'dist/wiki-integration.js', 'dist/wiki-integration.d.ts', 'dist/web-wiki-import-ui.js', 'dist/web-wiki-import-ui.d.ts',
+    'docs/shared-wiki-import.md', 'docs/shared-wiki-import_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -140,6 +143,7 @@ try {
       SharedWikiReader, type SharedWikiReaderOptions, type SharedWikiSnapshotOptions, type SharedWikiView,
       startCloudWikiServer, type CloudWikiServerOptions, type CloudWikiServerHandle,
       SharedWikiImporter, type SharedWikiImportPrepareOptions, type SharedWikiImportPlan,
+      type WikiIntegrationOptions, type WikiIntegrationOrigin,
       type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
     export async function publicCloudWiki(options: CloudWikiServerOptions) {
       const handle: CloudWikiServerHandle = await startCloudWikiServer(options);
@@ -157,6 +161,11 @@ try {
       const importer = new SharedWikiImporter(vault, options);
       const plan: SharedWikiImportPlan = (await importer.prepare(selection)).plan;
       return importer.apply(plan, { confirm: true, signal: new AbortController().signal });
+    }
+    export async function publicWikiIntegration(vault: MemoryVault, options: WikiIntegrationOptions) {
+      const prepared = await vault.wikiIntegrationPrepare({ ...options, signal: new AbortController().signal });
+      const origin: WikiIntegrationOrigin | undefined = prepared.plan.integration;
+      return { prepared, origin, preview: await vault.wikiPreview(prepared.plan) };
     }
     export async function publicAvailability(vault: MemoryVault, observe: AvailabilityObserveOptions, query: AvailabilityAtOptions) {
       const recorded = await vault.wikiObserveAvailability(observe);
@@ -332,6 +341,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(gitSharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-wiki-import.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki-import.mjs')));
+  const wikiImport = await exec(process.execPath, ['verify-installed-wiki-import.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(wikiImport.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
