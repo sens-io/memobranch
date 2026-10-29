@@ -45,6 +45,14 @@ for (const alias of ['memobranch','amem']) {
   const preview = await run(['import','pdf-preview',path,'--processor-config',configFile,'--pages','2','--ocr-languages','eng']); await writeFile(previewFile, preview.stdout);
   const applied = JSON.parse((await run(['import','pdf-apply','--plan',previewFile,'--processor-config',configFile,'--sensitivity','secret','--root',vault.root])).stdout);
   assert.equal(applied.duplicate, false, alias + ' must perform its own first capture');
+  const stored = await vault.get(applied.evidenceId), disk = await readFile(join(vault.root,applied.evidencePath),'utf8');
+  assert.equal(stored.meta.sensitivity,'secret'); assert.equal(stored.meta.pdfOriginal.version,2);
+  assert.match(disk,/encrypted:\s*aes-256-gcm/); assert.match(disk,/^ENC\[/m);
+  assert.doesNotMatch(disk,/pdfOriginal|JVBER|iVBOR|SYNTHETIC installed OCR/);
+  assert.equal(disk.includes(original.toString('base64')),false); assert.equal(disk.includes(image.toString('base64')),false);
+  const noKey = new MemoryVault(vault.root,{masterKey:''});
+  await assert.rejects(readPdfOriginal(noKey,applied.evidenceId),{code:'ENCRYPTION_KEY_UNAVAILABLE'});
+  await assert.rejects(readPdfPage(noKey,applied.evidenceId,2),{code:'ENCRYPTION_KEY_UNAVAILABLE'});
   const pdf = join(root, alias + '-retained.pdf'), page = join(root, alias + '-retained.png');
   await run(['import','pdf-original',applied.evidenceId,'--output',pdf,'--root',vault.root]);
   await run(['import','pdf-page',applied.evidenceId,'--page','2','--output',page,'--root',vault.root]);
@@ -76,7 +84,7 @@ assert.equal((await vault.wikiCatalog()).length, 0); assert.equal((await vault.l
 assert.equal((await vault.listRecords({ collection: 'evidence' })).total, 3);
 assert.equal(existsSync(marker) ? await readFile(marker, 'utf8') : '', '');
 assert.deepEqual((await readdir(workRoot)).filter(name => name.startsWith('pdf-owned-')), []);
-console.log('Installed package: processed PDF API/types, exact encrypted media, both CLI aliases first capture/exclusive exports, MCP/Harness blob omission, strict server fields and zero model calls passed (synthetic processor, no OCR-quality claim).');
+console.log('Installed package: processed PDF API/types, exact media with direct ciphertext/classification/no-key assertions for both CLI captures, exclusive exports, MCP/Harness blob omission, strict server fields and zero model calls passed (synthetic processor, no OCR-quality claim).');
 
 function png() { const h = Buffer.alloc(13);h.writeUInt32BE(2);h.writeUInt32BE(2,4);h[8]=8;h[9]=2;return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',h),chunk('IDAT',deflateSync(Buffer.alloc(14))),chunk('IEND',Buffer.alloc(0))]); }
 function chunk(type,data) { const b=Buffer.alloc(data.length+12);b.writeUInt32BE(data.length);b.write(type,4);data.copy(b,8);let c=0xffffffff;for(const x of b.subarray(4,-4)){c^=x;for(let i=0;i<8;i++)c=(c>>>1)^(c&1?0xedb88320:0);}b.writeUInt32BE((c^0xffffffff)>>>0,b.length-4);return b; }

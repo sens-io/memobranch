@@ -21,8 +21,10 @@ platform work remain open. No push, npm publication, deployment or real host cha
 Independent committed-candidate review covered import candidate `1df543e3` **19/19**
 and server correction `26849454` **6/6**, zero skipped and no new confirmed P1/P2.
 Earlier core review found two PNG P2 issues, corrected in `00af053f` and independently
-closed. The Windows background-helper P2 remains open. The new packaging-verifier
-code and this combined record still require their committed-candidate review.
+closed. The Windows background-helper P2 remains open. Review of packaging candidate
+`2547b776` covered **7/7 files**, zero skipped: the driver (1) and records (5) had
+no confirmed new issue; the consumer (1) had one verification P2 described below.
+The strengthened consumer and updated record require their own follow-up review.
 
 ## Fresh complete checks
 
@@ -83,14 +85,15 @@ The same **477-entry** archive was installed independently for both consumers:
 
 | Consumer run | Actual result |
 | --- | --- |
-| Node 22.17.0, requested Git default `main` | Complete consumer verifier exit 0. `.scratch/pdf-processing-package-node22-main-2.log`. |
-| Node 20.0.0, requested Git default `master` | Complete same-archive verifier exit 0. `.scratch/pdf-processing-package-node20-master.log`. |
+| Node 22.17.0, requested Git default `main` | Complete strengthened consumer verifier exit 0. `.scratch/pdf-processing-package-node22-main-4.log`. |
+| Node 20.0.0, requested Git default `master` | Complete same-archive strengthened verifier exit 0. `.scratch/pdf-processing-package-node20-master-2.log`. |
 
 These are two consumer combinations, not all four runtime/default combinations.
 The driver records its requested Git override; actual implicit-default probes are
 in the separate full/Linux checks above. Product imports resolve to the installed
 archive, not source/tsx. Public processing declarations compile. The new consumer
-checks exact media, encryption, both CLI aliases performing distinct first captures
+checks exact media, direct ciphertext/classification/no-key assertions for both
+secret CLI captures, both CLI aliases performing distinct first captures
 and exclusive exports, actual MCP/Harness blob omission and unknown-field refusal,
 no approved candidates/Wiki pages and synchronous zero-model-call markers. Native
 fixtures here emulate processors; they do not prove OCR recognition quality.
@@ -100,10 +103,24 @@ The first 476-entry archive's consumer failure remains recorded in
 `pdf-processing-package-node22-main.log`; unsupported fields were wrongly accepted.
 Neither that archive nor its partial successes are called a passing package run.
 The later archive also includes the protocol correction. Source scripts used for
-both successful runs have SHA-256 `09ae9a4aec261e4881e09d64e75a68303dae5dcf75a0ac9e38aa99e420d76d88`
-(`verify-package.mjs`) and `696f186c0dfdce21f95579a97ceb1486892b7c9d6bf11070e88fbd7987513436`
+the latest two successful runs have SHA-256 `09ae9a4aec261e4881e09d64e75a68303dae5dcf75a0ac9e38aa99e420d76d88`
+(`verify-package.mjs`) and `10b40aca345b57d7b5a7194ffb7885c88b001de3b3cecbc84f10c9a10c028aa0`
 (`verify-installed-pdf-processing.mjs`). This after-the-run record is outside that
 already verified archive; it does not alter its product bytes.
+
+### Packaging review correction
+
+| Source branch | Confirmed finding | Correction and actual evidence |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | P2: the first installed consumer claimed encrypted media but only passed `secret` and read with a key; plaintext storage could satisfy those assertions. This was a test gap, not an observed product encryption defect. | Both CLI results now have their actual `secret` classification and version checked, the disk record must have the AES-256-GCM envelope and `ENC` body without original/image/OCR plaintext, and a new keyless vault must refuse both original and page reads with `ENCRYPTION_KEY_UNAVAILABLE`. Complete consumer runs on both runtimes passed with the same archive. |
+
+Earlier 477-entry runs (`package-node22-main-2.log`, `package-node20-master.log`)
+remain retained as their original API/transport evidence; they are not relabeled
+as direct encryption assertions. The first strengthening run failed because the
+new assertion incorrectly expected a boolean encryption marker. The real existing
+schema uses `encrypted: aes-256-gcm`; the assertion was corrected to that actual
+format, without changing product code or dropping the disk/key assertions.
+That failed complete run remains `pdf-processing-package-node22-main-3.log`.
 
 ## Open work and operational changes
 
