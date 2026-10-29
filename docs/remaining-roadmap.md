@@ -21,6 +21,11 @@ identified process-ownership defect from implementation and independent review;
 its correction and review are recorded below.
 This waiver does not skip macOS/Linux checks or authorize pushing/deployment.
 
+The [macOS minimum-runtime investigation](macos-minimum-runtime-diagnosis-2026-10-29.md)
+retains complete failures and isolates a repeated SDK-cancellation/CLI-startup
+interaction. Filtered positive controls do not accept that gate; the cause and
+correction remain open.
+
 | Batch | Deliverable | State |
 | --- | --- | --- |
 | 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Accepted locally. Core/CLI and MCP/Harness accepted on 2026-10-23; Web actual browser checks completed 2026-10-24. Combined patched-dependency verification: 828 retained checks under each Git default, strict OpenSpec 28/28, production audit 0, same installed package on Node 20/22 and final checkpoint-text review passed. See [core checkpoint](validated-experience-core-verification-2026-10-22.md), [agent adapter checkpoint](validated-experience-agent-verification-2026-10-23.md) and [Web work record](validated-experience-web-verification-2026-10-23.md). |
