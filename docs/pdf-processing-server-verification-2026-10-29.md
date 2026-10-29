@@ -59,8 +59,9 @@ Independent committed-candidate review of `26849454` covered **6/6 files**, zero
 skipped, without a new confirmed P1/P2. Fresh full checks, both Linux collections
 and both same-archive consumers subsequently passed; see the
 [combined checkpoint](pdf-processing-combined-verification-2026-10-29.md) for their
-exact scope and retained failures. Packaging-verifier/final-record review remains
-pending; these results still do not accept the complete batch.
+exact scope and retained failures. Packaging review covered 7/7 files, then a 2/2
+follow-up closed its direct-encryption verification gap. These results still do
+not accept the complete batch because the macOS/Windows work remains open.
 The existing macOS minimum-runtime waiter failure remains unexplained; no platform
 cause or fix is claimed. The earlier Linux supplement is not relabeled as a run
 of this new code.

@@ -24,7 +24,9 @@ Earlier core review found two PNG P2 issues, corrected in `00af053f` and indepen
 closed. The Windows background-helper P2 remains open. Review of packaging candidate
 `2547b776` covered **7/7 files**, zero skipped: the driver (1) and records (5) had
 no confirmed new issue; the consumer (1) had one verification P2 described below.
-The strengthened consumer and updated record require their own follow-up review.
+Follow-up review of `b8be88ac` covered the strengthened consumer and updated record
+**2/2**, zero skipped, closed that verification P2 and found no new confirmed P1/P2.
+This does not close the separate macOS/Windows work below.
 
 ## Fresh complete checks
 
