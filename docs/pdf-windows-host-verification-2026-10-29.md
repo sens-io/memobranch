@@ -59,13 +59,70 @@ failed/cancelled/skipped, exit 0: `.scratch/pdf-windows-related-fixed-1.log`.
 Build/types passed in `pdf-windows-review-build-2.log` and
 `pdf-windows-review-types-2.log`. The earlier 13/13 coordination-only run
 (`pdf-windows-supervisor-fixed-1.log`) is not a replacement for that collection.
-Fresh compiled Node 20 checks and independent review of the corrected committed
-candidate remain required. The Windows execution waiver remains unchanged.
+The corrected compiled Node 20.0.0 collection also passed **71/71**, zero
+failed/cancelled/skipped, exit 0: `.scratch/pdf-windows-node20-fixed-1.log`.
+Its declarations compiled in `pdf-windows-node20-compile-2.log`; staging includes
+the full built `dist`, original non-TypeScript fixtures, the built PDF worker,
+package metadata and assets. Existing test assertions/deadlines were retained.
 
-Earlier full/default-branch/package results remain historical checkpoints; they
-cannot be relabeled as results for this changed runtime code. The original macOS
-minimum-runtime CLI waiter failures also remain open. No test assertion, original
-deadline, runtime version or platform result has been substituted or weakened.
+Independent read-only re-review of corrected commit
+`e44c096e4479f465f16e61ccd5d47d1243023a41` covered all five changed files,
+zero skipped: both implementation files, both regression files and this record.
+It closed both P2 findings and reported no confirmed new P1/P2 in that scope.
+At that correction, the initial native four-file scope and the other eight
+packaging/docs files were unchanged; the changed work record was included in the
+five-file follow-up review. The Windows execution waiver remains unchanged.
+
+## Fresh complete and installed-package checks
+
+The runtime candidate is `e44c096e4479f465f16e61ccd5d47d1243023a41`.
+Subsequent changes are status documentation only. Each full run actually probed
+an implicit Git init and required the observed default to match before testing.
+
+| Check | Actual complete result |
+| --- | --- |
+| Node 22.17.0, implicit `main` | **1070 functional + 14 release + 10 evaluation = 1094**, zero failed/cancelled/skipped, exit 0. `.scratch/pdf-windows-full-main-1.log`. |
+| Node 22.17.0, implicit `master` | Same **1094**, zero failed/cancelled/skipped, exit 0. `.scratch/pdf-windows-full-master-1.log`. The two runs overlap; these are not 2188 distinct cases. |
+| Strict OpenSpec | **32/32**, exit 0. `.scratch/pdf-windows-final-specs-1.log`. |
+| Production dependency audit | **0 known vulnerabilities**, exit 0. `.scratch/pdf-windows-audit-1.json`. No dependency/lock change. |
+| Same archive, Node 22.17.0 / probed `main` | Complete installed-consumer verifier exit 0. `.scratch/pdf-windows-package-node22-main-1.log`. |
+| Same archive, Node 20.0.0 / probed `master` | Complete installed-consumer verifier exit 0. `.scratch/pdf-windows-package-node20-master-1.log`. These are the two tested runtime/default combinations, not all four combinations. |
+
+Both consumers used `.scratch/pdf-windows-package-1/memobranch-1.1.0.tgz`,
+**488 packed entries** (an archive count, not a test count), SHA-256
+`b688bdb7703d50dc61642c3997a75ce8a5e03400e70f09b8d0a18b48f6b4936d`.
+It was packed with `--ignore-scripts` from the already completed current build;
+the full checks separately ran build/types. All **208 runtime entries** (the
+complete `dist/` plus C# source) were compared byte-for-byte with that build.
+The C# source also matched the committed candidate, SHA-256
+`1f992be35c1ab19d8558ae16abebb85b09af49e77ab21da945eac347facf0c1d`.
+Inventory: `pdf-windows-package-1/runtime-hashes.json`. The later status-document
+updates are outside that frozen archive; no Windows executable was packaged.
+
+The root consumer driver SHA-256 is
+`61c2ef440b98d2e90855833c5e27e9ba14221ca149d68e7c9523687afeafa0df`;
+the unchanged processed-PDF consumer is
+`10b40aca345b57d7b5a7194ffb7885c88b001de3b3cecbc84f10c9a10c028aa0`.
+Both logs record these hashes and the same archive hash. Coverage retains actual
+API/CLI saves and exclusive reads, direct ciphertext/classification/no-key checks
+for both CLI captures, MCP/Harness redaction and unsupported-field refusal, and
+zero automatic model calls. Synthetic POSIX processors do not establish Windows
+runtime behavior or real OCR quality. Actual native OCR success/failure remains
+in the earlier import/core records, not a rerun here.
+
+The complete-check wrapper SHA-256 is
+`77f0e7aaada8e3589225e653730eae3983142578aac54a4600dd78411bf7b96e`;
+the installed-consumer wrapper is
+`a00576ff50478eb825285ba35b223167b58b73998691ec07d1b2c2d06f3c8b39`.
+Both are retained under `.scratch/run-pdf-windows-{full,package}.sh`.
+
+The earlier **1078-case / 477-entry** results remain historical checkpoints;
+the fresh results above do not relabel those runs. The original macOS
+minimum-runtime CLI waiter failures remain open. Earlier Linux selected-protocol
+checks are also historical, not fresh Linux execution for this candidate.
+No test assertion, original deadline, runtime version or platform result has
+been substituted or weakened. Complete batch/final roadmap acceptance is still
+withheld pending the remaining macOS diagnosis and final integration work.
 
 Database changes: none. Data migration: none. Configuration: optional local
 `windowsHost` is required only for explicitly selected processing on Windows;

@@ -3,8 +3,11 @@
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Product checkpoint: `2684945456f11229c30e88866ce6a062d72e48c9`.
 This records working local import/save/read and its corrections. It does **not**
-accept the complete batch: macOS minimum-runtime waiters and Windows ownership/
-platform work remain open. No push, npm publication, deployment or real host change.
+accept the complete batch. At this checkpoint macOS minimum-runtime waiters and
+Windows ownership/platform work were open. The later [Windows correction record](pdf-windows-host-verification-2026-10-29.md)
+tracks the reviewed ownership fix, fresh complete/package checks and the user's
+explicit Windows platform-verification waiver. macOS failures remain open.
+No push, npm publication, deployment or real host change.
 
 ## Implemented and reviewed
 

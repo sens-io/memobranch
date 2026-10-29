@@ -1,8 +1,9 @@
 # Selected local PDF pages and OCR
 
 Development source only; not published to npm. The import/save/read integration
-is under verification. The batch is not accepted: Windows background-process
-ownership correction and the remaining macOS/full checks are under verification.
+is under verification. The batch is not accepted: remaining macOS/final checks
+are open. The [Windows ownership correction](pdf-windows-host-verification-2026-10-29.md)
+has portable regression coverage and independent source review.
 Actual Windows platform verification is skipped by the user's request; this is
 not a passing Windows result.
 Use [the roadmap](remaining-roadmap.md) for acceptance status.

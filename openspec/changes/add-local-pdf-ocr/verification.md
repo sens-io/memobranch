@@ -2,9 +2,9 @@
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 On 2026-10-29 the user explicitly waived Windows platform execution verification.
-Keep that check as **skipped by request**, never as passed. The known Windows
-process-ownership defect still requires a code correction and independent review;
-the waiver does not remove the remaining macOS/Linux checks.
+Keep that check as **skipped by request**, never as passed. The waiver did not
+remove the Windows process-ownership code correction and independent review,
+tracked in the later correction record below, or the remaining macOS/Linux checks.
 At the reviewed design checkpoint, this was roadmap batch 5 preparation without
 processing code, public API, CLI feature or evidence migration. The later
 [internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)

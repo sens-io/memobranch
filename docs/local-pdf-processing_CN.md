@@ -1,6 +1,6 @@
 # 本机选定 PDF 页面与 OCR
 
-仅限开发源码，尚未发布到 npm。导入、保存和读取流程正在验证；Windows 后台子进程修复及剩余 macOS、全量检查仍在验证中，本批未验收。按用户要求跳过 Windows 实机验证，不表示该平台通过。实际状态见[路线图](remaining-roadmap.md)。
+仅限开发源码，尚未发布到 npm。导入、保存和读取流程正在验证；macOS 及最终检查仍未完成，本批未验收。[Windows 后台子进程修复](pdf-windows-host-verification-2026-10-29.md)已有跨系统回归测试和独立源码复审。按用户要求跳过 Windows 实机验证，不表示该平台通过。实际状态见[路线图](remaining-roadmap.md)。
 
 原有[文字层 PDF 导入](pdf-import.md)仍是默认行为。新增选项通过本机已配置的 Poppler `pdftoppm` 渲染指定页面，也可以用 Tesseract 识别文字。不调用模型、不上传资料、不自动下载依赖或语言文件，也不批准 Wiki 知识。
 

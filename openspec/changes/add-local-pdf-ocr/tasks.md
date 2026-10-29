@@ -4,8 +4,11 @@ The [internal processing checkpoint](../../../docs/pdf-processing-core-verificat
 has code, related/runtime tests and one actual native image-only control. The later
 [local import checkpoint](../../../docs/pdf-processing-import-verification-2026-10-29.md)
 adds public library/CLI save/read code, immutable encrypted media and actual mixed
-native save/read evidence. Keep full tasks below open until Windows ownership,
-integrated behavior, complete gates and final review are verified.
+native save/read evidence. The later [Windows correction](../../../docs/pdf-windows-host-verification-2026-10-29.md)
+has portable regression checks and independent source review. Actual Windows
+platform execution is skipped by the user's request, not a required future check
+or a passing platform result. Keep full tasks below open until the remaining
+macOS checks, integrated behavior, complete gates and final review are verified.
 
 - [ ] Define host-owned local processor configuration, strict opt-in page selection and bounded provenance.
 - [ ] Implement owned rendering/OCR with complete output, cancellation, deadlines and private temporary cleanup.

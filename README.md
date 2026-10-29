@@ -114,7 +114,7 @@ flowchart LR
 
 > **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
 
-> **Optional selected PDF pages (under verification):** [Local rendering/OCR, immutable original/page preservation and authorized local reads](docs/local-pdf-processing.md). The text-only default remains available. OCR is unverified; Windows process ownership and final acceptance checks remain open. Not yet published to npm.
+> **Optional selected PDF pages (under verification):** [Local rendering/OCR, immutable original/page preservation and authorized local reads](docs/local-pdf-processing.md). The text-only default remains available. OCR is unverified; macOS minimum-runtime and final acceptance checks remain open. Windows platform verification is skipped by request. Not yet published to npm.
 
 > **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Local read-only views, not cross-account sharing or historical truth. Not yet published to npm.
 
