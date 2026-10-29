@@ -23,16 +23,51 @@ export async function runPdfSupervisor(command: { file: string; args: string[] }
     });
     const output: Buffer[] = [], diagnostics: Buffer[] = [];
     let outBytes = 0, errBytes = 0, failure: unknown, forceTimer: ReturnType<typeof setTimeout> | undefined, forcing: Promise<void> | undefined;
+    let finishing = false, cleanupAttempted = false;
+    const cleanup = async () => { cleanupAttempted = true; await options.cleanup?.(); };
+    const finish = (code: number | null) => {
+      if (finishing) return; finishing = true;
+      clearTimeout(timer); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort);
+      void (async () => {
+        const stderr = Buffer.concat(diagnostics), settled = stderr.length >= marker.length && stderr.subarray(-marker.length).equals(marker);
+        try {
+          if (forcing) await forcing;
+          if (!settled && child.pid && options.cleanup && !cleanupAttempted) await cleanup();
+        } catch {
+          throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Owned PDF process cleanup could not be confirmed; private work files were retained', { pdfCleanupUncertain: true });
+        }
+        if (failure) throw failure;
+        if (signal?.aborted) throw cancellationError();
+        if (!settled || code !== 0) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Owned PDF supervisor failed or returned no completed cleanup receipt');
+        const err = stderr.subarray(0, -marker.length);
+        if (err.length > 65536) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF processor diagnostics exceeded limits');
+        return { out: Buffer.concat(output), err };
+      })().then(resolve, reject);
+    };
     const stop = (reason: unknown) => {
       failure ??= reason;
       // EOF is the supervisor's cooperative cancellation/parent-death channel.
       child.stdin.end();
       forceTimer ??= setTimeout(() => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        forcing = process.platform === 'win32'
-          ? Promise.resolve().then(() => { if (!child.kill('SIGKILL') && child.exitCode === null && child.signalCode === null) throw new Error('Owned supervisor did not stop'); })
-          : terminateGit(child);
-        void forcing.catch(() => {});
+        forcing = (async () => {
+          try {
+            if (process.platform !== 'win32') await terminateGit(child);
+            else if (child.exitCode === null && child.signalCode === null && !child.kill('SIGKILL')) throw new Error('Owned supervisor did not stop');
+          } finally { await cleanup(); }
+          if (child.exitCode === null && child.signalCode === null) await new Promise<void>((done, failed) => {
+            const exited = () => { clearTimeout(deadline); done(); };
+            const deadline = setTimeout(() => { child.removeListener('exit', exited); failed(new Error('Owned supervisor exit could not be confirmed')); }, 1000);
+            child.once('exit', exited);
+          });
+        })();
+        // A dead leader can leave inherited pipes open. Settlement must not
+        // depend on their close event; even failed cleanup returns an honest error.
+        const forced = () => {
+          child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+          if (child.exitCode === null && child.signalCode === null) child.unref();
+          finish(child.exitCode);
+        };
+        void forcing.then(forced, forced);
       }, 1000);
     };
     const abort = AsyncResource.bind(() => stop(cancellationError()));
@@ -49,24 +84,7 @@ export async function runPdfSupervisor(command: { file: string; args: string[] }
       else diagnostics.push(bytes);
     });
     child.once('error', () => { failure ??= new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Owned PDF supervisor could not start'); });
-    child.once('close', code => {
-      clearTimeout(timer); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort);
-      void (async () => {
-        const stderr = Buffer.concat(diagnostics), settled = stderr.length >= marker.length && stderr.subarray(-marker.length).equals(marker);
-        try {
-          if (forcing) await forcing;
-          if (!settled && child.pid && options.cleanup) await options.cleanup();
-        } catch {
-          throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Owned PDF process cleanup could not be confirmed; private work files were retained', { pdfCleanupUncertain: true });
-        }
-        if (failure) throw failure;
-        if (signal?.aborted) throw cancellationError();
-        if (!settled || code !== 0) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Owned PDF supervisor failed or returned no completed cleanup receipt');
-        const err = stderr.subarray(0, -marker.length);
-        if (err.length > 65536) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF processor diagnostics exceeded limits');
-        return { out: Buffer.concat(output), err };
-      })().then(resolve, reject);
-    });
+    child.once('close', finish);
     child.stdin.write(input);
     signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort();
   });

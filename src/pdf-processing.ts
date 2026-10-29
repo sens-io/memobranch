@@ -78,13 +78,14 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
         let ocrText: string | undefined;
         if (ocr) {
           const path = join(temporary, 'page.png');
-          await writeFile(path, image, { flag: 'wx', mode: 0o600 });
-          try {
+          ocrText = await withPdfPageFile(path, image, async () => {
             const output = (await run(ocr.path, [path, 'stdout', '--tessdata-dir', languageRoot!, '-l', selection.languages!.join('+'), '--psm', '3', 'txt'], 160_000)).out;
-            try { ocrText = new TextDecoder('utf-8', { fatal: true }).decode(output).trim(); } catch { invalid(); }
-            if (ocrText.includes('\0')) invalid();
-            if (ocrText.length > 40_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF OCR page exceeds the character limit');
-          } finally { await rm(path, { force: true }); }
+            let text: string;
+            try { text = new TextDecoder('utf-8', { fatal: true }).decode(output).trim(); } catch { invalid(); }
+            if (text.includes('\0')) invalid();
+            if (text.length > 40_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF OCR page exceeds the character limit');
+            return text;
+          });
         }
         pages.push({ number, ...size, mediaType: 'image/png', bytes: image.length, sha256: createHash('sha256').update(image).digest('hex'), data: image.toString('base64'),
           ...(ocrText === undefined ? {} : { ocrText, ocrSha256: sha256(ocrText) }) });
@@ -100,6 +101,15 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
   });
   await verifyProfile();
   return { record, verifyProfile };
+}
+
+/** @internal Keep the exact staged page and original error when cleanup is uncertain. */
+export async function withPdfPageFile<T>(path: string, image: Buffer, action: () => Promise<T>): Promise<T> {
+  await writeFile(path, image, { flag: 'wx', mode: 0o600 });
+  let retain = false;
+  try { return await action(); }
+  catch (error) { retain = error instanceof AgentMemoryError && error.safeDetails?.pdfCleanupUncertain === true; throw error; }
+  finally { if (!retain) await rm(path, { force: true }); }
 }
 
 async function executable(input: string | undefined) {

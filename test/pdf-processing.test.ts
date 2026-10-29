@@ -9,12 +9,21 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { deflateSync } from 'node:zlib';
-import { processPdfPages } from '../src/pdf-processing.js';
+import { processPdfPages, withPdfPageFile } from '../src/pdf-processing.js';
+import { AgentMemoryError } from '../src/errors.js';
 import { assertPdfPageProcessing, inspectPdfPng, type PdfProcessorConfig } from '../src/pdf-processing-schema.js';
 import { withOperation } from '../src/operation.js';
 import { sha256 } from '../src/utils.js';
 
 const posix = { skip: process.platform === 'win32' };
+for (const outcome of ['success', 'failure', 'uncertain'] as const) test(`PDF processor: staged OCR page ${outcome==='uncertain'?'and original uncertainty survive':'is removed after '+outcome}`, async t => {
+  const root=await mkdtemp(join(process.cwd(),'.scratch/pdf-ocr-page-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,'page.png'), image=Buffer.from('SYNTHETIC exact staged page'), error=new AgentMemoryError('DEPENDENCY_UNAVAILABLE','Synthetic cleanup result',outcome==='uncertain'?{pdfCleanupUncertain:true}:{});
+  const pending=withPdfPageFile(path,image,async()=>{assert.deepEqual(await readFile(path),image);if(outcome!=='success')throw error;return 'complete';});
+  if(outcome==='success')assert.equal(await pending,'complete');else await assert.rejects(pending,e=>e===error);
+  if(outcome==='uncertain')assert.deepEqual(await readFile(path),image);else assert.equal(existsSync(path),false);
+});
 async function fixture(t: TestContext, mode = 'normal') {
   const root = await mkdtemp(join(process.cwd(), '.scratch/pdf-processing-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -15,9 +15,9 @@ import { withOperation } from '../src/operation.js';
 async function fixture(t: TestContext, mode = 'normal') {
   const root = await mkdtemp(join(process.cwd(), '.scratch/pdf-supervisor-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const script = join(root,'supervisor.mjs'), marker = join(root,'started'), token = randomBytes(16).toString('hex');
-  await writeFile(script, `import fs from 'node:fs';import readline from 'node:readline';
-const mode=${JSON.stringify(mode)},started=${JSON.stringify(marker)};
+  const script = join(root,'supervisor.mjs'), marker = join(root,'started'), helperMarker = join(root,'helper'), token = randomBytes(16).toString('hex');
+  await writeFile(script, `import fs from 'node:fs';import readline from 'node:readline';import{spawn}from'node:child_process';
+const mode=${JSON.stringify(mode)},started=${JSON.stringify(marker)},helperMarker=${JSON.stringify(helperMarker)};
 const input=readline.createInterface({input:process.stdin});
 input.once('line',line=>{const request=JSON.parse(line);fs.writeFileSync(started,String(process.pid));
 const receipt='\\nMEMOBRANCH_PDF_SETTLED:'+request.token+'\\n';
@@ -28,6 +28,7 @@ else if(mode==='wrong'){process.stderr.write(receipt+'extra',()=>process.exit(0)
 else if(mode==='overflow'){process.stdout.write(Buffer.alloc(10001));setInterval(()=>{},1000);input.once('close',()=>finish(125));}
 else if(mode==='diagnostics'){process.stderr.write(Buffer.alloc(65537,65),()=>finish(0));}
 else if(mode==='nonzero'){finish(7);}
+else if(mode==='leader-helper'){const helper=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','inherit','inherit']});fs.writeFileSync(helperMarker,String(helper.pid));helper.unref();process.exit(0);}
 else {setInterval(()=>{},1000);if(mode==='cooperate')input.once('close',()=>finish(125));}
 });`);
   let cleaned = false;
@@ -36,7 +37,7 @@ else {setInterval(()=>{},1000);if(mode==='cooperate')input.once('close',()=>fini
       cwd: root, env: {}, end: options.end ?? performance.now()+10_000, maximum: options.maximum ?? 10_000,
       cleanup: options.cleanup ?? (async () => { await delay(30); cleaned = true; }),
     });
-  return { root, marker, run, cleaned: () => cleaned };
+  return { root, marker, helperMarker, run, cleaned: () => cleaned };
 }
 async function started(path: string) { const end=performance.now()+5000;while(!existsSync(path)){assert.ok(performance.now()<end,'Expected the actual supervisor process to read its request');await delay(10);} }
 
@@ -77,6 +78,18 @@ test('PDF supervisor: a real EOF-ignoring process is force-stopped and fallback 
 test('PDF supervisor: uncertain cleanup is reported explicitly instead of claiming cancellation completed', async t => {
   const f=await fixture(t,'missing');
   await assert.rejects(f.run({cleanup:async()=>{throw new Error('synthetic cleanup refused');}}),(e:any)=>e.code==='DEPENDENCY_UNAVAILABLE'&&e.safeDetails?.pdfCleanupUncertain===true);
+});
+for (const uncertain of [false,true]) test(`PDF supervisor: an exited leader with inherited helper pipes settles even when fallback cleanup ${uncertain?'fails':'succeeds'}`, { timeout:10_000 }, async t => {
+  const f=await fixture(t,'leader-helper');let attempted=false;
+  const stopHelper=async()=>{
+    if(!existsSync(f.helperMarker))return;
+    const pid=Number(await readFile(f.helperMarker,'utf8'));
+    try{process.kill(pid,'SIGKILL');}catch(e){if((e as NodeJS.ErrnoException).code!=='ESRCH')throw e;}
+  };
+  t.after(stopHelper);
+  const pending=f.run({end:performance.now()+2000,cleanup:async()=>{attempted=true;await stopHelper();if(uncertain)throw new Error('Synthetic cleanup uncertainty');}});
+  await assert.rejects(pending,(e:any)=>e.code==='DEPENDENCY_UNAVAILABLE'&&(uncertain?e.safeDetails?.pdfCleanupUncertain===true:!e.safeDetails?.pdfCleanupUncertain));
+  assert.equal(attempted,true);
 });
 for(const mode of ['overflow','diagnostics']) test(`PDF supervisor: ${mode} overflow refuses the complete result`, async t => {
   const f=await fixture(t,mode);await assert.rejects(f.run(),{code:'CONTENT_TOO_LARGE'});

@@ -37,15 +37,30 @@ includes source, not a locally compiled Windows executable. See the bilingual
 | Build and declarations | Passed: `.scratch/pdf-windows-build-5.log`, `pdf-windows-types-5.log`, `pdf-windows-node20-compile-1.log`. Initial duplicate host-variable build error is retained in `pdf-windows-build-1.log`; the local variable was corrected. |
 | C# source compilation | Exit 0, C# 5 language, zero compiler warnings/errors in an isolated Linux .NET 8.0.100 arm64 container; seven quoting and five managed structure-layout assertions passed. `.scratch/pdf-windows-csharp-compile-1.log`. No Windows API was executed; this is not a .NET Framework/Windows build result. |
 | Compiler image | `mcr.microsoft.com/dotnet/sdk@sha256:239eb99884b49bac13f4ff5935e118654f87b67d6e31bc842c7cd5a6c46fcc4f`; no-network, read-only root/source mounts, temporary build storage, 1 GiB / 2 CPUs / 256 PIDs, `--rm`. `.scratch/pdf-windows-dotnet-image.log`. No host runtime or project dependency was upgraded. |
-| Minimum-runtime attempt | `.scratch/pdf-windows-node20-related-1.log` retains failures. Fixture copying nested an existing directory, so original non-TypeScript helper/PDF files were absent at expected paths. The complete attempt must finish before staging is corrected and retried. It is not a passing result. |
+| Minimum-runtime initial attempts | First complete run **59/66**, seven failed, zero cancelled/skipped: `.scratch/pdf-windows-node20-related-1.log`. Fixture copying nested an existing directory, so original non-TypeScript helper/PDF files were absent at expected paths. After that run exited, original resources were copied to the expected paths. The same collection passed **66/66**, zero failed/cancelled/skipped, exit 0 in `pdf-windows-node20-related-2.log`. These results precede the two review corrections below. |
 | Actual Windows platform | **Skipped by explicit user request**. No actual Windows process, ACL, installation or package acceptance is claimed. |
-| Independent committed-candidate review | Pending. Source changes are not self-approved by passing portable checks. |
+| Independent committed-candidate review | Candidate `821eb7de` reviewed in disjoint 4/4 native, 5/5 coordination/integration and 9/9 package/docs scopes: **18/18**, zero skipped. Two coordination P2 findings are retained below. No other confirmed P1/P2 was reported. |
 
 The new portable tests exercise exact binary output, bounded input/output,
 receipt refusal, nonzero exits, pre-cancellation, actual cooperative EOF
 cancellation, forced termination, awaited fallback cleanup, uncertain-cleanup
 reporting, execution deadline and survival of an unrelated process. They do not
 emulate Windows ACLs or Job Object semantics.
+
+## Independent findings and correction
+
+| Source branch | Confirmed finding at `821eb7de` | Correction and observed checks |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | If the supervisor leader exits but a helper holds inherited output pipes, waiting for `close` can prevent fallback cleanup forever. | The force path now runs cleanup even after leader exit, confirms the supervisor's exit, and settles independently of inherited pipe closure. Two actual helper-pipe cases cover successful and failed fallback cleanup. A retained baseline run loaded the exact candidate source (SHA-256 `e5110c9ad483a5351dcd6320ae643a5a95e1d94cd10778dcafd6435af4ba8873`) and observed no settlement/fallback 2200 ms after a 300 ms deadline, before manual helper cleanup: `.scratch/pdf-windows-pipe-baseline-1.log`. |
+| `kevin/knowledge-expansion` | The OCR inner `finally` could remove `page.png` before the outer catch saw `pdfCleanupUncertain`, or replace that error if removal failed. | An internal staged-page operation preserves exact page bytes and the same error when cleanup is uncertain. The unchanged outer guard then retains the whole private work directory. Three actual filesystem cases check success, ordinary failure and retained uncertainty. |
+
+The corrected complete Node 22 collection passed **71/71**, zero
+failed/cancelled/skipped, exit 0: `.scratch/pdf-windows-related-fixed-1.log`.
+Build/types passed in `pdf-windows-review-build-2.log` and
+`pdf-windows-review-types-2.log`. The earlier 13/13 coordination-only run
+(`pdf-windows-supervisor-fixed-1.log`) is not a replacement for that collection.
+Fresh compiled Node 20 checks and independent review of the corrected committed
+candidate remain required. The Windows execution waiver remains unchanged.
 
 Earlier full/default-branch/package results remain historical checkpoints; they
 cannot be relabeled as results for this changed runtime code. The original macOS
