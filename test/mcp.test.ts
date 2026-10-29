@@ -15,7 +15,8 @@ test('MCP server negotiates, lists tools, and calls the vault', async () => {
   const client = new Client({ name: 'memobranch-test', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ['--import', 'tsx', join(process.cwd(), 'src', 'mcp.ts'), root],
+    // Exercise the shipped entrypoint on every supported runtime, without a dev loader.
+    args: [join(process.cwd(), 'dist', 'mcp.js'), root],
     env: { ...process.env, AMEM_PERMISSIONS: 'read,write,maintain', AMEM_MAX_SENSITIVITY: 'internal', AMEM_TENANT_ID: tenantId, AMEM_ACTOR_ID: 'server-test', AMEM_ACTOR_NAME: 'Server Test' },
     stderr: 'pipe',
   });

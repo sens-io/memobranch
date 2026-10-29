@@ -86,7 +86,7 @@ function createServer(): McpServer {
   server.registerTool('memory_capture', {
     title: 'Capture immutable evidence',
     description: 'Idempotently capture evidence and optionally extract candidates.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       content: z.string().min(1).max(1_000_000),
       sourceUri: z.string().max(2_048).optional(),
       scope: z.enum(scopes).default('user'),
@@ -105,7 +105,7 @@ function createServer(): McpServer {
   server.registerTool('memory_propose', {
     title: 'Propose a durable memory',
     description: 'Write an atomic candidate to the review queue.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       statement: z.string().min(1).max(1_000_000),
       key: z.string().min(1).max(512),
       kind: z.enum(memoryKinds).default('fact'),
@@ -135,7 +135,7 @@ function createServer(): McpServer {
   server.registerTool('memory_search', {
     title: 'Search durable memory',
     description: 'Search canonical memory with authorization applied before ranking and expansion.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       query: z.string().min(1).max(2_000),
       limit: z.number().int().min(1).max(50).default(8),
       includeSensitive: z.boolean().default(false),
@@ -150,7 +150,7 @@ function createServer(): McpServer {
   server.registerTool('memory_version', {
     title: 'Read service version',
     description: 'Return the stable package and vault schema versions.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async () => execute(async () => ({ version: VERSION, schemaVersion: (await vault.config()).version })));
 
@@ -249,21 +249,21 @@ function createServer(): McpServer {
   server.registerTool('memory_config', {
     title: 'Read effective configuration',
     description: 'Return the non-secret vault policy, limits, feature, and remote configuration.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async () => execute(() => vault.config()));
 
   server.registerTool('memory_policy', {
     title: 'Read effective principal policy',
     description: 'Return the immutable server-owned principal permissions and clearances.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async () => execute(async () => ({ principal })));
 
   server.registerTool('memory_context', {
     title: 'Build authorized context',
     description: 'Return whole authorized resident and retrieved records within character and optional estimated-token budgets.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       query: z.string().min(1).max(2_000),
       limit: z.number().int().min(1).max(50).default(8),
       maxCharacters: z.number().int().min(500).max(50_000).default(12_000),
@@ -279,14 +279,14 @@ function createServer(): McpServer {
   server.registerTool('memory_get', {
     title: 'Read a memory document',
     description: 'Read one authorized evidence, candidate, or canonical record by id.',
-    inputSchema: z.object({ id: z.string().min(1).max(512) }),
+    inputSchema: z.strictObject({ id: z.string().min(1).max(512) }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async ({ id }) => execute(async () => modelDocument(await vault.get(id))));
 
   server.registerTool('memory_consolidate', {
     title: 'Consolidate candidates',
     description: 'Promote eligible candidates, merge duplicates, and surface conflicts.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async () => execute(() => vault.consolidate()));
 
@@ -294,8 +294,8 @@ function createServer(): McpServer {
     title: 'Approve or reject a candidate',
     description: 'Perform an authorized review decision.',
     inputSchema: z.discriminatedUnion('action', [
-      z.object({ action: z.literal('approve'), candidateId: z.string().min(1).max(512) }),
-      z.object({ action: z.literal('reject'), candidateId: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
+      z.strictObject({ action: z.literal('approve'), candidateId: z.string().min(1).max(512) }),
+      z.strictObject({ action: z.literal('reject'), candidateId: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
     ]),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async (input) => execute(() => input.action === 'approve'
@@ -305,63 +305,63 @@ function createServer(): McpServer {
   server.registerTool('memory_forget', {
     title: 'Revoke a memory',
     description: 'Stop retrieval while retaining auditable encrypted history.',
-    inputSchema: z.object({ selector: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
+    inputSchema: z.strictObject({ selector: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
   }, async (input) => execute(() => vault.forget(input.selector, input.reason)));
 
   server.registerTool('memory_erase', {
     title: 'Cryptographically erase confidential memory',
     description: 'Administrator-only replacement with a tombstone and wrapped-key destruction.',
-    inputSchema: z.object({ selector: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
+    inputSchema: z.strictObject({ selector: z.string().min(1).max(512), reason: z.string().min(1).max(4_000) }),
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
   }, async (input) => execute(() => vault.erase(input.selector, input.reason)));
 
   server.registerTool('memory_doctor', {
     title: 'Audit vault health',
     description: 'Validate configuration, Git, index, transactions, links, expiry, and conflicts.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async () => execute(() => vault.doctor()));
 
   server.registerTool('memory_history', {
     title: 'Read Git history',
     description: 'Show attributed vault commits.',
-    inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20), path: z.string().max(2_048).optional() }),
+    inputSchema: z.strictObject({ limit: z.number().int().min(1).max(100).default(20), path: z.string().max(2_048).optional() }),
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
   }, async (input) => execute(() => vault.history(input.limit, input.path)));
 
   server.registerTool('memory_recover', {
     title: 'Recover transactions',
     description: 'Roll back incomplete writes and replay commit-ready transactions.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
   }, async () => execute(() => vault.recover()));
 
   server.registerTool('memory_reindex', {
     title: 'Rebuild persistent search index',
     description: 'Incrementally refresh lexical data and optional embedding vectors.',
-    inputSchema: z.object({ semantic: z.boolean().default(false) }),
+    inputSchema: z.strictObject({ semantic: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async ({ semantic }) => execute(() => vault.reindex(semantic)));
 
   server.registerTool('memory_remote_status', {
     title: 'Inspect remote synchronization',
     description: 'Fetch and report ahead, behind, and divergence state.',
-    inputSchema: z.object({ fetch: z.boolean().default(true) }),
+    inputSchema: z.strictObject({ fetch: z.boolean().default(true) }),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false },
   }, async ({ fetch }) => execute(() => vault.remoteStatus(fetch)));
 
   server.registerTool('memory_remote_sync', {
     title: 'Synchronize remote memory',
     description: 'Fetch, integrate conflict-safely, validate, and optionally push.',
-    inputSchema: z.object({ push: z.boolean().default(false) }),
+    inputSchema: z.strictObject({ push: z.boolean().default(false) }),
     annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false },
   }, async ({ push }) => execute(() => vault.sync({ push })));
 
   server.registerTool('memory_maintenance', {
     title: 'Run maintenance cycle',
     description: 'Recover, expire, reindex, diagnose, and optionally synchronize once.',
-    inputSchema: z.object({}),
+    inputSchema: z.strictObject({}),
     annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true },
   }, async () => execute(() => new MaintenanceService(vault).runOnce()));
 

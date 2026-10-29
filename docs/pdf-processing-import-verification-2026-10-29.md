@@ -82,7 +82,11 @@ directory was clear afterwards. All data is synthetic and local.
 
 ## Remaining acceptance
 
-Independent review of this committed integration is pending. Windows background
+Independent read-only review of candidate `1df543e3714c7035e3183a677fb9ca92a159f0b8`
+covered **19/19 files, zero skipped**, in disjoint import/worker/tests (3), evidence/
+types/vault (4), and CLI/exports/bilingual/status records (12) assignments. No new
+confirmed P1/P2 was found in that integration. Reviewers read the retained logs;
+they did not execute tests or change files. Windows background
 helper ownership after normal leader exit remains P2; private ACL/platform execution
 also need evidence. No new full-repository, installed-package, dual Git-default or
 production-audit acceptance is claimed by these related runs. The older macOS

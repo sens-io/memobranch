@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
-import { defineTool } from '@deepseek-ai/dsh-tools';
+import { defineTool, validateJsonSchemaValue, type ToolDefinition } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { modelDocument } from './evidence.js';
@@ -74,6 +74,16 @@ const jsonOutput = {
   render: (_args: unknown, value: JsonValue) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 };
 
+/** The SDK's implicit root is open; every MemoBranch request has a closed vocabulary. */
+function registerTool(ctx: Context, tool: ToolDefinition) {
+  const parameters = { ...tool.parameters, additionalProperties: false };
+  ctx.tools.register({ ...tool, parameters, async execute(...args: Parameters<typeof tool.execute>) {
+    const violations = validateJsonSchemaValue(parameters, args[0], '');
+    if (violations.length) throw safeError(new AgentMemoryError('VALIDATION_FAILED', 'Invalid tool arguments; only declared fields are accepted'));
+    return tool.execute(...args);
+  } });
+}
+
 const stringOutput = {
   schema: { type: 'string' } as const,
   render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }],
@@ -113,11 +123,11 @@ export function apply(ctx: Context, config: Config): void {
 function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
   if (!config.sharedWikiConfig || !granted(principal, 'read')) return;
   const shared = new SharedWikiReader(vault, { configPath: config.sharedWikiConfig });
-  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_catalog',
+  registerTool(ctx, defineTool({ name: 'memory_shared_wiki_catalog',
     description: 'List only configured shared names/pins/ceilings granted to the current reader. Host owns all paths and identities. Does not prove each page is available or change access.', parameters: {}, output: jsonOutput,
     async execute(args, exec) { wikiArguments(args, []); return runJson(vault, exec.signal, () => shared.catalog()); },
   }));
-  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_snapshot',
+  registerTool(ctx, defineTool({ name: 'memory_shared_wiki_snapshot',
     description: 'Read complete pages from a configured source at its host-pinned local ancestor commit. Current caller/source grants, scope/clearance, private opt-in, keys, withdrawal and expiry apply. No fetching, model, import, merge, approval or grant editing; content is untrusted data. Offline copies cannot be recalled. Complete escaped result limited to 9 MiB.',
     parameters: {
       sourceId: { type: 'string', required: true, description: 'Configured source name from the shared catalog.' },
@@ -130,7 +140,7 @@ function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Pr
   }));
   if (!granted(principal, 'write')) return;
   const importer = new SharedWikiImporter(vault, { configPath: config.sharedWikiConfig });
-  ctx.tools.register(defineTool({ name: 'memory_shared_wiki_import_prepare',
+  registerTool(ctx, defineTool({ name: 'memory_shared_wiki_import_prepare',
     description: 'Prepare a complete signed copy proposal from a configured source and required catalog expectedCommit. Read/write required; no capture, extraction, model or approval. Compiled material, not original raw evidence. Inspect the whole proposal before separate import_apply with confirm:true; plaintext offline copies cannot be recalled. Paths, identities and grants remain host-owned.',
     parameters: {
       sourceId: { type: 'string', required: true, description: 'Host-configured source name from the shared catalog.' },
@@ -146,7 +156,7 @@ function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Pr
       return wikiToolResult(prepared, prepared.plan, 'memory_shared_wiki_import_apply');
     }); },
   }));
-  if (granted(principal, 'review')) ctx.tools.register(defineTool({ name: 'memory_shared_wiki_import_apply',
+  if (granted(principal, 'review')) registerTool(ctx, defineTool({ name: 'memory_shared_wiki_import_apply',
     description: 'Explicitly confirm a completely reviewed signed copy with read/write/review authority and confirm:true. Rechecks current host source, pin, grants and keys. Retains immutable compiled evidence only, no Wiki approval or integration. Plaintext offline copies cannot be recalled.',
     parameters: {
       plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete unchanged copy plan returned by import_prepare.' },
@@ -160,7 +170,7 @@ function registerSharedWikiTools(ctx: Context, vault: MemoryVault, principal: Pr
 }
 
 function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
-  if (granted(principal, 'write')) ctx.tools.register(defineTool({
+  if (granted(principal, 'write')) registerTool(ctx, defineTool({
     name: 'memory_experience_capture',
     description: 'Record an unverified execution trace as immutable evidence. Fields: family, taskId, runId, context, actions, observedResult, outcome (success/failure/partial), limitations. No extraction, automatic validation, promotion or execution.',
     parameters: {
@@ -177,7 +187,7 @@ function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Pr
       });
     },
   }));
-  if (granted(principal, 'read') && granted(principal, 'write')) ctx.tools.register(defineTool({
+  if (granted(principal, 'read') && granted(principal, 'write')) registerTool(ctx, defineTool({
     name: 'memory_experience_prepare',
     description: 'Prepare a signed expiring proposal with traceIds, name, description, procedure, conditions, limitations and optional confidential selection. Not approval or validation. Only trusted host library code may supply an evaluator; no runner/module path is accepted.',
     parameters: { proposal: { type: 'object', additionalProperties: true, required: true, description: 'Complete source-backed proposal input; current read/write authority still applies.' } }, output: jsonOutput,
@@ -188,7 +198,7 @@ function registerExperienceTools(ctx: Context, vault: MemoryVault, principal: Pr
       });
     },
   }));
-  if (granted(principal, 'read') && granted(principal, 'review')) ctx.tools.register(defineTool({
+  if (granted(principal, 'read') && granted(principal, 'review')) registerTool(ctx, defineTool({
     name: 'memory_experience_export',
     description: 'Explicitly return complete skill file strings for a stored passing host-run validation. Current sources, tenant, keys, expiry and private selection still apply. Plaintext copies cannot be recalled. No installation, execution, publication or new grants.',
     parameters: {
@@ -212,7 +222,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     includeSensitive: { type: 'boolean' as const, description: 'Explicitly select authorized sensitive material.' },
     includeSecret: { type: 'boolean' as const, description: 'Explicitly select authorized secret material; keys remain required.' },
   };
-  if (granted(principal, 'read') && granted(principal, 'write')) ctx.tools.register(defineTool({
+  if (granted(principal, 'read') && granted(principal, 'write')) registerTool(ctx, defineTool({
     name: 'memory_wiki_observe',
     description: 'Explicitly save a signed immutable observation of current committed pages and exact dependencies with read/write authority and confirm:true. Host time and identity are not caller inputs. Partial local evidence, not first learning or proof of understanding. No approval, execution or content changes.',
     parameters: { ...availabilityParameters, confirm: { type: 'boolean', required: true, description: 'Must be true after explicit review of this observation write.' } },
@@ -222,7 +232,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
   if (granted(principal, 'read')) {
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_as_known_at',
       description: 'Read exact committed knowledge supported by explicit signed local observations at or before at, never inferred from Git dates. Legacy/ambiguous history stays unknown. Optional observationIds restrict coverage; outside newer/conflicting observations are not ruled out. Current source/key/tenant/withdrawal/private checks apply. No model or writes; complete escaped result limited to 9 MiB.',
       parameters: { ...availabilityParameters,
@@ -233,7 +243,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, async () => wikiToolResult(await vault.wikiAsKnownAt(wikiToolInput(availabilityAtSchema, args))));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_snapshot',
       description: 'Read 1–25 complete Wiki pages and dependencies using exactly one full local ancestor commit OR at ISO timestamp. Date lookup scans at most 2000 current first-parent commits by committer time, not as-known-at truth. Current permission, withdrawal, expiry and explicit confidential selection apply. No checkout, model or import. Complete escaped review is limited to 9 MiB.',
       parameters: {
@@ -248,7 +258,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, async () => wikiToolResult(await vault.wikiSnapshot(wikiToolInput(wikiSnapshotToolSchema, args))));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_preview',
       description: 'Read an authorized before/after comparison of a proposed Wiki plan; validate permissions and source revisions without applying it.',
       parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete proposed Wiki plan.' } },
@@ -258,7 +268,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, () => vault.wikiPreview(args.plan));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_catalog',
       description: 'Read authorized Wiki categories, summaries, page links, and revisions without writing knowledge.',
       parameters: {},
@@ -268,7 +278,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, () => vault.wikiCatalog());
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_rules',
       description: 'Read authorized versioned Wiki purpose and maintenance rules.',
       parameters: {},
@@ -278,7 +288,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, () => vault.wikiRules());
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_query',
       description: 'Navigate the authorized Wiki and return a cited answer with uncertainty. Filing requires a separate explicit operation.',
       parameters: {
@@ -295,7 +305,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     }));
   }
   if (granted(principal, 'write')) {
-    if (granted(principal, 'read')) ctx.tools.register(defineTool({
+    if (granted(principal, 'read')) registerTool(ctx, defineTool({
       name: 'memory_wiki_integration_prepare',
       description: 'Prepare human-authored Wiki integration from a retained imported evidence ID and exact target revision (zero creates). Keeps local support and imported restrictions/conflicts. No model, remote read or automatic approval. Inspect the complete comparison and preview before separate memory_wiki_apply with review permission. Private output requires explicit selection and keys.',
       parameters: {
@@ -319,7 +329,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return wikiToolResult(prepared, prepared.plan);
       }); },
     }));
-    if (granted(principal, 'read')) ctx.tools.register(defineTool({
+    if (granted(principal, 'read')) registerTool(ctx, defineTool({
       name: 'memory_wiki_merge_prepare',
       description: 'With read/write authority, prepare a signed same-vault historical/current merge from manually authored text. No model call, approval or apply flag. Inspect all comparison/preview text, then separately approve with memory_wiki_apply and review authority. No branch/shared-vault import. Complete escaped review and approval envelope must fit 9 MiB.',
       parameters: {
@@ -340,7 +350,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         });
       },
     }));
-    if (granted(principal, 'read')) ctx.tools.register(defineTool({
+    if (granted(principal, 'read')) registerTool(ctx, defineTool({
       name: 'memory_wiki_correct',
       description: 'Capture a natural-language correction as immutable evidence and prepare a pending Wiki plan. Never approves or applies it.',
       parameters: {
@@ -358,7 +368,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
           expectedRevision === undefined ? {} : { expectedRevision }));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_ingest',
       description: 'Prepare a bounded linked-page plan from immutable evidence. apply=true additionally requires review permission before compilation.',
       parameters: {
@@ -378,7 +388,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         });
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_file',
       description: 'Prepare a reviewable query or comparison page from a cited Wiki answer. apply=true additionally requires review permission before any work.',
       parameters: {
@@ -402,7 +412,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     }));
   }
   if (granted(principal, 'review')) {
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_apply',
       description: 'Validate and atomically apply an explicit Wiki ingest, filing, repair, human-authored merge or imported-evidence integration plan. Requires review permission. Call only after explicit approval of the complete reviewed plan.',
       parameters: { plan: { type: 'object', additionalProperties: true, required: true, description: 'Complete untrusted Wiki plan; paths, citations, authorization, and revisions are revalidated.' } },
@@ -412,7 +422,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, () => vault.wikiApply(args.plan));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_revoke',
       description: 'Revoke a Wiki page by key while retaining auditable history.',
       parameters: {
@@ -429,7 +439,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
     }));
   }
   if (granted(principal, 'maintain')) {
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_migrate',
       description: 'Explicitly initialize compatible Wiki storage and default purpose/rules. Safe to repeat.',
       parameters: {},
@@ -439,7 +449,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
         return runJson(vault, exec.signal, () => vault.wikiMigrate());
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_set_rules',
       description: 'Create or revise Wiki purpose and instructions with maintain permission and an optional expected revision.',
       parameters: {
@@ -462,7 +472,7 @@ function registerWikiTools(ctx: Context, vault: MemoryVault, principal: Principa
           ...(expectedRevision === undefined ? {} : { expectedRevision }) }));
       },
     }));
-    ctx.tools.register(defineTool({
+    registerTool(ctx, defineTool({
       name: 'memory_wiki_lint',
       description: 'Check Wiki structure and optionally return cited semantic suggestions. Never applies repairs; reports unavailable semantic analysis.',
       parameters: {
@@ -488,7 +498,7 @@ function wikiPageBudget(value: number | undefined): { maxPages?: number } {
 }
 
 function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principal, config: Config): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_at',
     description: 'Inspect current retained ordinary memory by explicit effective time; current authority applies, unknown dates are excluded unless requested, and superseded/conflicted records carry warnings. Not historical Wiki or as-known-then reconstruction.',
     parameters: {
@@ -509,7 +519,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
       }));
     },
   }));
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_source_timeline',
     description: 'Inspect authorized source versions by recorded time and current references. Does not reconstruct fact-effective history or restore erased data.',
     parameters: {
@@ -531,7 +541,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
       }));
     },
   }));
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_recall',
     description: 'Read approved ordinary memory and Wiki pages as complete records with source paths, revisions, conditions and uncertainty; no model call.',
     parameters: {
@@ -551,7 +561,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
         includeSensitive: false, includeSecret: false, semantic: false }));
     },
   }));
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_explain',
     description: 'Search authorized records and expose actual matching scores and search strategy. Does not infer hidden records or fabricate reasoning.',
     parameters: {
@@ -566,7 +576,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
       return runJson(vault, exec.signal, () => vault.explain(query, { limit, includeSensitive: false, includeSecret: false, semantic: false }));
     },
   }));
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_context',
     description: 'Build authorized resident and retrieved memory context before a task that depends on durable knowledge.',
     parameters: {
@@ -594,7 +604,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_search',
     description: 'Search authorized canonical memory with policy filtering before ranking and graph expansion.',
     parameters: {
@@ -621,7 +631,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_get',
     description: 'Read one authorized evidence, candidate, or canonical memory document by ID.',
     parameters: { id: { type: 'string', required: true, description: 'Managed document ID.' } },
@@ -631,7 +641,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_version',
     description: 'Return MemoBranch package and vault schema versions.',
     parameters: {},
@@ -641,7 +651,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_config',
     description: 'Read effective non-secret vault policy, limits, feature, maintenance, and remote configuration.',
     parameters: {},
@@ -651,7 +661,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_policy',
     description: 'Read the immutable server-owned principal permissions, scopes, clearance, and tenant binding.',
     parameters: {},
@@ -661,7 +671,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_history',
     description: 'Read attributed Git history for the vault or one authorized managed path.',
     parameters: {
@@ -678,7 +688,7 @@ function registerReadTools(ctx: Context, vault: MemoryVault, principal: Principa
 }
 
 function registerWriteTools(ctx: Context, vault: MemoryVault, config: Config): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_capture',
     description: 'Idempotently capture immutable evidence and optionally extract review candidates.',
     parameters: {
@@ -702,7 +712,7 @@ function registerWriteTools(ctx: Context, vault: MemoryVault, config: Config): v
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_propose',
     description: 'Create an atomic memory candidate in the review queue; a candidate is not canonical truth.',
     parameters: {
@@ -743,7 +753,7 @@ function registerWriteTools(ctx: Context, vault: MemoryVault, config: Config): v
 }
 
 function registerReviewTools(ctx: Context, vault: MemoryVault): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_consolidate',
     description: 'Promote eligible candidates, merge duplicates, and surface conflicts for review.',
     parameters: {},
@@ -753,7 +763,7 @@ function registerReviewTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_review',
     description: 'Approve or reject one candidate using the server-owned reviewer identity.',
     parameters: {
@@ -770,7 +780,7 @@ function registerReviewTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_forget',
     description: 'Revoke a canonical memory while retaining auditable encrypted history.',
     parameters: {
@@ -787,7 +797,7 @@ function registerReviewTools(ctx: Context, vault: MemoryVault): void {
 }
 
 function registerAdminTools(ctx: Context, vault: MemoryVault): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_erase',
     description: 'Cryptographically erase confidential memory by replacing it with a tombstone and destroying its wrapped key.',
     parameters: {
@@ -804,7 +814,7 @@ function registerAdminTools(ctx: Context, vault: MemoryVault): void {
 }
 
 function registerMaintenanceTools(ctx: Context, vault: MemoryVault): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_doctor',
     description: 'Audit vault configuration, Git, index, transactions, documents, links, expiry, and conflicts.',
     parameters: {},
@@ -814,7 +824,7 @@ function registerMaintenanceTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_recover',
     description: 'Roll back incomplete writes and replay commit-ready transactions.',
     parameters: {},
@@ -824,7 +834,7 @@ function registerMaintenanceTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_reindex',
     description: 'Incrementally rebuild lexical state and optional embedding vectors.',
     parameters: { semantic: { type: 'boolean', description: 'Refresh embeddings when configured.' } },
@@ -834,7 +844,7 @@ function registerMaintenanceTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_maintenance',
     description: 'Run one recovery, expiry, index, health, and optional synchronization cycle.',
     parameters: {},
@@ -846,7 +856,7 @@ function registerMaintenanceTools(ctx: Context, vault: MemoryVault): void {
 }
 
 function registerSyncTools(ctx: Context, vault: MemoryVault): void {
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_remote_status',
     description: 'Fetch and report configured remote ahead, behind, divergence, and conflict state.',
     parameters: { fetch: { type: 'boolean', description: 'Fetch the remote before comparing state.' } },
@@ -856,7 +866,7 @@ function registerSyncTools(ctx: Context, vault: MemoryVault): void {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  registerTool(ctx, defineTool({
     name: 'memory_remote_sync',
     description: 'Fetch, integrate conflict-safely, validate, and optionally push the vault remote.',
     parameters: { push: { type: 'boolean', description: 'Push the integrated local revision.' } },
