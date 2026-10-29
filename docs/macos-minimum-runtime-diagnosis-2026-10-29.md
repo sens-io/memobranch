@@ -1,4 +1,4 @@
-# macOS minimum-runtime cancellation investigation
+# macOS minimum-runtime startup investigation
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Runtime/source checkpoint: `c01ae9b1999030d4d305d3a88c3883c8b411fa93`
@@ -104,12 +104,17 @@ cancellation/retry lifecycles; pairs have not yet been tested, so this is not a
 claim of a mathematically minimal sequence or a proven component root cause.
 
 An independent SDK host script reproduced that group without the original
-19-case file: all three real calls cancelled, retried and disposed; the next CLI
+19-case file: all three real calls were cancelled; prepare and integration were
+then retried, while cancelled apply was followed by a new prepare, before each
+host was disposed. The next CLI
 prepare then had **`waiter:false`, no completed entry record and SIGTERM after
 10052 ms**. The other three CLI observations succeeded. Log:
 `macos-node20-sdk-standalone-prefix-1.log`. Its outer TAP **1/1** is explicitly
 **not a successful cancellation gate**: the diagnostic script records this
-failed flow without failing the whole file. Parent RSS after the three calls
+failed flow without failing the whole file. The original uniform
+`cancelledAndRetried:true` label overstates the apply branch: it proves a later
+prepare remained usable, not an apply retry. The original script/log are retained
+unchanged. Parent RSS after the three calls
 was approximately 117/123/128 MB; that alone does not establish or exclude a
 resource explanation.
 
@@ -120,11 +125,83 @@ sufficient reproduced cause. Neither is a single SDK cancellation, the test
 marker alone, basic lock ownership alone, or the executable's original path.
 The observations do not rule out interactions between those factors.
 
+## Later controls: cancellation and CLI code are not required
+
+This second set preserves the original 26 artifacts. New inventory:
+`.scratch/macos-node20-diagnosis-inventory-2.json`, **27** source/log artifacts,
+SHA-256 `d2ce8e36a40d4d300d955f513e378e353b1f16f6f177b2c1d2f02431933697a4`.
+The first inventory was rechecked after these runs: all original hashes matched.
+
+Independent review of `e9aa6a9` covered both changed documents (2/2, zero skipped)
+and the 26 hashes. A separate native-evidence review covered the main document
+and six designated evidence files, zero skipped. It found one P2 wording error:
+apply cancellation was followed by a fresh prepare, not an apply retry. The text
+above now says exactly that; original scripts/logs remain unchanged. Neither
+review established a product root cause or accepted the failing runtime gate.
+
+Each later command control used a fresh SDK parent and the same Node 20.0.0
+binary, source fixtures and ten-second observation bound. **All are diagnostic
+scripts, not added passing acceptance cases.** Their outer TAP 1/1 only means
+the script ended; the recorded `completed:false` / `waiter:false` still fails
+the behavior being investigated.
+
+| Control after three SDK operations | Observed result | Raw log under `.scratch/` |
+| --- | --- | --- |
+| Passive state before/after disposal | No changed environment values or newly added `Object.prototype` property names at capture. Three standard socket handles remained; the request snapshot changed from a file-close request to an FS callback. The next CLI prepare still failed. These snapshots do not exclude other native or deferred state. | `macos-node20-sdk-state-1.log` |
+| First child is only `node --version` | **Not completed**; SIGTERM after 10067 ms. This command does not run MemoBranch CLI logic. A JavaScript entry record is not expected from a version-only command. | `macos-node20-sdk-first-version-1.log` |
+| First child is a minimal `-e` script | **Not completed**, no completed entry; SIGTERM after 10073 ms. No MemoBranch import in that child. | `macos-node20-sdk-first-minimal-1.log` |
+| Three normal SDK calls, no cancellation, then original CLI probe | SDK calls completed; the next CLI prepare still had **`waiter:false`** and SIGTERM after 10049 ms. Therefore cancellation is **not a necessary condition**. The later three CLI observations succeeded. | `macos-node20-sdk-no-cancel-1.log` |
+| Diagnostic parent launched with `--jitless`, first child still ordinary `--version` | Command completed after **9892 ms**, close to the bound, rather than becoming a normal fast launch. The warning about disabled WebAssembly is retained. This changed parent mode is not a product fix or a substitute default-runtime gate. | `macos-node20-sdk-first-version-jitless-1.log` |
+
+The first filtered observations associated the symptom with a cancellation
+group; these later normal-call controls refute any inference that cancellation
+itself is required. No test-file split, forced collection, longer deadline,
+runtime upgrade or automatic process-resume behavior was added to the product.
+
+## Same-failure native observation
+
+The native observation used a fresh parent **98157** and its exact version-only
+child **5295**. At approximately 3.3 seconds after first observation, `sample`,
+`vmmap`, both `lsof` calls and `ps` all completed successfully for that same
+parent/child pair. The child subsequently failed to finish and was terminated
+at 10057 ms under the original diagnostic bound.
+
+- `macos-node20-native-version.sample.txt`: `_dyld_start + 0` throughout the
+  sampled second, physical footprint **96 KiB**.
+- `macos-node20-native-version-vmmap.log`: no malloc zones; the system tool
+  explicitly reported **“Process exists but has not started -- it is
+  launched-suspended.”** Read-only library pages were almost entirely
+  unallocated, with 16 KiB resident text.
+- `macos-node20-native-version-child-files.log`: only the executable, `dyld`,
+  working directory and three standard streams; no Wiki/source file was open.
+  The parent file list records its owned source lock and its own standard/loop
+  descriptors. No application read or file-lock wait inside the child was observed.
+- `macos-node20-native-version-processes.log`: matching PID/parent/arguments,
+  32 KiB child RSS and normal recorded priority/nice values at capture.
+- `macos-node20-native-version-observations.json` binds the sampled pair and
+  actual command outcomes; the driver/test logs record their terminal states.
+
+This is direct evidence of an unstarted, suspended **version-only child in this
+particular reproduction**, rather than a conclusion based solely on missing
+JavaScript logs or an old PID. It does not identify who requested/caused the
+suspension or prove every earlier failing child had exactly the same cause.
+Apple documents [a process-start suspension attribute](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/posix_spawnattr_getflags.3.html),
+but the observed tool output alone does not prove that attribute was passed.
+The [published Node 20.0.0 spawn implementation](https://github.com/nodejs/node/blob/v20.0.0/deps/uv/src/unix/process.c#L410)
+is a reference, not a trace of the actual captured syscall parameters.
+
+A separate controlled version-only reproduction targeted its own observed child
+**15652**, parent **8917**, with one ordinary `SIGCONT` after approximately three
+seconds. The command still failed to complete and received SIGTERM at 10069 ms:
+`macos-node20-resume-version-{observations.json,tests.log,driver.log}`. This did
+not establish a usable recovery or the suspension's origin. No production
+process-resume workaround or host security change was made.
+
 ## Remaining issue
 
 | Source branch | Confirmed observation | Required next evidence |
 | --- | --- | --- |
-| `kevin/knowledge-expansion` | The macOS Node 20 minimum-runtime complete protocol gate still fails. Repeated Harness cancellation/retry followed by CLI source waiting reproduces a launch-stage symptom; individual operations also have positive controls. | Identify the retained SDK/operation/process state, correct any confirmed defect, and rerun the entire unchanged protocol collections under both real Git defaults. Do not close this with a filtered run, longer deadline, different version/OS, or test-file isolation that merely hides the interaction. |
+| `kevin/knowledge-expansion` | The macOS Node 20 minimum-runtime complete protocol gate still fails. Repeated SDK activity followed by a new Node child reproduces the startup symptom even without cancellation or CLI logic; individual operations also have positive controls. One same-failure version child was directly observed unstarted/suspended. | Identify the suspension trigger or compare another actual macOS environment; correct any confirmed project defect and rerun the entire unchanged protocol collections under both real Git defaults. Do not close this with a filtered run, longer deadline, different version/OS, or test-file isolation that merely hides the interaction. |
 
 No new product correction is claimed by this investigation. The existing Windows
 ownership repair, Node 22 full checks, package consumers and historical Linux

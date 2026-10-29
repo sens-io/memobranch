@@ -22,9 +22,10 @@ its correction and review are recorded below.
 This waiver does not skip macOS/Linux checks or authorize pushing/deployment.
 
 The [macOS minimum-runtime investigation](macos-minimum-runtime-diagnosis-2026-10-29.md)
-retains complete failures and isolates a repeated SDK-cancellation/CLI-startup
-interaction. Filtered positive controls do not accept that gate; the cause and
-correction remain open.
+retains complete failures and directly observes an unstarted/suspended Node 20
+child after repeated SDK activity. Later controls also reproduce it without
+cancellation or CLI logic. Filtered positive controls do not accept that gate;
+the suspension's cause and required correction remain open.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
