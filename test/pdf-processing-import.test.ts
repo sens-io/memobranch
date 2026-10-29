@@ -109,6 +109,7 @@ test('Processed PDF: metadata, image/OCR provenance, stripped discriminators and
     value => { value.processing.sourceSha256 = '0'.repeat(64); }, value => { value.processing.pages[0]!.data = 'AAAA'; },
     value => { value.processing.pages[0]!.ocrText = 'changed recognition'; }, value => { value.processing.renderer.sha256 = '0'.repeat(64); },
     value => { value.processing.ocr!.languages[0]!.sha256 = '0'.repeat(64); }, value => { value.processing.selection.pages = [3]; },
+    value => { value.processing.supervisor = { sha256: '0'.repeat(64), version: '1.0.0' }; },
     value => { (value as any).version = 1; delete (value as any).processing; },
   ];
   for (const change of changes) { const record = structuredClone(original); change(record.meta.pdfOriginal as PdfProcessedOriginal); assert.throws(() => assertEvidenceDocument(record), { code: 'VALIDATION_FAILED' }); }

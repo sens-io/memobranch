@@ -14,6 +14,12 @@ Work proceeds through implementation, retained verification, local commits and
 independent adversarial review. A passing batch is not a claim that all future
 features, arbitrary documents, or real-world skill effectiveness are proven.
 
+On 2026-10-29 the user explicitly instructed: **skip Windows platform verification**.
+Record real Windows execution/ACL checks as skipped by request, not passed; do not
+make a Windows-runtime acceptance claim. The already identified Windows process
+ownership defect still requires implementation and independent code review.
+This waiver does not skip macOS/Linux checks or authorize pushing/deployment.
+
 | Batch | Deliverable | State |
 | --- | --- | --- |
 | 1 | Immutable experience traces, bounded host-run validation, explicit skill export; then CLI and management adapters | Accepted locally. Core/CLI and MCP/Harness accepted on 2026-10-23; Web actual browser checks completed 2026-10-24. Combined patched-dependency verification: 828 retained checks under each Git default, strict OpenSpec 28/28, production audit 0, same installed package on Node 20/22 and final checkpoint-text review passed. See [core checkpoint](validated-experience-core-verification-2026-10-22.md), [agent adapter checkpoint](validated-experience-agent-verification-2026-10-23.md) and [Web work record](validated-experience-web-verification-2026-10-23.md). |

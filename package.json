@@ -32,6 +32,7 @@
     "evaluation",
     "openspec",
     "assets/logo.png",
+    "assets/windows-pdf-host.cs",
     ".env.example",
     "LICENSE"
   ],

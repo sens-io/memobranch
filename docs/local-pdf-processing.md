@@ -2,7 +2,9 @@
 
 Development source only; not published to npm. The import/save/read integration
 is under verification. The batch is not accepted: Windows background-process
-ownership and the remaining cross-platform/package/full checks are still open.
+ownership correction and the remaining macOS/full checks are under verification.
+Actual Windows platform verification is skipped by the user's request; this is
+not a passing Windows result.
 Use [the roadmap](remaining-roadmap.md) for acceptance status.
 
 The existing [text-layer PDF import](pdf-import.md) remains the default. Optional
@@ -35,6 +37,14 @@ an owned Fontconfig file/cache instead of inheriting system font choices; a miss
 or unsuitable font can change spacing or recognition. This cannot reconstruct
 arbitrary original fonts. Prepare this configuration yourself; MemoBranch does not
 create real host configuration or install dependencies automatically.
+
+On Windows, selected processing also requires `windowsHost`, the absolute path
+to the operator-prebuilt helper described in [Windows PDF host setup](windows-pdf-host.md).
+It checks private directory ACLs and assigns each native processor to a Windows
+Job Object at process creation. Missing/unsupported helpers refuse selected
+processing; there is no fallback to unmanaged processes. The ordinary text-only
+PDF workflow does not require it. Its binary hash/version are retained in the
+processing provenance. POSIX does not execute this helper.
 
 ```sh
 memobranch import pdf-preview ./source.pdf --processor-config ./host.json \
@@ -87,6 +97,10 @@ executable selector, media endpoint or grant editor is added.
 - `--timeout-ms` is 1–120000 ms (default 10000) for PDF parsing and, separately,
   one total native execution deadline including version probes. Queue waiting and
   bounded filesystem/profile checks are outside the native execution deadline.
+  Windows cancellation first closes the helper's input; after one second it can
+  stop that owned helper and use a separate, uncancellable cleanup request with
+  a 10-second budget. Cleanup is separate from the processing deadline. If cleanup
+  cannot be confirmed, the result is refused and private work files are retained.
 - Work is serialized within one host work directory. Only verified owned dead
   work directories can be removed after a crash; unrelated/live files survive.
   Accepted font-cache bytes are checked after commands (4 MB each / 8 MB total),

@@ -40,6 +40,8 @@ try {
     'docs/web-effective-time.md',
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
     'dist/pdf-processing.js', 'dist/pdf-processing.d.ts', 'dist/pdf-processing-schema.js', 'dist/pdf-processing-schema.d.ts',
+    'dist/pdf-supervisor.js', 'dist/pdf-supervisor.d.ts', 'dist/pdf-windows.js', 'dist/pdf-windows.d.ts',
+    'assets/windows-pdf-host.cs', 'docs/windows-pdf-host.md', 'docs/windows-pdf-host_CN.md',
     'docs/local-pdf-processing.md', 'docs/local-pdf-processing_CN.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',

@@ -22,12 +22,14 @@ export const pdfProcessorConfigSchema = z.object({
   version: z.literal(1), renderer: z.string().min(1).max(4096), workRoot: z.string().min(1).max(4096),
   ocr: z.string().min(1).max(4096).optional(), languageData: z.string().min(1).max(4096).optional(),
   fontDirectory: z.string().min(1).max(4096).optional(),
+  windowsHost: z.string().min(1).max(4096).optional(),
 }).strict();
 const processor = z.object({ sha256: digest, version: z.string().regex(/^[0-9][0-9a-zA-Z.+_-]{0,79}$/) }).strict();
 export const pdfPageProcessingSchema = z.object({
   version: z.literal(1), sourceSha256: digest, selection: pdfProcessingSelectionSchema,
   renderer: processor.extend({ fonts: z.array(z.object({ name: z.string().regex(/^[^/\\\0]{1,200}\.(?:ttf|otf)$/i), sha256: digest }).strict()).max(32) }),
   ocr: processor.extend({ languages: z.array(z.object({ name: language, sha256: digest }).strict()).min(1).max(2) }).optional(),
+  supervisor: processor.optional(),
   pages: z.array(z.object({
     number: z.number().int().min(1).max(100), width: z.number().int().min(1).max(PDF_IMAGE_MAX_EDGE), height: z.number().int().min(1).max(PDF_IMAGE_MAX_EDGE),
     mediaType: z.literal('image/png'), bytes: z.number().int().min(1).max(PDF_IMAGE_MAX_BYTES), sha256: digest,

@@ -53,6 +53,16 @@ unavailable hard operating-system memory guarantee.
 - **THEN** durable work is settled and its actual commit is reported under existing capture/recovery rules
 - **AND** exact retry and authorized original/page retrieval preserve immutable bytes
 
+#### Scenario: A Windows processor leader exits before its descendants
+- **WHEN** selected processing uses an operator-prebuilt Windows helper and the native leader exits with descendants still running
+- **THEN** ownership is established at process creation and all processes in the owned job are stopped and awaited before output is accepted
+- **AND** cleanup uses a random job identity rather than a reused processor PID; unconfirmed cleanup refuses the result and preserves private work files
+
+#### Scenario: The selected Windows host is unavailable or the directory is not private
+- **WHEN** Windows selected processing has no compatible configured helper or its work directory fails the owner and ACL checks
+- **THEN** processing refuses before staging source bytes, without installing a helper, changing ACLs or using an unmanaged process fallback
+- **AND** the unselected text-layer PDF workflow remains available
+
 ### Requirement: Local processing must preserve adapter and disclosure boundaries
 The system SHALL preserve the existing local-operator and server disclosure boundaries.
 Local library/CLI use MAY accept operator-selected paths; MCP/Harness/Web requests

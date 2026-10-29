@@ -1,6 +1,10 @@
 # Local PDF OCR — design checkpoint
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
+On 2026-10-29 the user explicitly waived Windows platform execution verification.
+Keep that check as **skipped by request**, never as passed. The known Windows
+process-ownership defect still requires a code correction and independent review;
+the waiver does not remove the remaining macOS/Linux checks.
 At the reviewed design checkpoint, this was roadmap batch 5 preparation without
 processing code, public API, CLI feature or evidence migration. The later
 [internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)
@@ -11,8 +15,12 @@ tasks in `tasks.md` remain unchecked pending remaining platform/gate/review work
 
 The later [combined checkpoint](../../../docs/pdf-processing-combined-verification-2026-10-29.md)
 records fresh full/package/Linux checks and independent source reviews. It retains
-the unresolved macOS waiter failures and Windows ownership/platform work, so it
+the unresolved macOS waiter failures and Windows ownership work, so it
 also does not accept the complete batch.
+
+The later [Windows correction record](../../../docs/pdf-windows-host-verification-2026-10-29.md)
+tracks the prebuilt local helper, portable checks and independent review. Windows
+platform execution is skipped by the user's request, not pending acceptance.
 
 ## Specification review and correction
 

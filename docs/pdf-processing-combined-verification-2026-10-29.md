@@ -132,10 +132,12 @@ child diagnostic. The original separate collection's **35/37** failure is retain
 Linux green results and the limited 3/3 callback supplement do not fix or replace
 those failures; their cause is still unestablished.
 
-Windows normal-leader background-helper cleanup remains an identified P2, and
-actual private ACL/process evidence is absent. The user confirmed no Windows test
-environment is currently available. The POSIX installed fixture explicitly does
-not establish Windows package acceptance. Do not remove that work from the goal.
+Windows normal-leader background-helper cleanup was an identified P2 at this
+checkpoint. The later [ownership correction](pdf-windows-host-verification-2026-10-29.md)
+records the implementation/review status. On 2026-10-29 the user explicitly
+instructed that actual Windows platform verification be skipped. That check is
+skipped by request, not passed; the POSIX fixture does not establish Windows
+package acceptance. macOS/Linux work and fixing the known defect remain required.
 
 Database changes: none. Data migration: none. Configuration: new optional
 operator-supplied local processor JSON/selection flags, documented in the bilingual

@@ -1,7 +1,7 @@
 import { AsyncResource } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, opendir, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -9,6 +9,7 @@ import { AgentMemoryError } from './errors.js';
 import { terminateGit as stopOwnedGroup } from './git-store.js';
 import { cancellationError, operationSignal, throwIfCancelled } from './operation.js';
 import { sha256, withFileLock } from './utils.js';
+import { windowsPdfHost, type WindowsPdfHost } from './pdf-windows.js';
 import { assertPdfPageProcessing, inspectPdfPng, pdfProcessingSelectionSchema, pdfProcessorConfigSchema,
   PDF_IMAGE_MAX_BYTES, PDF_IMAGE_MAX_EDGE, PDF_IMAGES_MAX_BYTES, PDF_IMAGES_MAX_PIXELS,
   type PdfPageProcessing, type PdfProcessingSelection, type PdfProcessorConfig } from './pdf-processing-schema.js';
@@ -23,6 +24,10 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
   const selection = selected.data, config = configured.data, bytes = Buffer.from(input);
   const workRoot = await directory(config.workRoot, true);
   const renderer = await executable(config.renderer);
+  if (process.platform === 'win32' && !config.windowsHost) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Windows PDF processing requires an explicitly configured prebuilt windowsHost');
+  const windowsExecutable = process.platform === 'win32' ? await executable(config.windowsHost) : undefined;
+  const windows = windowsExecutable ? windowsPdfHost(windowsExecutable) : undefined;
+  if (windows) await windows.checkRoot(workRoot, timeoutMs);
   const ocr = selection.languages ? await executable(config.ocr) : undefined;
   const languageRoot = selection.languages ? await directory(config.languageData) : undefined;
   const fontRoot = config.fontDirectory ? await directory(config.fontDirectory) : undefined;
@@ -32,6 +37,7 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
     try {
       throwIfCancelled();
       if (await realpath(config.renderer) !== renderer.path || await fileHash(renderer.path, 128_000_000) !== renderer.sha256) changed();
+      if (windowsExecutable && (await realpath(config.windowsHost!) !== windowsExecutable.path || await fileHash(windowsExecutable.path, 128_000_000) !== windowsExecutable.sha256)) changed();
       if (ocr && (await realpath(config.ocr!) !== ocr.path || await fileHash(ocr.path, 128_000_000) !== ocr.sha256 || await realpath(config.languageData!) !== languageRoot)) changed();
       for (const item of languages) if (await fileHash(join(languageRoot!, item.name + '.traineddata'), 64_000_000) !== item.sha256) changed();
       if (fontRoot && await realpath(config.fontDirectory!) !== fontRoot || JSON.stringify(await fontProfile(fontRoot)) !== JSON.stringify(fonts)) changed();
@@ -39,22 +45,26 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
     } catch (error) { if (error instanceof AgentMemoryError && error.code === 'OPERATION_CANCELLED') throw error; changed(); }
   };
   const record = await withFileLock(join(workRoot, 'pdf-processing.lock'), async () => {
-    await cleanStale(workRoot);
+    await cleanStale(workRoot, windows);
     throwIfCancelled();
     const temporary = await mkdtemp(join(workRoot, 'pdf-owned-'));
+    let started = false, cleanupCertain = true;
     try {
-      await writeFile(join(temporary, 'owner.json'), JSON.stringify({ version: 1, pid: process.pid }), { flag: 'wx', mode: 0o600 });
+      if (windows) await windows.checkWork(temporary, timeoutMs);
+      await writeFile(join(temporary, 'owner.json'), JSON.stringify(windows ? { version: 2, pid: process.pid, jobToken: randomBytes(16).toString('hex') } : { version: 1, pid: process.pid }), { flag: 'wx', mode: 0o600 });
       await writeFile(join(temporary, 'source.pdf'), bytes, { flag: 'wx', mode: 0o600 });
       const cache = join(temporary, 'font-cache'); await mkdir(cache, { mode: 0o700 });
       await writeFile(join(temporary, 'fonts.conf'), `<?xml version="1.0"?><fontconfig><reset-dirs/>${fontRoot ? '<dir>' + xml(fontRoot) + '</dir>' : ''}<cachedir>${xml(cache)}</cachedir></fontconfig>`, { flag: 'wx', mode: 0o600 });
       // One deadline covers all owned native executions; queue/fingerprinting are separate.
       const end = performance.now() + timeoutMs;
-      const environment = { PATH: process.platform === 'win32' ? process.env.PATH : '/usr/bin:/bin',
+      const environment = { PATH: process.platform === 'win32' ? join(process.env.SystemRoot!, 'System32') + ';' + process.env.SystemRoot! : '/usr/bin:/bin',
         ...(process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         LANG: 'C', LC_ALL: 'C', TMPDIR: temporary, TEMP: temporary, TMP: temporary, OMP_THREAD_LIMIT: '1', OMP_NUM_THREADS: '1',
         FONTCONFIG_FILE: join(temporary, 'fonts.conf'), FONTCONFIG_PATH: temporary, XDG_CACHE_HOME: cache };
       const run = async (path: string, args: string[], limit: number) => {
-        const value = await execute(path, args, temporary, environment, end, limit); await fontCache(cache, false); return value;
+        started = true;
+        const value = windows ? await windows.run(path, args, temporary, environment, end, limit) : await execute(path, args, temporary, environment, end, limit);
+        await fontCache(cache, false); return value;
       };
       const rendererVersion = version(await run(renderer.path, ['-v'], 8192), /^pdftoppm version (\S+)/m);
       const ocrVersion = ocr ? version(await run(ocr.path, ['--version'], 8192), /^tesseract (\S+)/m) : undefined;
@@ -80,9 +90,13 @@ export async function processPdfPages(input: Buffer, pageCount: number, requeste
           ...(ocrText === undefined ? {} : { ocrText, ocrSha256: sha256(ocrText) }) });
       }
       const result: PdfPageProcessing = { version: 1, sourceSha256: createHash('sha256').update(bytes).digest('hex'), selection,
-        renderer: { sha256: renderer.sha256, version: rendererVersion, fonts }, ...(ocr ? { ocr: { sha256: ocr.sha256, version: ocrVersion!, languages } } : {}), pages };
+        renderer: { sha256: renderer.sha256, version: rendererVersion, fonts }, ...(ocr ? { ocr: { sha256: ocr.sha256, version: ocrVersion!, languages } } : {}),
+        ...(windows ? { supervisor: windows.metadata } : {}), pages };
       assertPdfPageProcessing(result); await verifyProfile(); return result;
-    } finally { await removeOwned(temporary); }
+    } catch (error) {
+      if (error instanceof AgentMemoryError && error.safeDetails?.pdfCleanupUncertain === true) cleanupCertain = false;
+      throw error;
+    } finally { if (cleanupCertain) await removeOwned(temporary, started ? windows : undefined); }
   });
   await verifyProfile();
   return { record, verifyProfile };
@@ -166,7 +180,7 @@ function execute(path: string, args: string[], cwd: string, env: NodeJS.ProcessE
   });
 }
 
-async function cleanStale(root: string) {
+async function cleanStale(root: string, windows?: WindowsPdfHost) {
   const owned: string[] = []; let entries = 0;
   for await (const entry of await opendir(root)) {
     if (++entries > 512) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF work directory scan exceeds limits');
@@ -177,12 +191,13 @@ async function cleanStale(root: string) {
     const path = join(root, name);
     if (!await ownedDirectory(path)) unavailable();
     const marker = await owner(join(path, 'owner.json'));
+    if (windows ? marker.version !== 2 : marker.version !== 1) unavailable();
     try { process.kill(marker.pid as number, 0); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') await removeOwned(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') await removeOwned(path, windows); }
   }
   if ((await readdir(root)).filter(name => /^pdf-owned-[a-zA-Z0-9]+$/.test(name)).length >= 8) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Too many live PDF processing directories');
 }
-async function owner(path: string): Promise<{ version: 1; pid: number }> {
+async function owner(path: string): Promise<{ version: 1 | 2; pid: number; jobToken?: string }> {
   try {
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
@@ -191,7 +206,9 @@ async function owner(path: string): Promise<{ version: 1; pid: number }> {
       if (bytesRead > 1000 || bytesRead !== after.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
         || entry.isSymbolicLink() || entry.dev !== after.dev || entry.ino !== after.ino) unavailable();
       const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead)));
-      if (!value || Object.keys(value).sort().join(',') !== 'pid,version' || value.version !== 1 || !Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid > 2147483647) unavailable();
+      if (!value || !Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid > 2147483647) unavailable();
+      if (value.version === 1 ? Object.keys(value).sort().join(',') !== 'pid,version'
+        : value.version !== 2 || Object.keys(value).sort().join(',') !== 'jobToken,pid,version' || typeof value.jobToken !== 'string' || !/^[a-f0-9]{32}$/.test(value.jobToken)) unavailable();
       return value;
     } finally { await file.close(); }
   } catch { unavailable(); }
@@ -200,8 +217,9 @@ async function ownedDirectory(path: string) {
   const stat = await lstat(path);
   return stat.isDirectory() && !stat.isSymbolicLink() && (process.platform === 'win32' || stat.uid === process.getuid!() && !(stat.mode & 0o077));
 }
-async function removeOwned(path: string) {
+async function removeOwned(path: string, windows?: WindowsPdfHost) {
   if (!await ownedDirectory(path)) unavailable();
+  if (windows) await windows.cleanup(path);
   for (const name of await readdir(path)) {
     if (name === 'font-cache') { await fontCache(join(path, name), true); continue; }
     if (!['owner.json', 'source.pdf', 'page.png', 'fonts.conf'].includes(name)) unavailable();
