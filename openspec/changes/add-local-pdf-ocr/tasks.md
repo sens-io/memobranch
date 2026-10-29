@@ -1,4 +1,10 @@
 ## Implementation
+
+The [internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)
+has code, related/runtime tests and one actual native image-only control. It does
+not yet provide the complete public import/save/read workflow. Keep the full
+tasks below open until their integrated behavior and final review are verified.
+
 - [ ] Define host-owned local processor configuration, strict opt-in page selection and bounded provenance.
 - [ ] Implement owned rendering/OCR with complete output, cancellation, deadlines and private temporary cleanup.
 - [ ] Preserve immutable original/page bytes and extraction under existing evidence/encryption/transaction rules with explicit compatibility.

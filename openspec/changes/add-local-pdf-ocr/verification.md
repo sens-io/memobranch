@@ -1,9 +1,11 @@
 # Local PDF OCR — design checkpoint
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
-This is roadmap batch 5 preparation. No processing code, public API, CLI feature,
-evidence migration or actual OCR acceptance is claimed here. Every implementation
-and verification task in `tasks.md` remains unchecked.
+At the reviewed design checkpoint, this was roadmap batch 5 preparation without
+processing code, public API, CLI feature or evidence migration. The later
+[internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)
+records new code, actual native observations and retained failures. It does not
+accept the integrated feature; all complete tasks in `tasks.md` remain unchecked.
 
 ## Specification review and correction
 
@@ -33,7 +35,7 @@ transaction, package/runtime/default-branch and recognition checks have not run
 for an implementation of this batch. Existing PDF and Wiki-import checks cannot
 substitute for those future results.
 
-Read-only local availability checks found Tesseract 5.5.1 with `eng`, `osd` and
+The initial read-only local availability checks found Tesseract 5.5.1 with `eng`, `osd` and
 `snum`, and pdftoppm 26.05.0. They ran version/language queries only, not OCR of a
 document. No language data or runtime was installed/downloaded. No real host
 processor configuration, cloud account/grant, model request, push, publication,

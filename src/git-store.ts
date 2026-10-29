@@ -574,7 +574,8 @@ function executeGit(
   });
 }
 
-async function terminateGit(child: ChildProcess): Promise<void> {
+/** @internal Shared owned-group cleanup for Git and trusted local processors. */
+export async function terminateGit(child: ChildProcess): Promise<void> {
   if (child.pid === undefined) return;
   if (process.platform === 'win32') {
     // taskkill traverses the Windows process tree, including SSH and credential

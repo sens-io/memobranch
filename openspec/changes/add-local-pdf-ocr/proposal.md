@@ -20,5 +20,6 @@ handling, automatic Wiki approval, cloud grant change, push, publication or
 deployment. The host explicitly provisions local processors and language data.
 All named verification and independent-review tasks below remain required.
 
-Status: proposal and executable-test requirements only; no implementation or
-acceptance is claimed by this change directory.
+Status: an [internal processing core](../../../docs/pdf-processing-core-verification-2026-10-28.md)
+is implemented and under verification. Integrated evidence/save/read/CLI work
+remains pending; this change directory does not claim batch acceptance.

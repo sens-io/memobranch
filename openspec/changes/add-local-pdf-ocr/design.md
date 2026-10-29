@@ -32,6 +32,13 @@ preview. Recheck identity after processing and before accepting a result; change
 configuration/data requires a new preview. A binary fingerprint is provenance for
 the configured entry point, not proof of every dynamically loaded library.
 
+The implementation core additionally supports an explicit flat fallback-font
+directory (at most 32 TTF/OTF files, 32 MB each / 128 MB total), with names/hashes
+in renderer provenance. It generates an owned Fontconfig file and private cache
+instead of inheriting system font choices. Font substitution can still change
+glyph spacing/recognition; this is not faithful font reconstruction. Accepted
+cache size is checked after each command, not enforced as a physical disk quota.
+
 Native tools receive only fixed argument arrays, no shell or PDF-provided options.
 The renderer reads an owned copy of the already inspected exact original bytes,
 emits one selected page to bounded stdout, and has no caller-selected output path.
