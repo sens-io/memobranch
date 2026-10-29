@@ -39,6 +39,8 @@ try {
     'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
     'docs/web-effective-time.md',
     'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
+    'dist/pdf-processing.js', 'dist/pdf-processing.d.ts', 'dist/pdf-processing-schema.js', 'dist/pdf-processing-schema.d.ts',
+    'docs/local-pdf-processing.md', 'docs/local-pdf-processing_CN.md',
     'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
     'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
     'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
@@ -136,7 +138,8 @@ try {
       previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
       type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
       type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
-      previewPdfImport, applyPdfImport, readPdfOriginal, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
+      previewPdfImport, applyPdfImport, readPdfOriginal, readPdfPage, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
+      type PdfProcessedImportPlan, type PdfProcessorConfig, type PdfProcessingSelection, type PdfProcessedOriginal,
       type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
       type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
       startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
@@ -209,6 +212,17 @@ try {
       const saved = await applyPdfImport(vault, plan, options);
       const original: Buffer = await readPdfOriginal(vault, saved.evidenceId);
       return { saved, original };
+    }
+    export async function publicProcessedPdfWorkflow(vault: MemoryVault, path: string, processor: PdfProcessorConfig) {
+      const processing: PdfProcessingSelection = { pages: [2], languages: ['eng'] };
+      const plan: PdfImportPlan = await previewPdfImport(path, { processor, processing });
+      if (plan.version !== 2) throw new Error('Missing processed plan');
+      const processed: PdfProcessedImportPlan = plan;
+      const saved = await applyPdfImport(vault, processed, { processor, scope: 'project' });
+      const page: Buffer = await readPdfPage(vault, saved.evidenceId, 2);
+      const original: PdfOriginal | undefined = undefined;
+      const assertOriginal = (value: PdfProcessedOriginal) => value.processing.pages[0]?.sha256;
+      return { page, original, assertOriginal };
     }
     export async function publicEffectiveTime(vault: MemoryVault, id: string) {
       const interval: FactValidity = { validFrom: '2026-01-01T00:00:00Z' };
@@ -295,6 +309,11 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(pdf.stdout);
+  await writeFile(join(consumer, 'verify-installed-pdf-processing.mjs'), await readFile(join(root, 'scripts/verify-installed-pdf-processing.mjs')));
+  const processedPdf = await exec(process.execPath, ['verify-installed-pdf-processing.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(processedPdf.stdout);
   await writeFile(join(consumer, 'verify-installed-snapshot.mjs'), await readFile(join(root, 'scripts/verify-installed-snapshot.mjs')));
   const snapshot = await exec(process.execPath, ['verify-installed-snapshot.mjs'], {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,

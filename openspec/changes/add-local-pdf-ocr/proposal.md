@@ -22,5 +22,7 @@ All named verification and independent-review tasks below remain required.
 
 Status: the [local evidence/save/read/CLI workflow](../../../docs/pdf-processing-import-verification-2026-10-29.md)
 is implemented under verification, with related runtime checks and real synthetic
-native save/read evidence. Windows ownership, integration review and final complete
-gates remain open; this change directory does not claim batch acceptance.
+native save/read evidence. [Fresh combined verification](../../../docs/pdf-processing-combined-verification-2026-10-29.md)
+records full/package/Linux checks and source reviews. Windows ownership, macOS
+minimum-runtime waiter failures and final acceptance remain open; this directory
+does not claim batch acceptance.

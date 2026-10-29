@@ -9,6 +9,11 @@ records new code, actual native observations and retained failures. The later
 adds save/read/CLI verification. Neither accepts the complete feature; all full
 tasks in `tasks.md` remain unchecked pending remaining platform/gate/review work.
 
+The later [combined checkpoint](../../../docs/pdf-processing-combined-verification-2026-10-29.md)
+records fresh full/package/Linux checks and independent source reviews. It retains
+the unresolved macOS waiter failures and Windows ownership/platform work, so it
+also does not accept the complete batch.
+
 ## Specification review and correction
 
 Independent read-only review of `e2a5c53b` inspected all 3 proposal/spec/tasks files,
