@@ -125,7 +125,7 @@ sufficient reproduced cause. Neither is a single SDK cancellation, the test
 marker alone, basic lock ownership alone, or the executable's original path.
 The observations do not rule out interactions between those factors.
 
-## Later controls: cancellation and CLI code are not required
+## Later controls: active request cancellation and CLI code are not required
 
 This second set preserves the original 26 artifacts. New inventory:
 `.scratch/macos-node20-diagnosis-inventory-2.json`, **27** source/log artifacts,
@@ -150,12 +150,12 @@ the behavior being investigated.
 | Passive state before/after disposal | No changed environment values or newly added `Object.prototype` property names at capture. Three standard socket handles remained; the request snapshot changed from a file-close request to an FS callback. The next CLI prepare still failed. These snapshots do not exclude other native or deferred state. | `macos-node20-sdk-state-1.log` |
 | First child is only `node --version` | **Not completed**; SIGTERM after 10067 ms. This command does not run MemoBranch CLI logic. A JavaScript entry record is not expected from a version-only command. | `macos-node20-sdk-first-version-1.log` |
 | First child is a minimal `-e` script | **Not completed**, no completed entry; SIGTERM after 10073 ms. No MemoBranch import in that child. | `macos-node20-sdk-first-minimal-1.log` |
-| Three normal SDK calls, no cancellation, then original CLI probe | SDK calls completed; the next CLI prepare still had **`waiter:false`** and SIGTERM after 10049 ms. Therefore cancellation is **not a necessary condition**. The later three CLI observations succeeded. | `macos-node20-sdk-no-cancel-1.log` |
+| Three normal SDK calls, no cancellation of running requests, then original CLI probe | SDK calls completed; the next CLI prepare still had **`waiter:false`** and SIGTERM after 10049 ms. Therefore cancelling an active request is **not a necessary condition**. The later three CLI observations succeeded. Normal host disposal still aborts its lifetime controller; this control does not eliminate every use of `AbortController`. | `macos-node20-sdk-no-cancel-1.log` |
 | Diagnostic parent launched with `--jitless`, first child still ordinary `--version` | Command completed after **9892 ms**, close to the bound, rather than becoming a normal fast launch. The warning about disabled WebAssembly is retained. This changed parent mode is not a product fix or a substitute default-runtime gate. | `macos-node20-sdk-first-version-jitless-1.log` |
 
 The first filtered observations associated the symptom with a cancellation
 group; these later normal-call controls refute any inference that cancellation
-itself is required. No test-file split, forced collection, longer deadline,
+of an active request is required. No test-file split, forced collection, longer deadline,
 runtime upgrade or automatic process-resume behavior was added to the product.
 
 ## Same-failure native observation
@@ -197,14 +197,51 @@ seconds. The command still failed to complete and received SIGTERM at 10069 ms:
 not establish a usable recovery or the suspension's origin. No production
 process-resume workaround or host security change was made.
 
+## Additional controls and fixed-candidate review
+
+Four further controls used the same independent three-call SDK prefix and
+ten-second observation bound. Each ran in a fresh parent. Their outer TAP result
+still records script termination, not acceptance of the observed child behavior.
+
+| First child/control after the SDK prefix | Actual result | Log under `.scratch/` |
+| --- | --- | --- |
+| `node --version` with an empty environment | Not completed; SIGTERM after **10066 ms**. | `macos-node20-sdk-first-version-emptyenv-1.log` |
+| `node --version` without acquiring the synthetic source owner lock | Not completed; SIGTERM after **10054 ms**. | `macos-node20-sdk-first-version-nolock-1.log` |
+| `/usr/bin/true` instead of Node | Completed successfully after **53 ms**. | `macos-node20-sdk-first-version-systemtrue-1.log` |
+| `node --version` in a new process group/session (`detached:true`) | Not completed; SIGTERM after **10061 ms**. | `macos-node20-sdk-first-version-detached-1.log` |
+
+Emptying the child's environment, removing that owner lock and changing its
+process group did not remove the symptom. The system command's success is a
+positive control for that command; it does not identify a Node, SDK or OS defect.
+No product implementation was changed on the strength of these controls.
+
+The new **12** source/log artifacts are frozen in
+`.scratch/macos-node20-diagnosis-inventory-3.json`, SHA-256
+`4933e55c59df3253e91f00daac64724874e89d1107fab9f9051066482c3a5f1e`.
+All original 26 and second-set 27 hashes were rechecked unchanged. The four
+original test files still match Git `507a218` byte-for-byte. These counts are
+artifact counts, not added passing tests.
+
+Read-only review of committed candidate `7ef1cdc4046061fa24e4e1f3a312c6ffe21b22ac`
+covered the main report and roadmap **2/2**, zero skipped. A separate native
+evidence review covered the main report **1/1**, zero skipped. Both checked the
+new 27 and original 26 hashes, closed the apply-follow-up wording P2 and found
+no new confirmed P1/P2 in those scopes. The additions in this section require
+their own committed-candidate review; no review accepts the failed macOS gate.
+
 ## Remaining issue
 
 | Source branch | Confirmed observation | Required next evidence |
 | --- | --- | --- |
-| `kevin/knowledge-expansion` | The macOS Node 20 minimum-runtime complete protocol gate still fails. Repeated SDK activity followed by a new Node child reproduces the startup symptom even without cancellation or CLI logic; individual operations also have positive controls. One same-failure version child was directly observed unstarted/suspended. | Identify the suspension trigger or compare another actual macOS environment; correct any confirmed project defect and rerun the entire unchanged protocol collections under both real Git defaults. Do not close this with a filtered run, longer deadline, different version/OS, or test-file isolation that merely hides the interaction. |
+| `kevin/knowledge-expansion` | The macOS Node 20 minimum-runtime complete protocol gate still fails. Repeated SDK activity followed by a new Node child reproduces the startup symptom without cancelling active requests or running CLI logic; individual operations also have positive controls. One same-failure version child was directly observed unstarted/suspended. | Identify the suspension trigger or compare another actual macOS environment; correct any confirmed project defect and rerun the entire unchanged protocol collections under both real Git defaults. Do not close this with a filtered run, longer deadline, different version/OS, or test-file isolation that merely hides the interaction. |
+
+The user confirmed that another macOS test environment is **not currently
+available**. This prevents that comparison now; it does not waive the failed
+gate, establish a cause, or authorize a host/runtime/security change.
 
 No new product correction is claimed by this investigation. The existing Windows
 ownership repair, Node 22 full checks, package consumers and historical Linux
 checks retain their previously documented scopes. Database changes: none. Data
 migration: none. Configuration changes: none. No host upgrade or real service
-change. Independent review of this committed investigation remains required.
+change. Review evidence above applies to its exact committed candidate; the
+remaining runtime failure and final roadmap acceptance remain open.

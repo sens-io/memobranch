@@ -24,8 +24,15 @@ This waiver does not skip macOS/Linux checks or authorize pushing/deployment.
 The [macOS minimum-runtime investigation](macos-minimum-runtime-diagnosis-2026-10-29.md)
 retains complete failures and directly observes an unstarted/suspended Node 20
 child after repeated SDK activity. Later controls also reproduce it without
-cancellation or CLI logic. Filtered positive controls do not accept that gate;
-the suspension's cause and required correction remain open.
+cancelling active requests or running CLI logic. Filtered positive controls do not accept that gate;
+the suspension's cause and required correction remain open. The
+[scoped completion audit](roadmap-completion-audit-2026-10-29.md) maps the remaining
+tasks to implementation and exact evidence without accepting the failed gate.
+Its fresh current-code Linux supplement passed both actual Git defaults: related
+PDF/Git 69 passed / 2 existing Darwin-only skips, current protocol 38/38 and
+original protocol 37/37, each exit 0. Both setup failures remain recorded.
+Another macOS environment is currently unavailable, as confirmed by the user;
+the macOS failure remains open.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
