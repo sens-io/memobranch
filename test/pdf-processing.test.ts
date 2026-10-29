@@ -51,6 +51,14 @@ test('PDF processor: strict PNG structure, bounded inflation and integrity refus
   assert.throws(() => inspectPdfPng(png(1601, 1)), { code: 'CONTENT_TOO_LARGE' });
 });
 
+test('PDF processor: PNG rejects high-bit chunk names and unconsumed IDAT bytes even with valid CRCs', () => {
+  const image = png(), header = image.subarray(16, 29);
+  const rawName = Buffer.concat([image.subarray(0, 8), chunk(Buffer.from([0xc9, 0x48, 0x44, 0x52]), header), image.subarray(33)]);
+  assert.throws(() => inspectPdfPng(rawName), { code: 'VALIDATION_FAILED' });
+  const tail = Buffer.concat([image.subarray(0, 33), chunk('IDAT', Buffer.concat([deflateSync(Buffer.alloc(14)), Buffer.from('hidden-tail')])), chunk('IEND', Buffer.alloc(0))]);
+  assert.throws(() => inspectPdfPng(tail), { code: 'VALIDATION_FAILED' });
+});
+
 test('PDF processor: explicit selection uses fixed arguments and records complete images/OCR without inherited model credentials', posix, async t => {
   const f = await fixture(t), before = Buffer.from(f.bytes), prior = process.env.AMEM_LLM_API_KEY;
   process.env.AMEM_LLM_API_KEY = 'SYNTHETIC_NO_INHERIT';
@@ -198,8 +206,8 @@ function png(width = 2, height = 2) {
   const chunks = [chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.alloc((width * 3 + 1) * height, 0))), chunk('IEND', Buffer.alloc(0))];
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), ...chunks]);
 }
-function chunk(type: string, data: Buffer) {
-  const result = Buffer.alloc(data.length + 12); result.writeUInt32BE(data.length); result.write(type, 4); data.copy(result, 8);
+function chunk(type: string | Buffer, data: Buffer) {
+  const result = Buffer.alloc(data.length + 12); result.writeUInt32BE(data.length); Buffer.from(type).copy(result, 4); data.copy(result, 8);
   let crc = 0xffffffff; for (const byte of result.subarray(4, -4)) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); }
   result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, result.length - 4); return result;
 }

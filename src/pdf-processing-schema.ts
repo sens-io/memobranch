@@ -49,7 +49,8 @@ export function inspectPdfPng(bytes: Buffer): { width: number; height: number } 
     if (offset + 12 > bytes.length) invalid();
     const size = bytes.readUInt32BE(offset), end = offset + size + 12;
     if (end > bytes.length) invalid();
-    const type = bytes.toString('ascii', offset + 4, offset + 8), value = bytes.subarray(offset + 8, end - 4);
+    // latin1 preserves high bits; ASCII decoding would silently turn 0xc9 into I.
+    const type = bytes.toString('latin1', offset + 4, offset + 8), value = bytes.subarray(offset + 8, end - 4);
     if (!/^[A-Za-z]{4}$/.test(type) || type[2] !== type[2]?.toUpperCase()) invalid();
     if (crc32(bytes.subarray(offset + 4, end - 4)) !== bytes.readUInt32BE(end - 4)) invalid();
     if (!width && type !== 'IHDR') invalid();
@@ -73,7 +74,12 @@ export function inspectPdfPng(bytes: Buffer): { width: number; height: number } 
   if (!ended) invalid();
   const stride = width * channels + 1, expected = stride * height;
   let raw: Buffer;
-  try { raw = inflateSync(Buffer.concat(compressed), { maxOutputLength: expected }); } catch { invalid(); }
+  try {
+    // Node 20 supports info:true, although the installed Node types omit its overload.
+    const encoded = Buffer.concat(compressed), result = inflateSync(encoded, { maxOutputLength: expected, info: true }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
+    if (result.engine.bytesWritten !== encoded.length) invalid();
+    raw = result.buffer;
+  } catch { invalid(); }
   if (raw.length !== expected) invalid();
   for (let row = 0; row < height; row++) if (raw[row * stride]! > 4) invalid();
   return { width, height };
