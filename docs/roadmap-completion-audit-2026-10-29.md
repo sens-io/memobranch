@@ -175,6 +175,23 @@ direct native encryption checks and fresh strict OpenSpec, are frozen in
 `846c399646aea629e87b09081a74b6301cfedd2fa8cff984b076854c78c59aef`.
 Both earlier Linux snapshot inventories still match their recorded files.
 
+## Independent review of the audit candidate
+
+Fixed documentation candidate `9e85c608351ac303e3b4d8261a1859835caa9d74`, source
+branch `kevin/knowledge-expansion`, received independent read-only Agent review.
+The integration review covered this audit and the roadmap **2/2**; the native
+review covered the entire macOS diagnosis **1/1**, plus the designated native
+PDF/encryption passages here. Thus all **three unique changed documents** were
+reviewed, zero skipped. Neither review confirmed a new P1/P2 in those scopes.
+
+The native review checked the 12 new controls, 6 native artifacts, 3 encryption
+artifacts and unchanged original 26+27 hashes. The integration review checked the
+34 supporting artifacts, both Linux snapshot inventories, actual terminal
+results, count meanings and package claims. OCR excluded Markdown by extension;
+it did not automatically review or approve these files. The independent Agents
+explicitly reviewed them. No test, Docker run or network action was performed by
+the reviewers. This record does not turn document review into runtime acceptance.
+
 ## Acceptance still withheld
 
 | Source branch | Open item | Required evidence |
