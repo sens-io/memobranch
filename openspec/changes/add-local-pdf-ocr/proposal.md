@@ -20,6 +20,7 @@ handling, automatic Wiki approval, cloud grant change, push, publication or
 deployment. The host explicitly provisions local processors and language data.
 All named verification and independent-review tasks below remain required.
 
-Status: an [internal processing core](../../../docs/pdf-processing-core-verification-2026-10-28.md)
-is implemented and under verification. Integrated evidence/save/read/CLI work
-remains pending; this change directory does not claim batch acceptance.
+Status: the [local evidence/save/read/CLI workflow](../../../docs/pdf-processing-import-verification-2026-10-29.md)
+is implemented under verification, with related runtime checks and real synthetic
+native save/read evidence. Windows ownership, integration review and final complete
+gates remain open; this change directory does not claim batch acceptance.

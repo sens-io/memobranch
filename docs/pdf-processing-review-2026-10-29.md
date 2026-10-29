@@ -7,8 +7,8 @@ This is an intermediate implementation record, not acceptance of batch 5.
 Three read-only reviewers examined the process engine/tests (2 files), schema/Git
 cleanup export (2 files), and checkpoint/OpenSpec/roadmap records (6 files).
 The documentation review covered 6/6 with no confirmed P1/P2. The schema/export
-review covered 2/2 and found the two P2 issues below. Process review is still being
-completed; its Windows background-process concern remains open.
+review covered 2/2 and found the two P2 issues below. Process review completed 2/2
+and confirmed the Windows background-process concern; it remains open.
 
 | Source branch | Finding | Correction / actual evidence |
 | --- | --- | --- |
@@ -30,6 +30,10 @@ existing PDF import checks. They are not a full repository or installed-package
 acceptance run. An initial build failed because the installed Node declarations
 omit the runtime-supported `info:true` return overload; the implementation now
 states that return shape explicitly. That failed build remains recorded.
+
+Independent re-review of `00af053f94b1632028d6b3d094a51268280ed1ed` covered all 3
+schema/test/record files, zero skipped, and closed both PNG P2 issues without a new
+confirmed P1/P2. Windows ownership remains open. The review itself ran no tests.
 
 Subsequent processed-evidence integration is separate work and is not established
 by these related collections. The original macOS Wiki-adapter 35/37 failure also

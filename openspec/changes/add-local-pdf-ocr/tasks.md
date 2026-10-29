@@ -1,9 +1,11 @@
 ## Implementation
 
 The [internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)
-has code, related/runtime tests and one actual native image-only control. It does
-not yet provide the complete public import/save/read workflow. Keep the full
-tasks below open until their integrated behavior and final review are verified.
+has code, related/runtime tests and one actual native image-only control. The later
+[local import checkpoint](../../../docs/pdf-processing-import-verification-2026-10-29.md)
+adds public library/CLI save/read code, immutable encrypted media and actual mixed
+native save/read evidence. Keep full tasks below open until Windows ownership,
+integrated behavior, complete gates and final review are verified.
 
 - [ ] Define host-owned local processor configuration, strict opt-in page selection and bounded provenance.
 - [ ] Implement owned rendering/OCR with complete output, cancellation, deadlines and private temporary cleanup.

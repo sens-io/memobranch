@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
@@ -14,7 +14,8 @@ import { runIntegrationSetup } from './integration-cli.js';
 import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, readImportPreview, serializeDirectoryImportPlan } from './directory-import.js';
 import { withOperation } from './operation.js';
 import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
-import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan } from './pdf-import.js';
+import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan, readPdfOriginal, readPdfPage } from './pdf-import.js';
+import { pdfProcessorConfigSchema, pdfProcessingSelectionSchema } from './pdf-processing-schema.js';
 import { mergeOptionsSchema } from './wiki-merge.js';
 import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
 import { SharedWikiReader } from './shared-wiki.js';
@@ -99,12 +100,20 @@ async function main(): Promise<void> {
             print(result);
             if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
           } else if (action === 'pdf-preview') {
-            process.stdout.write(serializePdfImportPlan(await previewPdfImport(requiredPositional(parsed, 1, 'PDF file'), { timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000) })));
+            process.stdout.write(serializePdfImportPlan(await previewPdfImport(requiredPositional(parsed, 1, 'PDF file'), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000), ...await pdfProcessingOptions(parsed, true),
+            })));
           } else if (action === 'pdf-apply') {
             print(await applyPdfImport(vault, await readPdfImportPlan(requiredFlag(parsed, 'plan')), {
               timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000), scope: enumFlag(parsed, 'scope', scopes, 'project'),
-              sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+              sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'), ...await pdfProcessingOptions(parsed, false),
             }));
+          } else if (action === 'pdf-original' || action === 'pdf-page') {
+            const id = requiredPositional(parsed, 1, 'evidence ID');
+            const bytes = action === 'pdf-original' ? await readPdfOriginal(vault, id) : await readPdfPage(vault, id, numberFlag(parsed, 'page', NaN));
+            const output = resolve(requiredFlag(parsed, 'output'));
+            await writeFile(output, bytes, { flag: 'wx', mode: 0o600 });
+            print({ path: output, bytes: bytes.length });
           } else throw new Error('Import action must be preview, apply, web-preview, web-apply, pdf-preview or pdf-apply');
         });
       } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
@@ -747,6 +756,18 @@ function csvFlag(args: ParsedArgs, name: string): string[] {
   return (flagString(args, name) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
 }
 
+async function pdfProcessingOptions(args: ParsedArgs, preview: boolean) {
+  if (!args.flags.has('processor-config') && !args.flags.has('pages') && !args.flags.has('ocr-languages')) return {};
+  const processor = pdfProcessorConfigSchema.parse(await readImportPreview(requiredFlag(args, 'processor-config'), 64_000));
+  if (!preview) {
+    if (args.flags.has('pages') || args.flags.has('ocr-languages')) throw new Error('PDF apply uses the reviewed selection in --plan; create a new preview to change pages or OCR languages');
+    return { processor };
+  }
+  const processing = pdfProcessingSelectionSchema.parse({ pages: requiredFlag(args, 'pages').split(',').map(value => Number(value.trim())),
+    ...(args.flags.has('ocr-languages') ? { languages: requiredFlag(args, 'ocr-languages').split(',').map(value => value.trim()) } : {}) });
+  return { processor, processing };
+}
+
 function enumFlag<T extends string>(args: ParsedArgs, name: string, values: readonly T[], fallback: T): T {
   const value = flagString(args, name) ?? fallback;
   if (!values.includes(value as T)) throw new Error(`--${name} must be one of: ${values.join(', ')}`);
@@ -792,6 +813,10 @@ Usage:
   amem import web-apply --plan web-plan.json [--scope project] [--sensitivity internal] [--progress]
   amem import pdf-preview <file.pdf> [--timeout-ms 10000] > pdf-plan.json
   amem import pdf-apply --plan pdf-plan.json [--scope project] [--sensitivity internal] [--timeout-ms 10000]
+  amem import pdf-preview <file.pdf> --processor-config host.json --pages 1,3 [--ocr-languages eng]
+  amem import pdf-apply --plan pdf-plan.json --processor-config host.json [--scope project] [--sensitivity internal]
+  amem import pdf-original <evidence-id> --output <new-file.pdf>
+  amem import pdf-page <evidence-id> --page 1 --output <new-file.png>
   amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
   amem experience capture --file TRACE.json [--scope project] [--sensitivity internal]
   amem experience prepare --file PROPOSAL.json [--include-sensitive] [--include-secret]

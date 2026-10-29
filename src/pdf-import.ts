@@ -1,19 +1,22 @@
-import { constants } from 'node:fs';
+import { constants, lstatSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
+import { z } from 'zod';
 import { AgentMemoryError } from './errors.js';
 import { readImportPreview, serializeImportPreview } from './directory-import.js';
 import { cancellationError, combineSignals, operationSignal, throwIfCancelled, withOperation } from './operation.js';
-import { assertPdfEvidence, pdfHeader, PDF_EXTRACTION_WARNING, PDF_MAX_BYTES, PDF_MAX_CHARACTERS, PDF_MAX_PAGES } from './pdf-evidence.js';
+import { assertPdfEvidence, pdfHeader, processedPdfHeader, pdfProcessingSha256, PDF_EXTRACTION_WARNING, PDF_PROCESSING_WARNING, PDF_MAX_BYTES, PDF_MAX_CHARACTERS, PDF_MAX_PAGES } from './pdf-evidence.js';
+import { processPdfPages } from './pdf-processing.js';
+import { pdfPageProcessingSchema, pdfProcessingSelectionSchema, pdfProcessorConfigSchema, type PdfPageProcessing, type PdfProcessingSelection, type PdfProcessorConfig } from './pdf-processing-schema.js';
 import { authorize } from './policy.js';
 import type { PdfOriginal, Scope, Sensitivity } from './types.js';
 import { sha256 } from './utils.js';
 import type { MemoryVault } from './vault.js';
 
-export interface PdfImportPlan {
+export interface PdfTextImportPlan {
   version: 1;
   kind: 'local-pdf';
   path: string;
@@ -25,12 +28,34 @@ export interface PdfImportPlan {
   warnings: string[];
   revision: string;
 }
-export interface PdfPreviewOptions { signal?: AbortSignal; timeoutMs?: number }
+const processingSummarySchema = pdfPageProcessingSchema.omit({ pages: true }).extend({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  pages: z.array(pdfPageProcessingSchema.shape.pages.element.omit({ data: true, ocrText: true }).extend({ ocrCharacters: z.number().int().min(0).max(40_000).optional() })).min(1).max(5),
+});
+const processedPlanSchema = z.object({
+  version: z.literal(2), kind: z.literal('local-pdf'), path: z.string().min(1).max(4096), sourceUri: z.string().min(1).max(16_384),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().min(8).max(PDF_MAX_BYTES), parser: z.string().max(200),
+  pages: z.array(z.object({ number: z.number().int().min(1).max(PDF_MAX_PAGES), sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    characters: z.number().int().min(0).max(PDF_MAX_CHARACTERS), empty: z.boolean() }).strict()).min(1).max(PDF_MAX_PAGES),
+  warnings: z.array(z.string().max(1000)).max(250), revision: z.string().regex(/^[a-f0-9]{64}$/), processing: processingSummarySchema,
+}).strict();
+export interface PdfProcessedImportPlan extends Omit<PdfTextImportPlan, 'version'> {
+  version: 2;
+  processing: z.infer<typeof processingSummarySchema>;
+}
+export type PdfImportPlan = PdfTextImportPlan | PdfProcessedImportPlan;
+export interface PdfPreviewOptions {
+  signal?: AbortSignal; timeoutMs?: number;
+  /** Local operator selection; never register these options on a server tool. */
+  processing?: PdfProcessingSelection;
+  /** Trusted host configuration, separate from every serialized preview. */
+  processor?: PdfProcessorConfig;
+}
 export interface PdfImportOptions extends PdfPreviewOptions { scope?: Scope; sensitivity?: Sensitivity }
 
 /** Local API/CLI only. Never expose caller-selected paths through server tools. */
 export async function previewPdfImport(path: string, options: PdfPreviewOptions = {}): Promise<PdfImportPlan> {
-  return run(options, async () => (await inspect(path, timeout(options))).plan);
+  return run(options, async () => (await inspect(path, timeout(options), processingOptions(options))).plan);
 }
 export const serializePdfImportPlan = (plan: PdfImportPlan): string => serializeImportPreview(plan);
 export const readPdfImportPlan = async (path: string): Promise<PdfImportPlan> => await readImportPreview(path) as PdfImportPlan;
@@ -39,13 +64,32 @@ export async function applyPdfImport(vault: MemoryVault, input: PdfImportPlan, o
   return run(options, async () => {
     const config = await vault.config(), scope = options.scope ?? 'project', sensitivity = options.sensitivity ?? 'internal';
     authorize(vault.principal, 'write', { tenantId: config.tenantId, scope, sensitivity });
-    if (!input || input.version !== 1 || input.kind !== 'local-pdf' || typeof input.path !== 'string') {
+    if (!input || (input.version !== 1 && input.version !== 2) || input.kind !== 'local-pdf' || typeof input.path !== 'string') {
       throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid PDF import preview');
     }
-    const current = await inspect(input.path, timeout(options));
-    if (JSON.stringify(input) !== JSON.stringify(current.plan)) throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source, parser or preview changed; create a new preview');
+    // Freeze the request before any native work. Unknown processing fields refuse before execution.
+    const plan = structuredClone(input);
+    if (plan.version === 2) {
+      serializePdfImportPlan(plan);
+      if (!processedPlanSchema.safeParse(plan).success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid PDF processing preview');
+    }
+    if (plan.version === 1 && (options.processing !== undefined || options.processor !== undefined)) throw new AgentMemoryError('VALIDATION_FAILED', 'Text-only PDF preview cannot add processing at apply time');
+    if (plan.version === 2 && options.processing !== undefined && JSON.stringify(options.processing) !== JSON.stringify(plan.processing.selection)) throw new AgentMemoryError('VALIDATION_FAILED', 'PDF processing selection changed; create a new preview');
+    const selected = processingOptions(plan.version === 2 ? { processor: options.processor!, processing: plan.processing.selection } : {});
+    const current = await inspect(plan.path, timeout(options), selected);
+    if (JSON.stringify(plan) !== JSON.stringify(current.plan)) throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source, parser or preview changed; create a new preview');
     throwIfCancelled();
-    return vault.capture({ content: current.content, pdfOriginal: current.original, sourceUri: current.plan.sourceUri, scope, sensitivity, extract: false });
+    const capture = { content: current.content, pdfOriginal: current.original, sourceUri: current.plan.sourceUri, scope, sensitivity, extract: false };
+    if (plan.version === 1) return vault.capture(capture);
+    return vault.capturePdfImport(capture, {
+      revalidate: async () => {
+        const latest = await vault.config();
+        if (latest.tenantId !== config.tenantId) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'PDF destination tenant changed; prepare again');
+        authorize(vault.principal, 'write', { tenantId: latest.tenantId, scope, sensitivity });
+        await current.revalidate();
+      },
+      validate: () => { authorize(vault.principal, 'write', { tenantId: config.tenantId, scope, sensitivity }); current.validate(); },
+    });
   });
 }
 
@@ -55,6 +99,29 @@ export async function readPdfOriginal(vault: MemoryVault, evidenceId: string): P
   if (document.meta.type !== 'evidence' || !source) throw new AgentMemoryError('NOT_FOUND', 'PDF original is unavailable');
   assertPdfEvidence(source, document.body.slice(`# Evidence ${document.meta.id}\n\n`.length));
   return Buffer.from(source.data, 'base64');
+}
+
+/** Bounded local media read; authorization and integrity are inherited from the canonical record. */
+export async function readPdfPage(vault: MemoryVault, evidenceId: string, number: number): Promise<Buffer> {
+  if (!Number.isSafeInteger(number) || number < 1 || number > PDF_MAX_PAGES) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid retained PDF page number');
+  const document = await vault.get(evidenceId), original = (document.meta as { pdfOriginal?: unknown }).pdfOriginal;
+  if (document.meta.type !== 'evidence' || !original) throw new AgentMemoryError('NOT_FOUND', 'Processed PDF page is unavailable');
+  assertPdfEvidence(original, document.body.slice(`# Evidence ${document.meta.id}\n\n`.length));
+  const page = original.version === 2 ? original.processing.pages.find(page => page.number === number) : undefined;
+  if (!page) throw new AgentMemoryError('NOT_FOUND', 'This PDF page was not retained');
+  return Buffer.from(page.data, 'base64');
+}
+
+function processingOptions(options: PdfPreviewOptions) {
+  if (options.processing === undefined && options.processor === undefined) return undefined;
+  const selection = pdfProcessingSelectionSchema.safeParse(options.processing), host = pdfProcessorConfigSchema.safeParse(options.processor);
+  if (!selection.success || !host.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Explicit PDF pages and separate host processor configuration are required');
+  return { selection: selection.data, host: host.data };
+}
+
+function processingSummary(processing: PdfPageProcessing) {
+  const { pages, ...profile } = processing;
+  return { ...profile, sha256: pdfProcessingSha256(processing), pages: pages.map(({ data: _data, ocrText, ...page }) => ({ ...page, ...(ocrText === undefined ? {} : { ocrCharacters: ocrText.length }) })) };
 }
 
 function timeout(options: PdfPreviewOptions): number {
@@ -70,7 +137,46 @@ async function run<T>(options: PdfPreviewOptions, action: () => Promise<T>): Pro
   try { return await withOperation(combined.signal, action); } finally { combined.dispose(); }
 }
 
-async function inspect(input: string, timeoutMs: number) {
+async function inspect(input: string, timeoutMs: number, processing?: ReturnType<typeof processingOptions>) {
+  const sourceFile = await readSource(input), { path, bytes } = sourceFile;
+  let identity = sourceFile.identity;
+  const parsed = await parse(bytes, timeoutMs, processing !== undefined);
+  throwIfCancelled();
+  validateSource(path, identity);
+  const emptyPages = parsed.pages.flatMap((text, index) => text ? [] : [index + 1]);
+  const source = { sha256: createHash('sha256').update(bytes).digest('hex'), pages: parsed.pages.length, parser: parsed.parser, emptyPages };
+  const processed = processing ? await processPdfPages(bytes, source.pages, processing.selection, processing.host, timeoutMs) : undefined;
+  const content = ((processed ? processedPdfHeader(source, processed.record) : pdfHeader(source)) + '\n' + parsed.pages.map((text, index) => {
+    const page = processed?.record.pages.find(page => page.number === index + 1);
+    if (!processed) return `## Page ${index + 1}\n\n${text || '[No extractable text; OCR not run.]'}`;
+    return `## Page ${index + 1}\n\n### Text layer\n\n${text || '[No extractable text.]'}\n\n### Local page processing\n\n${page ? `Rendered PNG SHA-256: ${page.sha256}\n\n${processed.record.ocr ? `OCR (unverified):\n\n${page.ocrText || '[No recognized text.]'}` : '[Rendered only; OCR not run.]'}` : '[Page not rendered; OCR not run.]'}`;
+  }).join('\n\n')).trim();
+  if (content.length > PDF_MAX_CHARACTERS) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF extraction exceeds 200000 characters');
+  const base = { mediaType: 'application/pdf' as const, encoding: 'base64' as const, bytes: bytes.length, ...source,
+    data: bytes.toString('base64'), extractionSha256: sha256(content) };
+  const original: PdfOriginal = processed ? { ...base, version: 2, processing: processed.record } : { ...base, version: 1 };
+  assertPdfEvidence(original, content);
+  const payload = { version: processed ? 2 as const : 1 as const, kind: 'local-pdf' as const, path, sourceUri: pathToFileURL(path).href,
+    sha256: source.sha256, bytes: bytes.length, parser: parsed.parser,
+    pages: parsed.pages.map((text, index) => ({ number: index + 1, sha256: sha256(text), characters: text.length, empty: !text })),
+    warnings: processed ? [PDF_PROCESSING_WARNING, ...emptyPages.map(page => `Page ${page}: no extractable text layer.`),
+      ...parsed.pages.flatMap((_, index) => processed.record.selection.pages.includes(index + 1) ? [] : [`Page ${index + 1}: not rendered; OCR not run.`]),
+      ...processed.record.pages.flatMap(page => page.ocrText === '' ? [`Page ${page.number}: no recognized text.`] : [])]
+      : [PDF_EXTRACTION_WARNING, ...emptyPages.map(page => `Page ${page}: no extractable text; OCR not run.`)],
+    ...(processed ? { processing: processingSummary(processed.record) } : {}) };
+  const plan = { ...payload, revision: sha256(JSON.stringify(payload)) } as PdfImportPlan; serializePdfImportPlan(plan);
+  const revalidate = async () => {
+    const current = await readSource(path);
+    if (!current.bytes.equals(bytes)) throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source changed before capture');
+    identity = current.identity;
+    await processed?.verifyProfile(); validateSource(path, identity); throwIfCancelled();
+  };
+  const validate = () => { throwIfCancelled(); validateSource(path, identity); };
+  await revalidate();
+  return { plan, original, content, revalidate, validate };
+}
+
+async function readSource(input: string) {
   throwIfCancelled();
   if (typeof input !== 'string' || !input.trim()) throw new AgentMemoryError('VALIDATION_FAILED', 'An explicit local PDF path is required');
   const path = resolve(input);
@@ -100,34 +206,22 @@ async function inspect(input: string, timeoutMs: number) {
   if (!bytes.subarray(0, 8).toString('ascii').match(/^%PDF-\d\.\d/) || !bytes.toString('latin1').trimEnd().endsWith('%%EOF')) {
     throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source has no supported header or final EOF marker');
   }
-  const parsed = await parse(bytes, timeoutMs);
-  throwIfCancelled();
-  const current = await lstat(path);
-  if (current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino || current.size !== identity.size
-    || current.mtimeMs !== identity.mtimeMs || current.ctimeMs !== identity.ctimeMs || await realpath(path) !== path) {
-    throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source changed during parsing');
-  }
-  const emptyPages = parsed.pages.flatMap((text, index) => text ? [] : [index + 1]);
-  const source = { sha256: createHash('sha256').update(bytes).digest('hex'), pages: parsed.pages.length, parser: parsed.parser, emptyPages };
-  const content = (pdfHeader(source) + '\n' + parsed.pages.map((text, index) => `## Page ${index + 1}\n\n${text || '[No extractable text; OCR not run.]'}`).join('\n\n')).trim();
-  if (content.length > PDF_MAX_CHARACTERS) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'PDF extraction exceeds 200000 characters');
-  const original: PdfOriginal = { version: 1, mediaType: 'application/pdf', encoding: 'base64', bytes: bytes.length, ...source,
-    data: bytes.toString('base64'), extractionSha256: sha256(content) };
-  assertPdfEvidence(original, content);
-  const payload = { version: 1 as const, kind: 'local-pdf' as const, path, sourceUri: pathToFileURL(path).href,
-    sha256: source.sha256, bytes: bytes.length, parser: parsed.parser,
-    pages: parsed.pages.map((text, index) => ({ number: index + 1, sha256: sha256(text), characters: text.length, empty: !text })),
-    warnings: [PDF_EXTRACTION_WARNING, ...emptyPages.map(page => `Page ${page}: no extractable text; OCR not run.`)] };
-  const plan = { ...payload, revision: sha256(JSON.stringify(payload)) }; serializePdfImportPlan(plan);
-  throwIfCancelled();
-  return { plan, original, content };
+  return { path, bytes, identity };
 }
 
-async function parse(bytes: Buffer, milliseconds: number): Promise<{ pages: string[]; parser: string }> {
+function validateSource(path: string, identity: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }) {
+  const current = lstatSync(path);
+  if (current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino || current.size !== identity.size
+    || current.mtimeMs !== identity.mtimeMs || current.ctimeMs !== identity.ctimeMs || realpathSync(path) !== path) {
+    throw new AgentMemoryError('VALIDATION_FAILED', 'PDF source changed during processing or capture');
+  }
+}
+
+async function parse(bytes: Buffer, milliseconds: number, allowTextless = false): Promise<{ pages: string[]; parser: string }> {
   throwIfCancelled();
   // Source-based development still executes the same built worker tested by installed consumers.
   const worker = new Worker(new URL(import.meta.url.endsWith('.ts') ? '../dist/pdf-worker.js' : './pdf-worker.js', import.meta.url), {
-    workerData: new Uint8Array(bytes), execArgv: [], stdout: true, stderr: true,
+    workerData: allowTextless ? { data: new Uint8Array(bytes), allowTextless: true } : new Uint8Array(bytes), execArgv: [], stdout: true, stderr: true,
     resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
   });
   // Do not expose source/parser diagnostics through stdout, stderr or error text.

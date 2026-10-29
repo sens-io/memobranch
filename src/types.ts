@@ -73,14 +73,14 @@ export interface EvidenceMeta {
   scope: Scope;
   sensitivity: Sensitivity;
   sha256: string;
-  digestVersion?: 2 | 3 | 4;
+  digestVersion?: 2 | 3 | 4 | 5;
   legacySha256?: string;
   immutable: true;
   /** Exact PDF bytes, never part of a model source/context payload. */
   pdfOriginal?: PdfOriginal;
 }
 
-export interface PdfOriginal {
+export interface PdfTextOriginal {
   version: 1;
   mediaType: 'application/pdf';
   encoding: 'base64';
@@ -92,6 +92,13 @@ export interface PdfOriginal {
   emptyPages: number[];
   extractionSha256: string;
 }
+
+/** Explicitly processed originals use a separate evidence identity domain. */
+export interface PdfProcessedOriginal extends Omit<PdfTextOriginal, 'version'> {
+  version: 2;
+  processing: import('./pdf-processing-schema.js').PdfPageProcessing;
+}
+export type PdfOriginal = PdfTextOriginal | PdfProcessedOriginal;
 
 export interface CandidateMeta {
   id: string;

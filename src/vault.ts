@@ -9,7 +9,7 @@ import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './confi
 import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest, wikiImportEvidenceDigest } from './evidence.js';
+import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest, processedPdfEvidenceDigest, wikiImportEvidenceDigest } from './evidence.js';
 import { assertPdfEvidence } from './pdf-evidence.js';
 import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityConditions, factValidityFields, type MemoriesAtOptions, type MemoryValidityUpdate } from './effective-time.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
@@ -586,6 +586,14 @@ export class MemoryVault {
     return this.captureGuarded(options);
   }
 
+  /** @internal Trusted local PDF adapter only; guards never come from serialized requests. */
+  async capturePdfImport(options: CaptureOptions, guard: { revalidate(): Promise<void>; validate(): void }): Promise<CaptureResult> {
+    if (options.pdfOriginal?.version !== 2 || typeof guard?.revalidate !== 'function' || typeof guard?.validate !== 'function') {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Processed PDF import requires trusted runtime validation guards');
+    }
+    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true });
+  }
+
   private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void; reuseExistingWithoutCommit?: boolean; allowWikiImport?: boolean }): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
@@ -601,7 +609,7 @@ export class MemoryVault {
     if (wikiImport && guard?.allowWikiImport !== true) throw new AgentMemoryError('VALIDATION_FAILED', 'Reserved Wiki import sources require separate preparation and confirmed import');
     if (wikiImport && pdfOriginal !== undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports cannot carry PDF attachments');
     if (pdfOriginal !== undefined) assertPdfEvidence(pdfOriginal, content);
-    const digest = (wikiImport ? wikiImportEvidenceDigest : pdfOriginal === undefined ? evidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
+    const digest = (wikiImport ? wikiImportEvidenceDigest : pdfOriginal === undefined ? evidenceDigest : pdfOriginal.version === 2 ? processedPdfEvidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
     const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
@@ -619,7 +627,7 @@ export class MemoryVault {
         scope,
         sensitivity,
         sha256: digest,
-        digestVersion: wikiImport ? 4 : pdfOriginal === undefined ? 2 : 3,
+        digestVersion: wikiImport ? 4 : pdfOriginal === undefined ? 2 : pdfOriginal.version === 2 ? 5 : 3,
         ...(pdfOriginal === undefined ? {} : { pdfOriginal }),
         immutable: true,
       };

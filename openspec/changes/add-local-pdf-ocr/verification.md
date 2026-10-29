@@ -4,8 +4,10 @@ Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 At the reviewed design checkpoint, this was roadmap batch 5 preparation without
 processing code, public API, CLI feature or evidence migration. The later
 [internal processing checkpoint](../../../docs/pdf-processing-core-verification-2026-10-28.md)
-records new code, actual native observations and retained failures. It does not
-accept the integrated feature; all complete tasks in `tasks.md` remain unchecked.
+records new code, actual native observations and retained failures. The later
+[local import checkpoint](../../../docs/pdf-processing-import-verification-2026-10-29.md)
+adds save/read/CLI verification. Neither accepts the complete feature; all full
+tasks in `tasks.md` remain unchecked pending remaining platform/gate/review work.
 
 ## Specification review and correction
 

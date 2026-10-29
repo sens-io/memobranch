@@ -6,7 +6,8 @@ import { PDF_MAX_CHARACTERS, PDF_MAX_PAGES } from './pdf-evidence.js';
 async function parse() {
   globalThis.fetch = async () => { throw new Error('PDF network access is disabled'); };
   const { getDocument, version } = await getResolvedPDFJS();
-  const task = getDocument({ data: new Uint8Array(workerData as Uint8Array), isEvalSupported: false, enableXfa: false,
+  const selected = !(workerData instanceof Uint8Array) && workerData?.allowTextless === true;
+  const task = getDocument({ data: new Uint8Array(selected ? workerData.data : workerData as Uint8Array), isEvalSupported: false, enableXfa: false,
     useWorkerFetch: false, disableFontFace: true, useSystemFonts: false, maxImageSize: 0,
     disableAutoFetch: true, disableStream: true, disableRange: true, stopAtErrors: true, verbosity: 0 });
   try {
@@ -35,7 +36,7 @@ async function parse() {
       } finally { await stream.cancel().catch(() => {}); stream.releaseLock(); page.cleanup(); }
       pages.push(parts.join('').replace(/\0/g, '').trim());
     }
-    if (!pages.some(text => text.trim())) { parentPort!.postMessage({ error: 'TEXTLESS' }); return; }
+    if (!selected && !pages.some(text => text.trim())) { parentPort!.postMessage({ error: 'TEXTLESS' }); return; }
     parentPort!.postMessage({ parser: `unpdf/1.7.0 PDF.js/${version}`, pages });
   } finally { await task.destroy(); }
 }

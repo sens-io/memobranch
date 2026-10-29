@@ -102,7 +102,7 @@ flowchart LR
 
 > **Development branch preview:** [Easier setup, approved-context recall, Wiki before/after review and correction](docs/memory-adoption.md), plus [37 reproducible evaluation cases](evaluation/README.md), are available from the current source branch. These additions have not been published to npm yet. Existing npm installation instructions below still refer to the released package.
 
-> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. General crawling, OCR and team knowledge merges remain future work. These additions are not yet published to npm.
+> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. See the [roadmap](docs/remaining-roadmap.md) for sharing, separate knowledge integration and optional OCR status. These additions are not yet published to npm.
 
 > **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
 
@@ -113,6 +113,8 @@ flowchart LR
 > **Web time management (development source):** [Inspect interval warnings, review UTC endpoints and query retained records by date](docs/web-effective-time.md) in the console. Saves require the displayed revision and explicit confirmation; unknown time is not inferred. Not yet published to npm.
 
 > **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
+
+> **Optional selected PDF pages (under verification):** [Local rendering/OCR, immutable original/page preservation and authorized local reads](docs/local-pdf-processing.md). The text-only default remains available. OCR is unverified; Windows process ownership and final acceptance checks remain open. Not yet published to npm.
 
 > **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Local read-only views, not cross-account sharing or historical truth. Not yet published to npm.
 
