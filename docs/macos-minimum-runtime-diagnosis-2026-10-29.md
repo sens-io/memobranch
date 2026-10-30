@@ -6,6 +6,10 @@ Runtime/source checkpoint: `c01ae9b1999030d4d305d3a88c3883c8b411fa93`
 diagnostics identify a smaller triggering sequence; they do not replace the
 retained failing complete collections or accept the roadmap batch.
 
+The [October 30 follow-up](macos-minimum-runtime-followup-2026-10-30.md) adds
+four unchanged complete reruns, parent/child controls and official-byte comparison.
+Both actual Git defaults still fail 36/38 and 35/37; no gate was accepted.
+
 ## Fixed conditions and evidence
 
 - macOS 15.5 (24F74), arm64; existing Node **20.0.0**, libuv 1.44.2,

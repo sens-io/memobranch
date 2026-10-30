@@ -33,6 +33,9 @@ PDF/Git 69 passed / 2 existing Darwin-only skips, current protocol 38/38 and
 original protocol 37/37, each exit 0. Both setup failures remain recorded.
 Another macOS environment is currently unavailable, as confirmed by the user;
 the macOS failure remains open.
+The [October 30 follow-up](macos-minimum-runtime-followup-2026-10-30.md) repeats
+the complete failures under both actual defaults, verifies official runtime bytes
+and records the unavailable native trace capability. No batch acceptance changed.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
