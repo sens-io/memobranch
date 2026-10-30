@@ -39,6 +39,12 @@ and records the unavailable native trace capability. No batch acceptance changed
 It later verifies existing LLDB launch/attach as a local continuation path, while
 retaining two incomplete capture attempts. This is not a reason to waive the
 failing macOS gate or require a new environment before further local investigation.
+The later [actual-worker observation](macos-process-entry-observation-2026-10-30.md)
+records pre-attach native samples with a zero task suspension count, a later
+successful real-child capture at the loader's first instruction, and the same
+complete failure using a verified official executable copy. It preserves failed
+and interrupted attempts and prepares an outside-application comparison; the
+cause, correction and final acceptance remain open.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

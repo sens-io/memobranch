@@ -173,3 +173,12 @@ Node 22, installed-package and source-review results retain their recorded scope
 
 Database changes: none. Data migration: none. Persistent configuration changes:
 none. No push, npm publication, deployment, real account, grant or service change.
+
+The later [actual-worker observation](macos-process-entry-observation-2026-10-30.md)
+uses a validated preloaded native monitor. Its nine pre-attach samples report
+`suspendCount:0`, despite the earlier tool's “unstarted/suspended” wording.
+The first preloaded debugger attempt did not finish within six seconds. A later
+30-second diagnostic bound did capture the actual child at `_dyld_start + 0`
+with pending `SIGTERM`, then detach. Original test bounds are unchanged and the
+instrumented results still do not accept the original gate. A same-byte official
+copy also fails the complete current 38-case collection under actual `main`.
