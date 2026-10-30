@@ -36,6 +36,9 @@ the macOS failure remains open.
 The [October 30 follow-up](macos-minimum-runtime-followup-2026-10-30.md) repeats
 the complete failures under both actual defaults, verifies official runtime bytes
 and records the unavailable native trace capability. No batch acceptance changed.
+It later verifies existing LLDB launch/attach as a local continuation path, while
+retaining two incomplete capture attempts. This is not a reason to waive the
+failing macOS gate or require a new environment before further local investigation.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

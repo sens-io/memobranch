@@ -111,7 +111,47 @@ unavailable, not that every possible native debugger is unavailable everywhere.
 The retained error text has SHA-256
 `f6dbdd0aa74be78081b4d2e90aae9c90ee7bc5e2855c47159801b2de24c6bc75`.
 
-## Retained scope and continuation prerequisite
+## Existing LLDB provides a local continuation path
+
+The existing LLDB was then checked separately, with user initialization files
+disabled and address randomization retained for the launched target. It could
+both launch the same Node 20 binary for a version query and attach to an ordinary
+synthetic Node process **13452**, read its stack and detach. The target's unique
+marker and executable were checked before attaching; it was terminated after
+detachment. No other application was attached and no software was installed.
+Thus the DTrace/Frida limitations do not require stopping local investigation.
+
+Two native capture attempts used temporary debugger breakpoints in an owned
+diagnostic process. Both recorded version-query spawn flags **16396 / 0x400c**.
+They ran the SDK prefix directly under LLDB, not the original `--test` collection;
+debugger effects and timing prevent treating either as runtime acceptance.
+No argument, return value or on-disk executable was changed. Breakpoints do
+temporarily affect the diagnostic target's instruction memory and timing.
+
+The first attempt stopped on a diagnostic callback `KeyError` before completing
+the requested capture. The second let the target finish, with its version probe
+reporting **757 ms**, but stepping out ran past process exit. Its later JSON
+`pid:null` / `returnCode:0` is **not a valid observed native return value** and
+must not be used as such. The batch then exited 1 on an invalid `continue`.
+Both incomplete attempts remain retained, not relabeled as successful traces.
+
+All **nine** LLDB capability/source/log/result artifacts are frozen separately in
+`.scratch/macos-node20-lldb-inventory-2026-10-30.json`, SHA-256
+`129461577346ed66ab7ba6e78d2901b5c1cb53d202fe889dc8aabd72edd1e612`.
+A final scoped process listing found no remaining matching diagnostic process.
+This adds an available next observation method, not a project fix.
+
+## Independent review of the preceding record
+
+Committed candidate `95bc5d6d48cc8797de7119f86e72a3362f7b056d` received independent
+read-only Agent review: the native reviewer covered the follow-up **1/1**, and the
+scope reviewer covered all three changed documents **3/3**, each zero skipped.
+They checked the old/new frozen hashes, official-byte comparison and complete
+failures, and confirmed no new P1/P2 in those scopes. Those reviews apply to that
+exact candidate, not subsequent LLDB additions. OCR excluded Markdown; the
+Agents explicitly reviewed the documents. Neither review accepted the failed gate.
+
+## Retained scope and next step
 
 All **66** new source/log/result/archive/binary artifacts are frozen in
 `.scratch/macos-node20-diagnosis-inventory-4.json`, SHA-256
@@ -122,7 +162,7 @@ counts. The runtime, tests, dependencies and configuration are unchanged from
 
 | Source branch | Remaining condition | Required next evidence |
 | --- | --- | --- |
-| `kevin/knowledge-expansion` | The same complete minimum-runtime failure persisted through the prior investigation, scoped audit and these four unchanged reruns. Available local isolations have not identified a safe project correction. Another Mac is unavailable, as the user confirmed; DTrace requires unavailable privileges and the connected Frida backend lacks its native binding. | A comparable macOS Node 20.0.0 execution environment, or a controlled investigation with the necessary native inspection capability, to identify the launch trigger and any actual project correction. Then pass both unchanged complete collections under both real Git defaults and perform final acceptance review. |
+| `kevin/knowledge-expansion` | The same complete minimum-runtime failure persisted through the prior investigation, scoped audit and these four unchanged reruns. Available local isolations have not identified a safe project correction. Another Mac is unavailable; DTrace/Frida have the specific limits above. Existing LLDB launch and attach are available, so local investigation can continue. | Apply the verified LLDB capability to the actual SDK/test-worker reproduction with explicit debugger/timing limits; identify the trigger and any project correction supported by evidence. Another Mac remains an optional comparison. Then pass both unchanged complete collections under both real Git defaults and perform final acceptance review. |
 
 The observed delay is not attributed to Node, the SDK, macOS, security software
 or MemoBranch as a proven root cause. More passing subsets, changing minimum
