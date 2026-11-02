@@ -1,8 +1,9 @@
 import { AsyncResource } from 'node:async_hooks';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants, existsSync } from 'node:fs';
+import { access, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { AgentMemoryError, redactSecrets } from './errors.js';
 import { cancellationError, operationSignal, recordCommit, throwIfCancelled, withoutCancellation } from './operation.js';
 import type { Actor } from './types.js';
@@ -15,6 +16,8 @@ export interface GitRunOptions {
   actor?: Actor;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Preserve whitespace for exact object materialization; default text probes remain trimmed. */
+  rawOutput?: boolean;
 }
 
 export interface GitIntegrity {
@@ -65,6 +68,8 @@ export class GitStore {
     const actor = options.actor;
     const email = actor?.email ?? `${safeIdentity(actor?.id ?? 'system')}@agent-memory.local`;
     try {
+      // Discovery awaits filesystem reads; retain the command chosen at invocation.
+      args = [...args];
       const stdout = await executeGit(args, {
         cwd: this.root,
         env: {
@@ -78,7 +83,7 @@ export class GitStore {
           GIT_COMMITTER_EMAIL: email,
         },
       }, signal, timeoutMs);
-      return stdout.trim();
+      return options.rawOutput ? stdout : stdout.trim();
     } catch (error) {
       // Interrupted probes must not masquerade as absent refs or remotes.
       if (error instanceof AgentMemoryError) throw error;
@@ -501,15 +506,106 @@ function interruptedGit(error: unknown): error is AgentMemoryError {
 }
 
 /** Keep ownership of Git and its helper processes until they have stopped. */
-function executeGit(
+async function executeGit(
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv },
   signal: AbortSignal | undefined,
   timeoutMs: number,
 ): Promise<string> {
+  if (process.platform !== 'darwin' || options.env.PATH === undefined) {
+    return launchGit('git', args, options, signal, timeoutMs, timeoutMs);
+  }
+  options = { ...options, cwd: isAbsolute(options.cwd) ? options.cwd : `${process.cwd()}/${options.cwd}` };
+  const started = performance.now();
+  const code = ['fetch', 'push', 'remote', 'ls-remote'].includes(args[0] ?? '') ? 'REMOTE_TRANSPORT' : 'GIT_OPERATION_FAILED';
+  const timeoutError = () => new AgentMemoryError(code, `Git operation timed out after ${timeoutMs} milliseconds`, { timedOut: true, timeoutMs });
+  const notStarted = (error: unknown) => args[0] === 'push' && error instanceof AgentMemoryError
+    ? new AgentMemoryError(error.code, error.message, { ...error.safeDetails, pushNotStarted: true }) : error;
+  const remaining = () => {
+    if (signal?.aborted) throw notStarted(cancellationError());
+    const budget = timeoutMs - (performance.now() - started);
+    if (budget <= 0) throw notStarted(timeoutError());
+    return budget;
+  };
+  let executable: string;
+  try {
+    executable = await discoverGitExecutable(options, signal, timeoutMs, timeoutError);
+  } catch (error) {
+    throw notStarted(error);
+  }
+  try {
+    return await launchGit(executable, args, options, signal, remaining(), timeoutMs, started + timeoutMs);
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { gitNotStarted?: boolean };
+    if (executable === 'git' || failure.gitNotStarted !== true || !['ENOENT', 'ENOTDIR', 'EACCES'].includes(failure.code ?? '')) throw error;
+    // A missing interpreter or a file changed after discovery can invalidate
+    // our selection. Delegate search once, only after confirmed spawn failure.
+    return launchGit('git', args, options, signal, remaining(), timeoutMs, started + timeoutMs);
+  }
+}
+
+/** Avoid macOS's failed posix_spawn PATH probes without changing Git's PATH. */
+function discoverGitExecutable(
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  timeoutError: () => AgentMemoryError,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const finish = (result: { executable: string } | { error: unknown }) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if ('error' in result) reject(result.error); else resolve(result.executable);
+    };
+    const onAbort = AsyncResource.bind(() => finish({ error: cancellationError() }));
+    const timer = setTimeout(() => finish({ error: timeoutError() }), timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) { onAbort(); return; }
+    // Do not normalize a symlink followed by '..': traversal must match exec.
+    const cwd = isAbsolute(options.cwd) ? options.cwd : `${process.cwd()}/${options.cwd}`;
+    void (async () => {
+      for (const entry of options.env.PATH!.split(':')) {
+        if (finished) return;
+        let directory = cwd;
+        if (entry) directory = isAbsolute(entry) ? entry : `${cwd}/${entry}`;
+        const candidate = `${directory}/git`;
+        try {
+          const info = await stat(candidate);
+          if (finished) return;
+          if (!info.isFile()) continue;
+          await access(candidate, constants.X_OK);
+          if (finished) return;
+          finish({ executable: candidate });
+          return;
+        } catch (error) {
+          if (finished) return;
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+          // Preserve native permission and unusual filesystem-error semantics.
+          finish({ executable: 'git' });
+          return;
+        }
+      }
+      finish({ executable: 'git' });
+    })().catch((error: unknown) => finish({ error }));
+  });
+}
+
+function launchGit(
+  executable: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  configuredTimeoutMs: number,
+  deadline?: number,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancellationError()); return; }
-    const child = spawn('git', args, { ...options, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(executable, args, { ...options, argv0: 'git', detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const maxBuffer = 10 * 1024 * 1024;
@@ -556,7 +652,7 @@ function executeGit(
     };
     // Abort may be dispatched outside the invoking operation's async context.
     const onAbort = AsyncResource.bind(() => stop(cancellationError()));
-    const timeout = setTimeout(() => stop(new AgentMemoryError(code, `Git operation timed out after ${timeoutMs} milliseconds`, { timedOut: true, timeoutMs })), timeoutMs);
+    const timeout = setTimeout(() => stop(new AgentMemoryError(code, `Git operation timed out after ${configuredTimeoutMs} milliseconds`, { timedOut: true, timeoutMs: configuredTimeoutMs })), deadline === undefined ? timeoutMs : Math.max(0, deadline - performance.now()));
     const collect = (chunks: Buffer[], chunk: Buffer) => {
       outputBytes += chunk.length;
       if (outputBytes > maxBuffer) stop(new AgentMemoryError(code, 'Git operation exceeded the output limit'));
@@ -564,7 +660,10 @@ function executeGit(
     };
     child.stdout!.on('data', (chunk: Buffer) => collect(stdout, chunk));
     child.stderr!.on('data', (chunk: Buffer) => collect(stderr, chunk));
-    child.once('error', (error) => { failure ??= error; });
+    child.once('error', (error) => {
+      if (child.pid === undefined) Object.assign(error, { gitNotStarted: true });
+      failure ??= error;
+    });
     child.once('exit', (status) => { exited = true; exitCode = status; });
     child.once('close', () => { closed = true; finish(); });
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -572,7 +671,8 @@ function executeGit(
   });
 }
 
-async function terminateGit(child: ChildProcess): Promise<void> {
+/** @internal Shared owned-group cleanup for Git and trusted local processors. */
+export async function terminateGit(child: ChildProcess): Promise<void> {
   if (child.pid === undefined) return;
   if (process.platform === 'win32') {
     // taskkill traverses the Windows process tree, including SSH and credential

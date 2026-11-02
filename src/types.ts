@@ -73,10 +73,32 @@ export interface EvidenceMeta {
   scope: Scope;
   sensitivity: Sensitivity;
   sha256: string;
-  digestVersion?: 2;
+  digestVersion?: 2 | 3 | 4 | 5;
   legacySha256?: string;
   immutable: true;
+  /** Exact PDF bytes, never part of a model source/context payload. */
+  pdfOriginal?: PdfOriginal;
 }
+
+export interface PdfTextOriginal {
+  version: 1;
+  mediaType: 'application/pdf';
+  encoding: 'base64';
+  bytes: number;
+  sha256: string;
+  data: string;
+  pages: number;
+  parser: string;
+  emptyPages: number[];
+  extractionSha256: string;
+}
+
+/** Explicitly processed originals use a separate evidence identity domain. */
+export interface PdfProcessedOriginal extends Omit<PdfTextOriginal, 'version'> {
+  version: 2;
+  processing: import('./pdf-processing-schema.js').PdfPageProcessing;
+}
+export type PdfOriginal = PdfTextOriginal | PdfProcessedOriginal;
 
 export interface CandidateMeta {
   id: string;
@@ -115,6 +137,8 @@ export interface MemoryMeta {
   conditions: string[];
   tags: string[];
   expiresAt?: string;
+  validFrom?: string;
+  validUntil?: string;
   revision: number;
   supersedes?: string[];
   supersededBy?: string;
@@ -144,6 +168,8 @@ export interface SearchHit {
   semanticScore?: number;
   /** True only when this record actually participated in semantic scoring. */
   semanticApplied?: boolean;
+  validFrom?: string;
+  validUntil?: string;
 }
 
 export interface DoctorReport {

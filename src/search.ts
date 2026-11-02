@@ -2,15 +2,18 @@ import { existsSync } from 'node:fs';
 import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { join, posix, relative } from 'node:path';
 import { assertManagedDocument } from './document-schema.js';
+import { factEffectiveAt, factValidityFields } from './effective-time.js';
 import { isEncryptedEnvelope } from './encryption.js';
+import { AgentMemoryError } from './errors.js';
 import { isEmbeddingVector, type LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, titleFromBody } from './markdown.js';
-import { throwIfCancelled } from './operation.js';
+import { operationSignal, throwIfCancelled } from './operation.js';
 import { assertTenant, authorize, canAccess, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import type { MarkdownDocument, Scope, SearchHit, Sensitivity, VaultConfig } from './types.js';
-import { sha256, unique, writeText } from './utils.js';
+import { pendingTransactionCount } from './transaction.js';
+import { resolveInside, sha256, unique, withFileLock, writeText } from './utils.js';
 
-const INDEX_VERSION = 5 as const;
+const INDEX_VERSION = 6 as const;
 const EMBEDDING_CACHE_VERSION = 1 as const;
 
 export interface IndexedDocument {
@@ -25,6 +28,8 @@ export interface IndexedDocument {
   links: string[];
   status?: string;
   expiresAt?: string;
+  validFrom?: string;
+  validUntil?: string;
   contentHash: string;
   sourceSize: number;
   sourceMtimeMs: number;
@@ -96,6 +101,7 @@ export class PersistentSearchIndex {
     readonly config: VaultConfig,
     readonly llm?: LlmClient,
     readonly secureReader?: SecureDocumentReader,
+    private readonly readSnapshot?: <T>(permission: Permission, action: () => Promise<T>) => Promise<T>,
   ) {
     this.indexPath = join(root, '.amem', 'search-index.json');
     this.embeddingPath = join(root, '.amem', 'embeddings.json');
@@ -192,8 +198,6 @@ export class PersistentSearchIndex {
 
     const queryTerms = tokenize(query);
     if (queryTerms.length === 0) return { hits: [], strategy: 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
-    const documentFrequency = frequencies(documents, queryTerms);
-    const lexical = new Map(documents.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, documents.length)]));
     let semantic = new Map<string, number>();
     if (options.semantic && this.config.index.embeddingModel) {
       try {
@@ -205,10 +209,15 @@ export class PersistentSearchIndex {
       }
     }
 
+    // Provider waits can cross a fact/expiry boundary. Rank only what is current
+    // now, before consuming the caller's result slots or expanding links.
+    const currentDocuments = documents.filter(isActive);
+    const documentFrequency = frequencies(currentDocuments, queryTerms);
+    const lexical = new Map(currentDocuments.map((document) => [document.path, scoreDocument(document, queryTerms, documentFrequency, currentDocuments.length)]));
     const lexicalWeight = semantic.size > 0 ? this.config.index.lexicalWeight : 1;
     const semanticWeight = semantic.size > 0 ? this.config.index.semanticWeight : 0;
     const maximumLexical = Math.max(1, ...lexical.values());
-    const scored = documents
+    const scored = currentDocuments
       .map((document) => {
         const lexicalScore = (lexical.get(document.path) ?? 0) / maximumLexical;
         const semanticScore = semantic.get(document.path) ?? 0;
@@ -219,14 +228,14 @@ export class PersistentSearchIndex {
 
     const requestedLimit = options.limit ?? 8;
     const limit = Math.max(1, Math.min(requestedLimit, this.config.limits.maxResults));
-    const selected = scored.slice(0, limit);
-    const backlinkMap = buildBacklinks(documents);
+    const selected = [...scored];
+    const backlinkMap = buildBacklinks(currentDocuments);
     if (options.expandLinks !== false) {
       const selectedPaths = new Set(selected.map((entry) => entry.document.path));
       for (const entry of [...selected]) {
         for (const neighbor of unique([...entry.document.links, ...(backlinkMap.get(entry.document.path) ?? [])])) {
           if (selected.length >= limit || selectedPaths.has(neighbor)) continue;
-          const document = documents.find((candidate) => candidate.path === neighbor);
+          const document = currentDocuments.find((candidate) => candidate.path === neighbor);
           if (!document) continue;
           selected.push({ document, score: entry.score * 0.35, lexicalScore: 0, semanticScore: 0 });
           selectedPaths.add(neighbor);
@@ -234,9 +243,10 @@ export class PersistentSearchIndex {
       }
     }
 
-    const verified: Array<SearchHit | null> = await Promise.all(selected.slice(0, limit).map(async ({ document, score, lexicalScore, semanticScore }): Promise<SearchHit | null> => {
+    const verify = async ({ document, score, lexicalScore, semanticScore }: (typeof selected)[number]): Promise<SearchHit | null> => {
       throwIfCancelled();
       try {
+        if (!isActive(document)) return null;
         if (!this.secureReader) throw new Error('Canonical reader is unavailable');
         const canonical = await this.secureReader(document.path);
         const current = await stat(join(this.root, document.path));
@@ -246,7 +256,8 @@ export class PersistentSearchIndex {
         const sensitivity = sensitivityOf(meta);
         const status = typeof meta.status === 'string' ? meta.status : undefined;
         const expiresAt = typeof meta.expiresAt === 'string' ? meta.expiresAt : undefined;
-        if (!isActive({ ...document, scope, sensitivity, ...(status ? { status } : {}), ...(expiresAt ? { expiresAt } : {}) })) return null;
+        if (!isActive({ ...document, scope, sensitivity, ...(status ? { status } : {}), ...(expiresAt ? { expiresAt } : {}),
+          ...factValidityFields(meta) })) return null;
         if (!canAccess(principal, scope, sensitivity)) return null;
         const links = extractMarkdownLinks(canonical.body)
           .map((target) => resolveLink(document.path, target))
@@ -259,6 +270,7 @@ export class PersistentSearchIndex {
           scope,
           sensitivity,
           ...(status ? { status } : {}),
+          ...factValidityFields(meta),
           score: Number(score.toFixed(4)),
           lexicalScore: Number(lexicalScore.toFixed(4)),
           semanticScore: Number(semanticScore.toFixed(4)),
@@ -271,8 +283,16 @@ export class PersistentSearchIndex {
         throwIfCancelled();
         return null;
       }
-    }));
-    return { hits: verified.filter((hit): hit is SearchHit => hit !== null), strategy: semantic.size > 0 ? 'hybrid' : 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
+    };
+    const verified: SearchHit[] = [];
+    let cursor = 0;
+    while (verified.length < limit && cursor < selected.length) {
+      const batch = selected.slice(cursor, cursor + limit - verified.length);
+      cursor += batch.length;
+      const hits = await Promise.all(batch.map(verify));
+      verified.push(...hits.filter((hit): hit is SearchHit => hit !== null));
+    }
+    return { hits: verified, strategy: semantic.size > 0 ? 'hybrid' : 'lexical', semanticStatus, indexRebuilt: refreshed.rebuilt };
   }
 
   async health(): Promise<SearchIndexHealth> {
@@ -393,8 +413,41 @@ export class PersistentSearchIndex {
     }
     for (let offset = 0; offset < missing.length; offset += 32) {
       throwIfCancelled();
-      const batch = missing.slice(offset, offset + 32);
-      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel);
+      const batch = missing.slice(offset, offset + 32).filter(isActive);
+      if (!batch.length) continue;
+      const results = await this.llm.embed(batch.map(embeddingText), this.config.index.embeddingModel, async () => {
+        await this.embeddingSnapshot(permission, async () => {
+          for (const document of batch) {
+            throwIfCancelled();
+            const path = resolveInside(this.root, document.path);
+            let component = this.root;
+            const parts = document.path.split('/');
+            for (let index = 0; index < parts.length; index += 1) {
+              component = join(component, parts[index]!);
+              const entry = await lstat(component);
+              if (entry.isSymbolicLink() || (index === parts.length - 1 ? !entry.isFile() : !entry.isDirectory())) {
+                throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer a regular managed file');
+              }
+            }
+            // All embedding inputs are unencrypted canonical records. Reading
+            // plaintext directly preserves maintain-only reindex authorization;
+            // using the read-bound secureReader here would require extra grants.
+            const raw = await readFile(path, { encoding: 'utf8', signal: operationSignal() });
+            const parsed = parseMarkdown<Record<string, unknown>>(raw);
+            if (isEncryptedEnvelope(parsed.meta)) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer available');
+            const source = await stat(path);
+            const current = indexDocument(document.path, raw, sha256(raw), source.size, source.mtimeMs, statIdentity(source));
+            authorize(principal, permission, { scope: current.scope, sensitivity: current.sensitivity, tenantId: this.config.tenantId });
+            if (!isActive(current) || this.config.policy.requireEncryptionFor.includes(current.sensitivity)
+                || current.contentHash !== document.contentHash || current.sourceIdentity !== document.sourceIdentity) {
+              throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context changed or is no longer currently effective');
+            }
+          }
+          if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
+        });
+        // Releasing the file lock is asynchronous too; no I/O follows this check.
+        if (batch.some(document => !isActive(document))) throw new AgentMemoryError('VALIDATION_FAILED', 'Embedding context is no longer currently effective');
+      });
       if (results.length !== batch.length || results.some(vector => !isEmbeddingVector(vector)
           || vector.length !== results[0]?.length)) {
         throw new Error('Invalid embedding batch');
@@ -416,6 +469,17 @@ export class PersistentSearchIndex {
     await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: this.config.index.embeddingModel, vectors })}\n`);
   }
 
+  private async embeddingSnapshot<T>(permission: Permission, action: () => Promise<T>): Promise<T> {
+    if (this.readSnapshot) return this.readSnapshot(permission, action);
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      throwIfCancelled();
+      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+        throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before checking embedding context');
+      }
+      return action();
+    });
+  }
+
   private async semanticScores(query: string, documents: IndexedDocument[], excludedPaths: ReadonlySet<string>, principal: Principal): Promise<Map<string, number>> {
     const safeDocuments = documents.filter((document) =>
       !excludedPaths.has(document.path) && !this.config.policy.requireEncryptionFor.includes(document.sensitivity));
@@ -423,14 +487,15 @@ export class PersistentSearchIndex {
     const cache = await this.readEmbeddingCache();
     const [queryVector] = await this.llm!.embed([query], this.config.index.embeddingModel!);
     if (!isEmbeddingVector(queryVector)) throw new Error('Invalid query embedding');
-    if (safeDocuments.some(document => cache.vectors[document.contentHash]?.length !== queryVector.length)) {
+    const currentDocuments = safeDocuments.filter(isActive);
+    if (currentDocuments.some(document => cache.vectors[document.contentHash]?.length !== queryVector.length)) {
       // A provider can change dimensions behind the same model name. Refuse
       // mixed-space scoring now; rebuild the derived cache on the next call.
       await writeText(this.embeddingPath, `${JSON.stringify({ version: EMBEDDING_CACHE_VERSION, model: '', vectors: {} })}\n`);
       throw new Error('Query and document embedding dimensions differ');
     }
     return new Map(
-      safeDocuments
+      currentDocuments
         .map((document) => {
           const vector = cache.vectors[document.contentHash];
           return vector ? ([document.path, Math.max(0, cosine(queryVector, vector))] as const) : null;
@@ -504,6 +569,7 @@ function indexParts(relativePath: string, meta: Record<string, unknown>, body: s
     links,
     ...(typeof meta.status === 'string' ? { status: meta.status } : {}),
     ...(typeof meta.expiresAt === 'string' ? { expiresAt: meta.expiresAt } : {}),
+    ...factValidityFields(meta),
     contentHash,
     sourceSize,
     sourceMtimeMs,
@@ -651,7 +717,7 @@ function sensitivityOf(meta: Record<string, unknown>): Sensitivity {
 
 function isActive(document: IndexedDocument): boolean {
   if (['revoked', 'superseded', 'rejected', 'conflicted', 'promoted'].includes(document.status ?? '')) return false;
-  return !document.expiresAt || Date.parse(document.expiresAt) > Date.now();
+  return (!document.expiresAt || Date.parse(document.expiresAt) > Date.now()) && factEffectiveAt(document);
 }
 
 function selectedArea(path: string, options: SearchOptions): boolean {

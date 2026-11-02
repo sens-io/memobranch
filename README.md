@@ -102,6 +102,42 @@ flowchart LR
 
 > **Development branch preview:** [Easier setup, approved-context recall, Wiki before/after review and correction](docs/memory-adoption.md), plus [37 reproducible evaluation cases](evaluation/README.md), are available from the current source branch. These additions have not been published to npm yet. Existing npm installation instructions below still refer to the released package.
 
+> **Next source increment:** [Token-budgeted whole-record context, preview-first directory imports and authorized source-version timelines](docs/knowledge-workflows.md). Imports save evidence only; time filters refer to when a source was recorded, not when a fact became valid. See the [roadmap](docs/remaining-roadmap.md) for sharing, separate knowledge integration and optional OCR status. These additions are not yet published to npm.
+
+> **Public document import:** [Explicit public HTTPS preview/apply](docs/public-web-import.md) adds address/redirect checks, byte/time limits, source-change refusal and retryable evidence capture. It does not crawl websites, execute HTML or approve Wiki changes. Available from development source only.
+
+> **Durable Wiki jobs:** [Submit evidence IDs and explicitly compile from the Web console or a separate local worker](docs/wiki-jobs.md), with encrypted proposals, progress, cancellation and explicit crash retry. Review/apply stays separate and Web approval binds the displayed proof. Development source only; requires the existing vault master key, including public-input jobs.
+
+> **Effective-time views (development source):** [Explicitly reviewed memory intervals and dated retained-record queries](docs/effective-time.md) distinguish fact time from record time. Current context excludes not-yet-effective/ended memories; dated reads preserve current permissions and withdrawal. Not historical Wiki reconstruction or a published npm feature.
+
+> **Web time management (development source):** [Inspect interval warnings, review UTC endpoints and query retained records by date](docs/web-effective-time.md) in the console. Saves require the displayed revision and explicit confirmation; unknown time is not inferred. Not yet published to npm.
+
+> **Local PDF imports (development source):** [Preview and import text-layer PDFs with exact original bytes and page provenance](docs/pdf-import.md). Bounded, cancellable parsing; evidence only, not OCR, visual reconstruction or automatic knowledge approval. Not yet published to npm.
+
+> **Optional selected PDF pages (development source):** [Local rendering/OCR, immutable original/page preservation and authorized local reads](docs/local-pdf-processing.md). Import/save/read passed [local verification](docs/git-executable-lookup-verification-2026-11-02.md), including the complete macOS Node 20 checks. Recognized text still requires review. Windows platform verification is skipped by request. Not yet published to npm.
+
+> **Committed Wiki views (development source):** [Read selected pages and their dependencies at a full local commit](docs/wiki-revision-views.md), while enforcing current access, withdrawal and key availability. Local read-only views, not cross-account sharing or historical truth. Not yet published to npm.
+
+> **Manual Wiki merge review (development source):** [Combine a retained revision with the current page through a signed, explicit review](docs/manual-wiki-merge.md). Keeps sources, conditions, conflicts and stricter access limits; no model call, automatic approval or Git branch merge. Not yet published to npm.
+
+> **Web merge workbench (development source):** [Compare history, edit a draft and approve separately in the local console](docs/web-manual-merge.md). Draft edits invalidate old approvals; uncertain saves can explicitly retry the original signed plan. Not yet published to npm.
+
+> **Agent revision/merge tools (development source):** [Use the same bounded reader and manual merge preparation through MCP or DeepSeek Harness](docs/agent-manual-merge.md). Host-owned authority, explicit confidential selection and separate signed-plan approval remain required. No automatic merge; not yet published to npm.
+
+> **Recorded-time Wiki views (development source):** [Select a retained local version by explicit date](docs/dated-wiki-views.md), using first-parent Git committer time and current access checks. Returns the actual hash and complete content; not as-known-at truth or a historical model answer. Not yet published to npm.
+
+> **Web date selection (development source):** [Choose a timestamp in the merge workbench, inspect its resolved commit, then review separately](docs/web-dated-wiki-views.md). Preparation stays pinned to that hash; switching mode/date cancels old reads and invalidates approval without silently discarding your draft. Not yet published to npm.
+
+> **Explicit knowledge availability (development source):** [Record selected committed knowledge as immutable observations, then reconstruct only observed content at a time](docs/knowledge-availability.md). Missing or conflicting history stays unknown; current authority and source keys still apply. Library, CLI, agent and Web adapters passed local verification. Not yet published to npm.
+
+> **Pinned shared Wiki (development source):** [Read an explicitly configured local/Git source at a fixed commit](docs/pinned-shared-wiki.md), under current reader grants and source/key/lifecycle checks. Library, CLI, MCP/Harness and Web passed local verification. No cloud accounts, import/merge or offline plaintext revocation. Not yet published to npm.
+
+> **Explicit Wiki copies and human integration (development source):** [Separate copy and Wiki approval](docs/shared-wiki-import.md) preserve compiled provenance, local evidence and inherited restrictions. Library, CLI/MCP/Harness/Web adapters and combined runtime checks passed [local verification and independent review](docs/git-executable-lookup-verification-2026-11-02.md). Not yet published to npm.
+
+> **Cloud and remote Git sharing (development source):** [Run a self-hosted read service or refresh a private Git cache before reading a fixed version](docs/cloud-sharing.md). Admin commands generate private account templates, check existing grants and start the foreground service. Current access and lifecycle checks remain required. [Local verification and independent review](docs/cloud-host-verification-2026-10-26.md) passed. Not yet published to npm.
+
+> **Validated experience (development source):** [Record immutable execution traces, test a proposed procedure on held-out tasks, then explicitly export skill files](docs/validated-experience.md). Library, CLI, MCP/Harness and local Web management; trusted host code evaluates actual behavior, not prefilled passing results. The default Web host has no evaluator. Selected passing checks are not proof of general effectiveness; no automatic installation or execution. Not yet published to npm.
+
 ### Requirements
 
 - Node.js 20 or later
@@ -402,14 +438,15 @@ Maintainers: [one-command npm release and recovery guide](docs/releasing.md).
 
 - **Memory:** filter and paginate records, inspect provenance, capture evidence, propose, approve/reject and revoke memories.
 - **LLM Wiki:** browse pages, prepare ingestion plans, run read-only queries, explicitly prepare answer-filing plans, run structural/semantic lint and separately approve plans. Edit purpose/rules with revision checks.
+- **Compilation jobs (development source, not published npm):** enqueue existing evidence, explicitly execute once, monitor persisted stages, cancel/retry/remove and compare/approve the exact displayed plan. Leaving the page stops polling, not compilation; normal server shutdown cancels its owned attempt.
 - **Configuration:** edit non-secret operational settings with administrator authorization and stale-write protection. Identity, tenant, credentials, encryption policy and remote URLs stay outside the browser.
 - **Operations:** inspect health and history, rebuild the lexical index, recover transactions and explicitly synchronize an already-configured Git remote. Web mode does not start the background maintenance scheduler.
 
 The Chinese-language UI is bundled locally with no CDN dependencies. It binds only to `127.0.0.1`, requires a token plus exact Host/Origin checks, and inherits the launching process's `AMEM_*` identity and access restrictions. Keep the token private; it is held only in page memory and rotates on restart. Desktop/browser refresh requires entering it again. Do not expose this console through a public proxy. Irreversible key erasure remains CLI-only in the Web workflow.
 
-Web requests are capped at 1 MiB, except explicit Wiki plan approval and answer filing (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
+Web requests are capped at 1 MiB, except explicit Wiki plan approval, answer filing and host-supplied experience validation (16 MiB). Generated previews are checked against their write-back budget before being returned; oversized workflows must be split. Settings use a nested field allowlist, so unrecognized configuration extensions are neither exposed nor removed by the console.
 
-Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and planning hold the cross-process vault lock so active writes settle before their results become visible. Lock waits are bounded and cancellable; long planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
+Capture and proposal text follow the configured core character limit within that HTTP byte budget. Management reads and synchronous planning hold the cross-process vault lock so active writes settle before their results become visible. Durable jobs instead release it during model calls and validate again before storing results. Lock waits are bounded and cancellable; long synchronous planning requests may temporarily block writers. Pending recovery blocks content reads, while session and health diagnostics remain available for recovery.
 
 ## 🔌 MCP Integration
 

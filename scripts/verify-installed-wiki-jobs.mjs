@@ -1,0 +1,109 @@
+// Installed consumer only. Model responses are fixtures over real loopback HTTP.
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { getEventListeners } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { MemoryVault, LlmClient, localAdminPrincipal, startWebServer } from 'memobranch';
+
+let calls = 0, hold = false, reached;
+const server = createServer(async (request, response) => {
+  const chunks = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  const { operation, input } = JSON.parse(JSON.parse(Buffer.concat(chunks).toString()).messages.at(-1).content);
+  calls++;
+  if (hold) { reached(); return; }
+  const result = operation === 'navigate' ? { keys: [] } : { pages: input.sources.map(source => ({
+    key: `source:${source.id}`, pageType: 'source', title: 'Source', summary: 'Source summary', body: source.body,
+    evidenceIds: [source.id], links: [], status: 'active', conditions: [], uncertainty: [],
+  })) };
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }));
+});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+const masterKey = '91'.repeat(32);
+const llm = new LlmClient({ baseUrl, apiKey: 'fixture', model: 'wiki-job-fixture' });
+const vault = new MemoryVault(join(process.cwd(), 'wiki-job-vault'), { masterKey, llm });
+const exec = promisify(execFile), cli = join(process.cwd(), 'node_modules/memobranch/dist/cli.js');
+const env = { ...process.env, AMEM_MASTER_KEY: masterKey, AMEM_LLM_BASE_URL: baseUrl, AMEM_LLM_API_KEY: 'fixture', AMEM_LLM_MODEL: llm.model };
+const invoke = async (...args) => JSON.parse((await exec(process.execPath, [cli, 'wiki', 'jobs', ...args, '--root', vault.root], { env, timeout: 20000 })).stdout);
+try {
+  await vault.initialize('installed Wiki jobs');
+  const source = await vault.capture({ content: 'INSTALLED_JOB_SOURCE_CANARY', extract: false, scope: 'public', sensitivity: 'public' });
+  const head = await vault.git.run(['rev-parse', 'HEAD']);
+  const job = await invoke('enqueue', source.evidenceId);
+  assert.equal((await invoke('run', job.id)).status, 'ready');
+  assert.equal((await invoke('show', job.id)).attempts, 1);
+  assert.equal((await invoke('list')).length, 1);
+  assert.equal((await invoke('preview', job.id)).pages.length, 1);
+  const plan = await vault.wikiJobPlan(job.id);
+  assert.ok(plan.pages[0].body.includes('INSTALLED_JOB_SOURCE_CANARY'));
+  assert.equal(await vault.git.run(['rev-parse', 'HEAD']), head);
+  assert.equal((await vault.wikiCatalog()).length, 0);
+  const raw = await readFile(join(vault.root, '.amem/wiki-jobs', `${job.id}.json`), 'utf8');
+  assert.ok(!raw.includes('INSTALLED_JOB_SOURCE_CANARY') && !raw.includes(source.evidenceId));
+  const tenantId = (await vault.config()).tenantId;
+  await assert.rejects(exec(process.execPath, [cli, 'wiki', 'jobs', 'apply', job.id, '--root', vault.root], {
+    env: { ...env, AMEM_TENANT_ID: tenantId, AMEM_PERMISSIONS: 'read,write' }, timeout: 20000,
+  }), error => /AUTHORIZATION_DENIED/.test(error.stderr));
+  assert.ok((await invoke('apply', job.id)).commit);
+  const duplicate = await vault.wikiEnqueue({ evidenceIds: [source.evidenceId] });
+  const before = calls;
+  assert.equal((await vault.wikiRunJob({ id: duplicate.id })).status, 'duplicate'); assert.equal(calls, before);
+  const next = await vault.capture({ content: 'Second installed job source.', extract: false, scope: 'public', sensitivity: 'public' });
+  const cancelled = await vault.wikiEnqueue({ evidenceIds: [next.evidenceId] });
+  hold = true; const started = new Promise(resolve => { reached = resolve; });
+  const stop = new AbortController(), pending = vault.wikiRunJob({ id: cancelled.id, signal: stop.signal });
+  await started; stop.abort();
+  assert.equal((await pending).status, 'cancelled');
+  assert.equal(getEventListeners(stop.signal, 'abort').length, 0);
+  hold = false;
+  await invoke('retry', cancelled.id);
+  assert.equal((await invoke('work', '--once')).status, 'ready');
+  await invoke('remove', cancelled.id);
+  assert.equal(await vault.encryption.hasKey(cancelled.id), false);
+  const confidential = await vault.capture({ content: 'Installed secret page.', extract: false, scope: 'project', sensitivity: 'secret' });
+  await vault.wikiIngest({ evidenceIds: [confidential.evidenceId], apply: true });
+  const secretPage = (await vault.wikiCatalog()).find(page => page.sensitivity === 'secret');
+  assert.ok(secretPage);
+  const scoped = new MemoryVault(vault.root, { masterKey, llm, principal: { ...localAdminPrincipal(), tenantId,
+    permissions: ['read', 'write'], scopes: ['public'], maxSensitivity: 'public' } });
+  const narrow = await scoped.wikiEnqueue({ evidenceIds: [next.evidenceId] });
+  assert.equal((await vault.wikiRunJob({ id: narrow.id })).status, 'ready');
+  assert.equal((await vault.wikiPreviewJob(narrow.id)).pages.length, 1);
+  assert.ok((await vault.wikiApplyJob(narrow.id)).commit);
+  await vault.erase(secretPage.id, 'installed job cache invalidation');
+  assert.equal((await vault.wikiJob(job.id)).error.reason, 'context-erased');
+  await assert.rejects(vault.wikiJobPlan(job.id), { code: 'VALIDATION_FAILED' });
+  assert.ok(calls >= 5, 'must reach the actual HTTP fixture');
+  const web = await startWebServer(vault.root, { masterKey, llm });
+  try {
+    const request = async (operation, data = {}) => {
+      const response = await fetch(web.url + '/api/' + operation, { method: 'POST', headers: {
+        Origin: web.url, Authorization: 'Bearer ' + web.token, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(data) });
+      const body = await response.json(); return { status: response.status, ...body };
+    };
+    const source = await vault.capture({ content: 'Installed Web task workflow.', extract: false, scope: 'public', sensitivity: 'public' });
+    const enqueued = await request('jobs-enqueue', { evidenceIds: [source.evidenceId], confirm: true });
+    assert.equal(enqueued.status, 200); const id = enqueued.result.id;
+    assert.equal((await request('jobs-run', { id, confirm: true })).result.accepted, true);
+    const deadline = Date.now() + 20000;
+    while ((await request('jobs-show', { id })).result.status !== 'ready') {
+      if (Date.now() > deadline) throw new Error('Installed Web job did not settle');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok((await request('jobs-list')).result.some(job => job.id === id));
+    const review = await request('jobs-review', { id });
+    assert.deepEqual(review.result, await vault.wikiReviewJob(id));
+    assert.equal((await request('jobs-apply', { id, proof: '0'.repeat(64), confirm: true })).error.code, 'VALIDATION_FAILED');
+    assert.ok((await request('jobs-apply', { id, proof: review.result.plan.proof, confirm: true })).result.commit);
+    assert.equal((await request('jobs-remove', { id, confirm: true })).result.removed, true);
+    assert.equal(await vault.encryption.hasKey(id), false);
+    assert.match(await (await fetch(web.url + '/app.js')).text(), /jobs-review/);
+    console.log('Installed package: authenticated Web Wiki job enqueue/run/status/review/proof-bound approval/removal passed.');
+  } finally { await web.stop(); }
+  console.log('Installed package: durable encrypted Wiki jobs, public types/API/CLI, explicit approval, owned cancellation/retry, duplicate avoidance and erasure invalidation passed (fixture model, no external provider quality claim).');
+} finally { await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }); }

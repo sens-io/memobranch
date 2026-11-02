@@ -1,5 +1,7 @@
 import type { Scope, Sensitivity } from './types.js';
 import type { ReviewDiff } from './review-diff.js';
+import type { WikiMergeOrigin } from './wiki-merge.js';
+import type { WikiIntegrationOrigin } from './wiki-integration.js';
 
 export interface WikiReviewVersion {
   revision: number;
@@ -89,12 +91,13 @@ export interface WikiReceiptMeta {
   planHash: string;
   sourceIds: string[];
   pageKeys: string[];
+  operation?: 'integrate';
 }
 
 export interface WikiPlan {
   version: 1;
   vaultId: string;
-  kind: 'compile' | 'file' | 'repair';
+  kind: 'compile' | 'file' | 'repair' | 'merge' | 'integrate';
   sourceIds: string[];
   snapshot: Record<string, string>;
   configHash: string;
@@ -110,6 +113,8 @@ export interface WikiPlan {
   receiptId?: string | undefined;
   proof: string;
   query?: { key: string; hash: string; generation: WikiGeneration } | undefined;
+  merge?: WikiMergeOrigin | undefined;
+  integration?: WikiIntegrationOrigin | undefined;
 }
 
 export interface WikiGeneration {

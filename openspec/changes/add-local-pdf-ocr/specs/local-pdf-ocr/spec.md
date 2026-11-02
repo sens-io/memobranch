@@ -1,0 +1,83 @@
+## ADDED Requirements
+
+### Requirement: Local page processing must be explicitly selected
+The system SHALL keep existing text-only PDF behavior unchanged by default.
+Rendering and OCR SHALL require explicit selected page numbers and host-provisioned
+local processors, without request-selected commands or network/model access.
+
+#### Scenario: A scanned page is selected for OCR
+- **WHEN** an operator explicitly selects a scanned page and an installed permitted language
+- **THEN** local rendering and OCR produce a reviewable derived extraction with exact page and processor provenance
+- **AND** the original PDF is retained byte-for-byte and capture does not approve Wiki knowledge
+
+#### Scenario: A dependency or language is unavailable
+- **WHEN** rendering/OCR is selected but its configured processor or language data is missing or invalid
+- **THEN** processing refuses with an honest dependency error and performs no installation, download or partial evidence capture
+- **AND** the existing unselected text-only workflow remains available
+
+### Requirement: Originals and derived page content must remain distinguishable
+The system SHALL bind exact original bytes, selected page image bytes, recognized
+text, processor/config/language-data identities and extraction coverage in immutable
+evidence. Existing classification, encryption, authority and transaction checks
+SHALL cover the complete record, including images and hidden original content.
+
+#### Scenario: A result or processor changes before capture
+- **WHEN** original bytes, selected page output, processor binary, configuration or language data changes after preview
+- **THEN** application refuses the old preview without accepting a changed result or modifying existing evidence
+
+#### Scenario: The selected extraction is incomplete
+- **WHEN** only some pages are processed or OCR misses text, ordering, diagrams or tables
+- **THEN** the result identifies exact selected/unprocessed/empty pages and labels recognized text as unverified extraction
+- **AND** no claim of complete visual understanding or verified factual correctness is added
+
+#### Scenario: An older program opens processed evidence
+- **WHEN** an older reader does not support the new processed-PDF evidence format
+- **THEN** it rejects the format rather than treating derived OCR as the old text-only format
+- **AND** existing ordinary and text-only PDF evidence is not silently migrated
+
+### Requirement: Owned processing must stop within explicit limits
+The system SHALL bound source bytes, pages, selected pages, output dimensions,
+decoded pixel counts, image bytes, recognized characters, process output and
+execution time. Cancellation and failures SHALL stop and await owned processors,
+clean owned temporary files and leave source/canonical data unchanged before
+transaction readiness. Limits SHALL distinguish output/work limits from any
+unavailable hard operating-system memory guarantee.
+
+#### Scenario: Actual processing is cancelled or exceeds limits
+- **WHEN** a real renderer/OCR process blocks, emits excessive output or exceeds a declared limit
+- **THEN** owned processing is terminated and awaited, complete results are refused rather than truncated, and no partial evidence is captured
+- **AND** another operation's process and files remain intact
+
+#### Scenario: Cleanup follows a safely committed capture
+- **WHEN** cancellation occurs after the existing safe commit boundary
+- **THEN** durable work is settled and its actual commit is reported under existing capture/recovery rules
+- **AND** exact retry and authorized original/page retrieval preserve immutable bytes
+
+#### Scenario: A Windows processor leader exits before its descendants
+- **WHEN** selected processing uses an operator-prebuilt Windows helper and the native leader exits with descendants still running
+- **THEN** ownership is established at process creation and all processes in the owned job are stopped and awaited before output is accepted
+- **AND** cleanup uses a random job identity rather than a reused processor PID; unconfirmed cleanup refuses the result and preserves private work files
+
+#### Scenario: The selected Windows host is unavailable or the directory is not private
+- **WHEN** Windows selected processing has no compatible configured helper or its work directory fails the owner and ACL checks
+- **THEN** processing refuses before staging source bytes, without installing a helper, changing ACLs or using an unmanaged process fallback
+- **AND** the unselected text-layer PDF workflow remains available
+
+### Requirement: Local processing must preserve adapter and disclosure boundaries
+The system SHALL preserve the existing local-operator and server disclosure boundaries.
+Local library/CLI use MAY accept operator-selected paths; MCP/Harness/Web requests
+SHALL NOT gain arbitrary filesystem readers, executable choices, credentials,
+grant editing or automatic model calls through this capability. Public/Agent
+DTOs and all model inputs SHALL always omit encoded original and page image blobs.
+A separately authorized bounded local library/CLI media read MAY return verified
+bytes to its operator; it SHALL NOT add a model-facing or remote media endpoint.
+
+#### Scenario: A server caller attempts a local file or executable override
+- **WHEN** a request supplies a local source path, processor path, arbitrary command, output path or model URL through a server tool
+- **THEN** the unsupported fields are rejected before local file access or process execution
+- **AND** normal authorized evidence inspection retains existing redaction and size limits
+
+#### Scenario: Local media inspection precedes Wiki ingestion
+- **WHEN** an authorized local operator reads retained original/page bytes and later prepares Wiki knowledge from the evidence
+- **THEN** the local media read retains its own authority and byte limits
+- **AND** the subsequent model input and Agent DTOs still omit all original and page image encodings

@@ -1,19 +1,25 @@
 import { existsSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { basename, join, posix, relative, resolve } from 'node:path';
+import { z } from 'zod';
 import { OperationsTelemetry } from './audit.js';
+import { packContext, type ContextBlock, type ContextBudgetOptions, type ContextBudgetReport } from './context-budget.js';
 import { defaultVaultConfig, migrateVaultConfig, readVaultConfig } from './config.js';
 import { assertManagedDocument } from './document-schema.js';
 import { EncryptionManager, isEncryptedEnvelope, type EncryptedEnvelopeMeta } from './encryption.js';
 import { AgentMemoryError } from './errors.js';
-import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion } from './evidence.js';
+import { asEvidenceDocument, evidenceDigest, evidenceDigestVersion, pdfEvidenceDigest, processedPdfEvidenceDigest, wikiImportEvidenceDigest } from './evidence.js';
+import { assertPdfEvidence } from './pdf-evidence.js';
+import { assertFactValidity, effectiveTimestamp, factEffectiveAt, factValidityConditions, factValidityFields, type MemoriesAtOptions, type MemoryValidityUpdate } from './effective-time.js';
 import { GitStore, validateRemote, type RemoteStatus } from './git-store.js';
 import { LlmClient } from './llm.js';
 import { extractMarkdownLinks, parseMarkdown, serializeMarkdown } from './markdown.js';
-import { recordCommit, throwIfCancelled, withoutCancellation } from './operation.js';
+import { cancellationError, combineSignals, operationSignal, recordCommit, throwIfCancelled, withOperation, withoutCancellation } from './operation.js';
 import { assertTenant, authorize, localAdminPrincipal, type Permission, type Principal } from './policy.js';
 import { PersistentSearchIndex, type ReindexResult, type SearchOptions, type SearchResult } from './search.js';
 import { publicSettings, settingsRevision, settingsSchema } from './settings.js';
+import { sourceTimeline, type SourceTimelineOptions } from './source-timeline.js';
 import { pendingTransactionCount, recoverTransactions, type RecoveryResult, VaultTransaction } from './transaction.js';
 import type {
   Actor,
@@ -23,6 +29,7 @@ import type {
   MarkdownDocument,
   MemoryMeta,
   ProposedMemory,
+  PdfOriginal,
   Scope,
   SearchHit,
   Sensitivity,
@@ -30,9 +37,18 @@ import type {
 } from './types.js';
 import { scopes, sensitivities } from './types.js';
 import { nowIso, resolveInside, sha256, shortId, slugify, unique, withFileLock, writeText } from './utils.js';
-import { WikiEngine, renderPublicWikiCatalog } from './wiki.js';
-import { WikiProof } from './wiki-proof.js';
+import { WikiJobs, invalidateWikiJobPlans, type WikiJobCeiling, type WikiJobInput, type WikiJobRunOptions } from './wiki-jobs.js';
+import { defaultWikiInstructions, defaultWikiPurpose, WikiEngine, renderPublicWikiCatalog } from './wiki.js';
+import { stableWikiJson, WikiProof } from './wiki-proof.js';
+import { ExperienceEngine, type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite, type ExperienceRunner, type ExperienceSelection } from './experience.js';
+import { AvailabilityEngine, type AvailabilityObserveOptions, type AvailabilityAtOptions, type AvailabilitySnapshot } from './knowledge-availability.js';
 import type { WikiPageMeta } from './wiki-types.js';
+import { assertSnapshotPath, snapshotOptions, snapshotReader, type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiSnapshotSupport } from './wiki-snapshot.js';
+import { builtinWikiRuleId, wikiPlanSchema } from './wiki-schema.js';
+import { assertMergeTime, mergeOptionsSchema, type WikiMergeOptions } from './wiki-merge.js';
+import { assertWikiIntegrationTime, wikiIntegrationOptionsSchema, type WikiIntegrationOptions } from './wiki-integration.js';
+import { reviewDiff } from './review-diff.js';
+import { assertWikiImportTime, isWikiImportUri, readWikiImportArtifact, wikiImportRestrictions } from './wiki-import-artifact.js';
 
 export interface MemoryVaultOptions {
   llm?: LlmClient;
@@ -47,6 +63,7 @@ export interface CaptureOptions {
   scope?: Scope;
   sensitivity?: Sensitivity;
   extract?: boolean;
+  pdfOriginal?: PdfOriginal;
 }
 
 export interface CaptureResult {
@@ -68,8 +85,9 @@ export interface ConsolidationResult {
 export interface RecallResult {
   text: string;
   memories: SearchHit[];
-  wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[] }>;
+  wikiPages: Array<{ key: string; id: string; path: string; revision: number; body: string; conditions: string[]; uncertainty: string[]; evidence: string[]; validFrom?: string; validUntil?: string }>;
   truncated: boolean;
+  budget?: ContextBudgetReport;
 }
 
 interface ErasureIntent {
@@ -94,12 +112,14 @@ export class MemoryVault {
   private activeTransaction: VaultTransaction | null = null;
   private activePermission: Permission | null = null;
   private cachedSearchIndex: { signature: string; value: PersistentSearchIndex } | null = null;
+  private readonly readSnapshots = new AsyncLocalStorage<{ active: boolean }>();
 
-  private wikiEngine(): WikiEngine {
+  private wikiEngine(readSnapshot = <T>(permission: Permission, action: () => Promise<T>) => this.settledRead(action, permission)): WikiEngine {
     return new WikiEngine({
       principal: this.principal,
       llm: this.llm,
       config: () => this.config(),
+      readSnapshot,
       read: (directory, permission, selection) => this.readDirectory<Record<string, unknown>>(directory, permission, selection),
       scan: (directory, permission) => this.scanDirectory<Record<string, unknown>>(directory, permission),
       catalogMatches: () => this.wikiCatalogMatches(),
@@ -111,17 +131,253 @@ export class MemoryVault {
         // Opaque identities only: this globally visible journal must not expose logical keys.
         await this.appendManaged('log.md', `\n<!-- wiki-event ${JSON.stringify({ version: 1, at: nowIso(), operation, actor: safeLogToken(this.principal.id), pageIds, parentCommit })} -->\n`);
       },
-      mutate: (permission, operation, action) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action),
+      mutate: (permission, operation, action, validateBeforeCommit, noCommitIf) => this.withMutation(permission, this.principal, operation, `wiki: ${operation}`, action,
+        undefined, { ...(validateBeforeCommit ? { validateBeforeCommit } : {}), ...(noCommitIf ? { noCommitIf } : {}) }),
     });
   }
 
   async wikiCatalog() { return this.wikiEngine().catalog(); }
+  async wikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<WikiSnapshot> {
+    const result = await this.readWikiSnapshot(options); result.validate(); return result.snapshot;
+  }
+
+  /** @internal Adapters with further asynchronous checks must validate again immediately before returning. */
+  async wikiSnapshotWithValidation(options: WikiSnapshotOptions | WikiDatedSnapshotOptions) {
+    const result = await this.readWikiSnapshot(options); result.validate();
+    return { snapshot: result.snapshot, validate: result.validate, support: result.support };
+  }
+
+  private async readWikiSnapshot(options: WikiSnapshotOptions | WikiDatedSnapshotOptions): Promise<AvailabilitySnapshot & { support: WikiSnapshotSupport }> {
+    authorize(this.principal, 'read');
+    const input = snapshotOptions(options);
+    let validateTime = () => {};
+    let documentHashes: Array<{ path: string; hash: string }> = [];
+    let builtinRulesHash: string | null = null;
+    let support: WikiSnapshotSupport | undefined;
+    const action = () => this.settledRead<WikiSnapshot>(async () => {
+      const config = await this.config();
+      const erasures = join(this.root, '.amem', 'erasures');
+      if (existsSync(erasures)) {
+        const state = await lstat(erasures);
+        if (!state.isDirectory() || state.isSymbolicLink() || (await readdir(erasures)).some(name => name.endsWith('.json'))) {
+          throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending erasure before reading a Wiki snapshot');
+        }
+      }
+      const reader = await snapshotReader(this.git, input.at === undefined ? input.commit : { at: input.at }, config);
+      const selection = { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true };
+      const available = (await this.wikiEngine().referencePages(selection)).filter(page => page.meta.type !== 'memory' || factEffectiveAt(page.meta));
+      const keyOf = (page: MarkdownDocument<MemoryMeta | WikiPageMeta>) => page.meta.type === 'memory' ? `legacy:${page.meta.id}` : page.meta.key;
+      const current = new Map(available.map(page => [keyOf(page), page]));
+      const documents = new Map<string, MarkdownDocument<Record<string, unknown>>>();
+      const unavailable = () => new AgentMemoryError('NOT_FOUND', 'Wiki snapshot or a required dependency is unavailable');
+      const read = async (path: string) => {
+        if (documents.has(path)) return documents.get(path)!;
+        assertSnapshotPath(path);
+        // Authorize the current envelope before reading/decrypting its old blob.
+        const projection = parseMarkdown<Record<string, unknown>>(await readFile(resolveInside(this.root, path), 'utf8'));
+        authorize(this.principal, 'read', { scope: scopeOf(projection.meta), sensitivity: sensitivityOf(projection.meta), tenantId: config.tenantId });
+        if (projection.meta.sensitivity === 'sensitive' && !selection.includeSensitive || projection.meta.sensitivity === 'secret' && !selection.includeSecret) throw unavailable();
+        const live = await this.readDocument<Record<string, unknown>>(path);
+        const parsed = parseMarkdown<Record<string, unknown>>(await reader.read(path));
+        authorize(this.principal, 'read', { scope: scopeOf(parsed.meta), sensitivity: sensitivityOf(parsed.meta), tenantId: config.tenantId });
+        for (const meta of [live.meta, parsed.meta]) {
+          if (meta.sensitivity === 'sensitive' && input.includeSensitive !== true || meta.sensitivity === 'secret' && input.includeSecret !== true) throw unavailable();
+        }
+        const old = await this.materializeDocument<Record<string, unknown>>(path, parsed, { config });
+        authorize(this.principal, 'read', { scope: scopeOf(old.meta), sensitivity: sensitivityOf(old.meta), tenantId: config.tenantId });
+        if (old.meta.id !== live.meta.id || old.meta.type !== live.meta.type) throw unavailable();
+        if (old.meta.type === 'evidence' && (old.meta.sha256 !== live.meta.sha256 || old.body !== live.body)) throw unavailable();
+        documents.set(path, old);
+        return old;
+      };
+      const pending = [...input.pageKeys], visited = new Set<string>();
+      while (pending.length) {
+        throwIfCancelled();
+        const key = pending.shift()!;
+        if (visited.has(key)) continue;
+        if (visited.size >= 50) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Wiki snapshot exceeds 50 dependent pages');
+        visited.add(key);
+        const live = current.get(key);
+        if (!live) throw unavailable();
+        const page = await read(live.path);
+        if (keyOf(page as unknown as MarkdownDocument<MemoryMeta | WikiPageMeta>) !== key) throw unavailable();
+        const meta = page.meta as unknown as MemoryMeta | WikiPageMeta;
+        if (meta.type === 'memory' && !factEffectiveAt(meta)) throw unavailable();
+        for (const path of meta.evidence) await read(path);
+        if (meta.type === 'wiki-page') {
+          pending.push(...meta.links, ...Object.keys(meta.dependencies));
+          for (const id of Object.keys(meta.rules)) if (id !== builtinWikiRuleId) await read(`wiki/.meta/${id}.md`);
+        }
+      }
+      const forbidden = async (): Promise<never> => { throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Wiki revision views are read-only'); };
+      const historic = new WikiEngine({ principal: this.principal, llm: this.llm, config: async () => config,
+        readSnapshot: (_permission, action) => action(),
+        read: async directory => [...documents.values()].filter(document => document.path.startsWith(`${directory}/`)),
+        scan: forbidden, catalogMatches: async () => true, sign: forbidden, verify: forbidden, write: forbidden, log: forbidden, mutate: forbidden });
+      const pages = await historic.referencePages(selection);
+      if (pages.length !== visited.size || pages.some(page => !visited.has(keyOf(page)))) throw unavailable();
+      await reader.finish();
+      const checkedPages = [...pages, ...[...visited].map(key => current.get(key)!)];
+      const from = checkedPages.flatMap(page => page.meta.type === 'memory' && page.meta.validFrom ? [page.meta.validFrom] : []).sort((a,b) => Date.parse(b)-Date.parse(a))[0];
+      const until = checkedPages.flatMap(page => [page.meta.expiresAt, ...(page.meta.type === 'memory' ? [page.meta.validUntil] : [])])
+        .filter((value): value is string => Boolean(value)).sort((a,b) => Date.parse(a)-Date.parse(b))[0];
+      support = { scope: scopes[Math.min(...checkedPages.map(page => scopes.indexOf(page.meta.scope)))]!,
+        sensitivity: sensitivities[Math.max(...checkedPages.map(page => sensitivities.indexOf(page.meta.sensitivity)))]!,
+        conditions: unique(checkedPages.flatMap(page => [...page.meta.conditions, ...(page.meta.type === 'memory' ? factValidityConditions(page.meta) : [])])),
+        uncertainty: unique(checkedPages.flatMap(page => page.meta.type === 'wiki-page' ? page.meta.uncertainty : page.meta.status === 'conflicted' ? ['Current or historical ordinary memory has unresolved conflict.'] : [])),
+        conflicted: checkedPages.some(page => page.meta.status === 'conflicted'), ...(from ? { validFrom: from } : {}), ...(until ? { expiresAt: until } : {}) };
+      validateTime = () => {
+        const now = Date.now();
+        for (const page of checkedPages) {
+          if ((page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= now) || (page.meta.type === 'memory' && !factEffectiveAt(page.meta, now))) throw unavailable();
+        }
+      };
+      validateTime();
+      documentHashes = [...documents.values()].map(doc => ({ path: doc.path, hash: sha256(stableWikiJson({ meta: doc.meta, body: doc.body })) }));
+      builtinRulesHash = pages.some(page => page.meta.type === 'wiki-page' && page.meta.rules[builtinWikiRuleId] === 1)
+        ? sha256(stableWikiJson({ id: builtinWikiRuleId, revision: 1, purpose: defaultWikiPurpose, instructions: defaultWikiInstructions })) : null;
+      return { version: 1, kind: 'wiki-revision-view', commit: reader.commit, authorityHead: reader.head, checkedAt: nowIso(), requestedKeys: [...input.pageKeys],
+        ...(reader.selection ? { selection: reader.selection } : {}),
+        pages: pages.sort((a, b) => a.path.localeCompare(b.path)).map(page => ({ ...page, currentRevision: current.get(keyOf(page))!.meta.revision })),
+        sources: [...documents.values()].filter(document => document.meta.type === 'evidence').map(document => ({ id: String(document.meta.id), path: document.path, sha256: String(document.meta.sha256) })).sort((a, b) => a.path.localeCompare(b.path)),
+        rules: [...documents.values()].filter(document => document.meta.type === 'wiki-rules').map(document => ({ id: String(document.meta.id), revision: Number(document.meta.revision) }))
+          .concat(pages.some(page => page.meta.type === 'wiki-page' && page.meta.rules[builtinWikiRuleId] === 1) ? [{ id: builtinWikiRuleId, revision: 1 }] : []).sort((a, b) => a.id.localeCompare(b.id)),
+        warnings: ['Historical committed content, not current advice or fact-effective history. Current access and lifecycle checks apply on every read.',
+          'This result is a local read-only view, not a share token, revocable offline export, backup or approval. Previously copied content cannot be recalled.',
+          ...(reader.selection ? ['Selected by mutable Git committer timestamps along current HEAD first-parent ancestry, not author time, page dates or what an agent actually knew. Backdated commits and non-monotonic clocks can change this selection.'] : [])] };
+    });
+    const finish = async () => {
+      const result = await action();
+      // Releasing the lock performs asynchronous cleanup after the inner checks.
+      throwIfCancelled();
+      validateTime();
+      if (!support) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki snapshot support is unavailable');
+      return { snapshot: result, documentHashes, builtinRulesHash, support, validate: () => {
+        throwIfCancelled(); if (input.signal?.aborted) throw cancellationError(); validateTime();
+      } };
+    };
+    if (!input.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
   async wikiRules() { return this.wikiEngine().rules(); }
+  async wikiMergePrepare(options: WikiMergeOptions) {
+    authorize(this.principal, 'read'); authorize(this.principal, 'write');
+    const parsed = mergeOptionsSchema.safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded manual Wiki merge input');
+    const input = parsed.data;
+    const action = () => this.settledRead(async () => {
+      const base = await this.wikiSnapshot({ commit: input.fromCommit, pageKeys: [input.pageKey],
+        includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true });
+      const current = await this.wikiEngine().pageByKey(input.pageKey, { includeSensitive: input.includeSensitive === true, includeSecret: input.includeSecret === true });
+      const plan = await this.wikiEngine().manualMerge(input, base);
+      const preview = await this.wikiEngine().preview(plan);
+      const original = base.pages.find(page => page.meta.type === 'wiki-page' && page.meta.key === input.pageKey)!;
+      return { plan, preview, comparison: { base, current, diff: reviewDiff(original.body, current.body) } };
+    });
+    const finish = async () => {
+      const result = await action();
+      throwIfCancelled(); assertMergeTime(result.plan.merge!);
+      return result;
+    };
+    if (!input.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
+  async wikiIntegrationPrepare(options: WikiIntegrationOptions) {
+    authorize(this.principal, 'read'); authorize(this.principal, 'write');
+    const parsed = wikiIntegrationOptionsSchema.safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded Wiki integration input');
+    const input = parsed.data, identity = stableWikiJson(this.principal);
+    const finish = async () => {
+      const result = await this.settledRead(() => this.wikiEngine().manualIntegration(input));
+      throwIfCancelled(); authorize(this.principal, 'read'); authorize(this.principal, 'write');
+      if (stableWikiJson(this.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Integration authority changed');
+      assertWikiImportTime(wikiImportRestrictions(result.comparison.artifact));
+      assertWikiIntegrationTime(result.plan.integration!);
+      return result;
+    };
+    if (!input.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, input.signal] : [input.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
   async wikiSetRules(options: Parameters<WikiEngine['setRules']>[0]) { return this.wikiEngine().setRules(options); }
   async wikiMigrate() { return this.wikiEngine().migrate(); }
   async wikiIngest(options: Parameters<WikiEngine['ingest']>[0]) { return this.wikiEngine().ingest(options); }
-  async wikiApply(plan: unknown) { return this.wikiEngine().apply(plan); }
-  async wikiPreview(plan: unknown) { return this.settledRead(() => this.wikiEngine().preview(plan)); }
+  async wikiApply(plan: unknown, options: { signal?: AbortSignal } = {}) {
+    const finish = async () => {
+      const result = await this.wikiEngine().apply(plan);
+      throwIfCancelled();
+      return result;
+    };
+    if (!options.signal) return finish();
+    const parent = operationSignal(), combined = combineSignals(parent ? [parent, options.signal] : [options.signal]);
+    try { return await withOperation(combined.signal, finish); } finally { combined.dispose(); }
+  }
+  async wikiPreview(plan: unknown) {
+    const parsed = wikiPlanSchema.safeParse(plan);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid bounded Wiki data');
+    const identity = stableWikiJson(this.principal);
+    const result = await this.settledRead(() => this.wikiEngine().preview(parsed.data));
+    throwIfCancelled();
+    if (parsed.data.merge) assertMergeTime(parsed.data.merge);
+    if (parsed.data.integration) {
+      assertWikiIntegrationTime(parsed.data.integration); authorize(this.principal, 'read');
+      if (stableWikiJson(this.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Integration authority changed');
+    }
+    return result;
+  }
+  private wikiJobsEngine(): WikiJobs {
+    const bound = async (ceiling: WikiJobCeiling, review = false) => {
+      const config = await this.config();
+      if (review) for (const scope of ceiling.scopes) authorize(this.principal, 'review', { tenantId: config.tenantId, scope, sensitivity: ceiling.maxSensitivity });
+      return new MemoryVault(this.root, { llm: this.llm, ...(this.journalKey === undefined ? {} : { masterKey: this.journalKey }),
+        principal: { id: this.principal.id, name: this.principal.name, tenantId: config.tenantId,
+          ...(this.principal.email === undefined ? {} : { email: this.principal.email }),
+          permissions: review ? ['read', 'review'] : ['read', 'write'], scopes: [...ceiling.scopes], maxSensitivity: ceiling.maxSensitivity } });
+    };
+    return new WikiJobs({ root: this.root, principal: this.principal, encryption: this.encryption, config: () => this.config(),
+      // Queue/key state shares the writer lock, but never writes canonical knowledge.
+      locked: action => this.settledRead(async () => {
+        const erasures = join(this.root, '.amem', 'erasures');
+        if (existsSync(erasures)) {
+          const state = await lstat(erasures);
+          if (!state.isDirectory() || state.isSymbolicLink() || (await readdir(erasures)).some(name => name.endsWith('.json'))) {
+            throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending erasure before accessing Wiki jobs');
+          }
+        }
+        return action();
+      }),
+      evidence: async (ids, ceiling) => {
+        const records = await (await bound(ceiling)).readDirectory<Record<string, unknown>>('evidence');
+        const available = new Set(records.filter(record => record.meta.type === 'evidence').map(record => record.meta.id));
+        if (ids.some(id => !available.has(id))) throw new AgentMemoryError('NOT_FOUND', 'Wiki job source is unavailable');
+      },
+      compile: async (input, ceiling) => (await bound(ceiling)).wikiIngest({ ...input, apply: false }),
+      preview: async (plan, ceiling) => {
+        const restricted = await bound(ceiling);
+        // Jobs already hold this instance's settled read. Reuse that real
+        // snapshot, but retain the restricted vault's own authority checks.
+        return restricted.wikiEngine((permission, action) => this.settledRead(async () => {
+          authorize(restricted.principal, permission);
+          await restricted.config();
+          return action();
+        }, permission)).preview(plan);
+      },
+      apply: async (plan, ceiling) => (await bound(ceiling, true)).wikiApply(plan),
+    });
+  }
+  async wikiEnqueue(input: WikiJobInput) { return this.wikiJobsEngine().enqueue(input); }
+  async wikiJobs() { return this.wikiJobsEngine().list(); }
+  async wikiJob(id: string) { return this.wikiJobsEngine().get(id); }
+  async wikiRunJob(options: WikiJobRunOptions = {}) { return this.wikiJobsEngine().run(options); }
+  async wikiCancelJob(id: string) { return this.wikiJobsEngine().cancel(id); }
+  async wikiRetryJob(id: string) { return this.wikiJobsEngine().retry(id); }
+  async wikiJobPlan(id: string) { return this.wikiJobsEngine().plan(id); }
+  async wikiPreviewJob(id: string) { return this.wikiJobsEngine().preview(id); }
+  async wikiReviewJob(id: string) { return this.wikiJobsEngine().review(id); }
+  async wikiApplyJob(id: string, expectedProof?: string) { return this.wikiJobsEngine().apply(id, expectedProof); }
+  async wikiRemoveJob(id: string) { return this.wikiJobsEngine().remove(id); }
   async wikiCorrect(key: string, instruction: string, options: { expectedRevision?: number } = {}) {
     authorize(this.principal, 'read');
     authorize(this.principal, 'write');
@@ -246,7 +502,8 @@ export class MemoryVault {
     return { ...result.value, commit: result.commit };
   }
 
-  async listRecords(options: { collection: 'evidence' | 'candidates' | 'memories'; offset?: number; limit?: number; query?: string; status?: string }) {
+  async listRecords(options: { collection: 'evidence' | 'candidates' | 'memories'; offset?: number; limit?: number; query?: string; status?: string;
+    selection?: ExperienceSelection }) {
     authorize(this.principal, 'read');
     const { collection, offset = 0, limit = 30, query = '', status = '' } = options;
     if (!['evidence', 'candidates', 'memories'].includes(collection) || !Number.isInteger(offset) || offset < 0 ||
@@ -254,7 +511,12 @@ export class MemoryVault {
       throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid record listing options');
     }
     const kind = collection === 'memories' ? 'memory' : collection === 'candidates' ? 'memory-candidate' : 'evidence';
-    const docs = (await this.readDirectory<Record<string, unknown>>(collection === 'memories' ? 'wiki' : collection))
+    if (options.selection && (Object.keys(options.selection).some(key => !['includeSensitive', 'includeSecret'].includes(key)) ||
+        Object.values(options.selection).some(value => value !== undefined && typeof value !== 'boolean'))) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid confidential record selection');
+    }
+    const selection = options.selection ? { includeSensitive: options.selection.includeSensitive === true, includeSecret: options.selection.includeSecret === true } : undefined;
+    const docs = (await this.readDirectory<Record<string, unknown>>(collection === 'memories' ? 'wiki' : collection, 'read', selection))
       .filter(doc => doc.meta.type === kind && (!status || doc.meta.status === status) &&
         (!query || `${String(doc.meta.key ?? '')}\n${doc.body}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())))
       .sort((a, b) => String(b.meta.createdAt).localeCompare(String(a.meta.createdAt)) || a.path.localeCompare(b.path));
@@ -262,6 +524,7 @@ export class MemoryVault {
       id: String(doc.meta.id), title: String(doc.meta.key ?? doc.meta.id), type: kind,
       scope: doc.meta.scope, sensitivity: doc.meta.sensitivity, status: doc.meta.status ?? 'immutable',
       createdAt: doc.meta.createdAt, snippet: doc.body.slice(0, 500),
+      ...(kind === 'memory' ? { revision: doc.meta.revision, validFrom: doc.meta.validFrom ?? null, validUntil: doc.meta.validUntil ?? null } : {}),
     })) };
   }
 
@@ -320,6 +583,18 @@ export class MemoryVault {
   }
 
   async capture(options: CaptureOptions): Promise<CaptureResult> {
+    return this.captureGuarded(options);
+  }
+
+  /** @internal Trusted local PDF adapter only; guards never come from serialized requests. */
+  async capturePdfImport(options: CaptureOptions, guard: { revalidate(): Promise<void>; validate(): void }): Promise<CaptureResult> {
+    if (options.pdfOriginal?.version !== 2 || typeof guard?.revalidate !== 'function' || typeof guard?.validate !== 'function') {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Processed PDF import requires trusted runtime validation guards');
+    }
+    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true });
+  }
+
+  private async captureGuarded(options: CaptureOptions, guard?: { revalidate(): Promise<void>; validate(): void; reuseExistingWithoutCommit?: boolean; allowWikiImport?: boolean }): Promise<CaptureResult> {
     this.assertInitialized();
     const config = await this.config();
     const content = options.content.trim();
@@ -329,7 +604,12 @@ export class MemoryVault {
     const scope = options.scope ?? 'user';
     const sensitivity = options.sensitivity ?? 'internal';
     authorize(this.principal, 'write', { scope, sensitivity, tenantId: config.tenantId });
-    const digest = evidenceDigest(scope, sensitivity, options.sourceUri ?? '', content);
+    const pdfOriginal = options.pdfOriginal === undefined ? undefined : structuredClone(options.pdfOriginal);
+    const wikiImport = isWikiImportUri(options.sourceUri);
+    if (wikiImport && guard?.allowWikiImport !== true) throw new AgentMemoryError('VALIDATION_FAILED', 'Reserved Wiki import sources require separate preparation and confirmed import');
+    if (wikiImport && pdfOriginal !== undefined) throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports cannot carry PDF attachments');
+    if (pdfOriginal !== undefined) assertPdfEvidence(pdfOriginal, content);
+    const digest = (wikiImport ? wikiImportEvidenceDigest : pdfOriginal === undefined ? evidenceDigest : pdfOriginal.version === 2 ? processedPdfEvidenceDigest : pdfEvidenceDigest)(scope, sensitivity, options.sourceUri ?? '', content);
     const evidenceId = `ev-${digest.slice(0, 12)}`;
 
     const mutation = await this.withMutation('write', actor, 'capture', `memory: capture ${evidenceId}`, async () => {
@@ -347,14 +627,16 @@ export class MemoryVault {
         scope,
         sensitivity,
         sha256: digest,
-        digestVersion: 2,
+        digestVersion: wikiImport ? 4 : pdfOriginal === undefined ? 2 : pdfOriginal.version === 2 ? 5 : 3,
+        ...(pdfOriginal === undefined ? {} : { pdfOriginal }),
         immutable: true,
       };
       const evidence = { path, meta, body: `# Evidence ${evidenceId}\n\n${content}` };
       await this.writeDocument(evidence);
       await this.appendLog('capture', actor, `${evidenceId} (${scope}/${sensitivity})`);
       return { evidence, duplicate: false };
-    });
+    }, undefined, guard ? { revalidateBeforeCommit: guard.revalidate, validateBeforeCommit: guard.validate,
+      ...(guard.reuseExistingWithoutCommit ? { noCommitIf: value => value.duplicate } : {}) } : {});
 
     let candidates: Array<{ id: string; path: string }> = [];
     let commit = mutation.commit;
@@ -367,11 +649,115 @@ export class MemoryVault {
     return { evidenceId, evidencePath: mutation.value.evidence.path, duplicate: mutation.value.duplicate, candidates, commit };
   }
 
+  /** @internal Trusted import adapter only; callbacks never come from a request. */
+  async captureWikiImport(options: Pick<CaptureOptions, 'content' | 'sourceUri' | 'scope' | 'sensitivity'>,
+    guard: { revalidate(): Promise<void>; validate(): void }) {
+    const config = await this.config();
+    for (const permission of ['read','write','review'] as const) authorize(this.principal, permission, {
+      tenantId: config.tenantId, scope: options.scope ?? 'user', sensitivity: options.sensitivity ?? 'internal',
+    });
+    if (!isWikiImportUri(options.sourceUri) || typeof guard?.revalidate !== 'function' || typeof guard?.validate !== 'function') {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'Wiki imports require trusted runtime validation guards');
+    }
+    return this.captureGuarded({ ...options, extract: false }, { ...guard, reuseExistingWithoutCommit: true, allowWikiImport: true });
+  }
+
+  private experienceEngine(): ExperienceEngine {
+    const proof = new WikiProof(this.root);
+    return new ExperienceEngine({
+      principal: this.principal,
+      config: () => this.config(),
+      read: action => this.settledRead(action),
+      evidence: (id, selection) => this.experienceEvidence(id, selection),
+      sign: value => proof.sign(value), verify: (value, signature) => proof.verify(value, signature),
+      capture: (options, guard) => this.captureGuarded(options, guard),
+    });
+  }
+
+  private async experienceEvidence(id: string, selection: ExperienceSelection): Promise<MarkdownDocument<EvidenceMeta>> {
+    const config = await this.config();
+    authorize(this.principal, 'read', { tenantId: config.tenantId });
+    let target: MarkdownDocument<Record<string, unknown>> | undefined;
+    for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+      throwIfCancelled();
+      const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
+      if (parsed.meta.id !== id) continue;
+      if (target) throw new AgentMemoryError('VALIDATION_FAILED', 'Experience evidence identity is ambiguous');
+      target = { path: toPosix(relative(this.root, file)), ...parsed };
+    }
+    if (!target) throw new AgentMemoryError('NOT_FOUND', 'Experience evidence not found');
+    const resource = { scope: scopeOf(target.meta), sensitivity: sensitivityOf(target.meta), tenantId: config.tenantId };
+    try { authorize(this.principal, 'read', resource); }
+    catch (error) {
+      if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw new AgentMemoryError('NOT_FOUND', 'Experience evidence not found');
+      throw error;
+    }
+    if (resource.sensitivity === 'sensitive' && selection.includeSensitive !== true || resource.sensitivity === 'secret' && selection.includeSecret !== true) {
+      throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Explicit confidential selection is required');
+    }
+    // Only the selected, authorized envelope reaches decryption. An unrelated
+    // erased private record must not block a still-authorized experience read.
+    const document = asEvidenceDocument(await this.materializeDocument<Record<string, unknown>>(target.path, target, { config }));
+    authorize(this.principal, 'read', { scope: document.meta.scope, sensitivity: document.meta.sensitivity, tenantId: config.tenantId });
+    return document;
+  }
+
+  async experienceCapture(input: ExperienceTraceInput, classification: { scope?: Scope; sensitivity?: Sensitivity } = {}) {
+    return this.experienceEngine().capture(input, classification);
+  }
+
+  async experiencePrepare(options: ExperiencePrepareOptions) {
+    return this.experienceEngine().prepare(options);
+  }
+
+  async experienceValidate(plan: ExperiencePlan, suite: ExperienceSuite, runner: ExperienceRunner,
+    options: ExperienceSelection & { signal?: AbortSignal; timeoutMs?: number } = {}) {
+    return this.experienceEngine().validate(plan, suite, runner, options);
+  }
+
+  async experienceExport(validationId: string, options: ExperienceSelection & { confirm: boolean }) {
+    return this.experienceEngine().export(validationId, options);
+  }
+
+  private availabilityEngine() {
+    return new AvailabilityEngine({
+      principal: this.principal, config: () => this.config(), read: action => this.settledRead(action),
+      snapshot: async (pageKeys, { includeSensitive, includeSecret }, commit) => this.readWikiSnapshot({ pageKeys, includeSensitive, includeSecret,
+        commit: commit ?? await this.git.run(['rev-parse', 'HEAD']) }),
+      document: (path, selection) => this.readDocument<Record<string, unknown>>(path, 'read', selection),
+      records: async (selection, ids) => {
+        if (ids) {
+          const documents = [];
+          for (const id of ids) documents.push(await this.experienceEvidence(id, selection) as unknown as MarkdownDocument<Record<string, unknown>>);
+          return documents;
+        }
+        const documents: Array<MarkdownDocument<Record<string, unknown>>> = []; let bytes = 0;
+        for (const file of await listMarkdown(resolveInside(this.root, 'evidence'))) {
+          throwIfCancelled();
+          let document;
+          try { document = await this.readDocument<Record<string, unknown>>(toPosix(relative(this.root, file)), 'read', selection); }
+          catch (error) { if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') continue; throw error; }
+          bytes += Buffer.byteLength(stableWikiJson(document), 'utf8');
+          if (documents.length >= 2000 || bytes > 20_000_000) throw new AgentMemoryError('CONTENT_TOO_LARGE', 'Availability scan exceeds 2000 selected records or 20 MB; supply observationIds');
+          documents.push(document);
+        }
+        return documents;
+      },
+      head: () => this.git.run(['rev-parse', 'HEAD']), sign: value => new WikiProof(this.root).sign(value),
+      verify: (value, proof) => new WikiProof(this.root).verify(value, proof),
+      capture: (options, guard) => this.captureGuarded(options, guard),
+    });
+  }
+
+  async wikiObserveAvailability(options: AvailabilityObserveOptions) { return this.availabilityEngine().observe(options); }
+  async wikiAsKnownAt(options: AvailabilityAtOptions) { return this.availabilityEngine().at(options); }
+
   async extract(evidenceId: string, actor: Actor = this.principal): Promise<{ candidates: Array<{ id: string; path: string }>; commit: string | null }> {
     this.assertInitialized();
     await this.config();
     authorize(this.principal, 'write');
     const evidence = await this.requireById<EvidenceMeta>('evidence', evidenceId, 'write');
+    assertOrdinaryEvidence(evidence);
     const proposals = await this.llm.extractMemories(evidence.body, { scope: evidence.meta.scope, sensitivity: evidence.meta.sensitivity });
     throwIfCancelled();
     return this.proposeMany(proposals, [evidence.path], actor, `extract ${evidenceId}`);
@@ -401,6 +787,7 @@ export class MemoryVault {
       if (!rootPath.startsWith('evidence/')) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance must point into evidence/: ${path}`);
       const source = await this.readDocument<Record<string, unknown>>(rootPath, 'write');
       if (source.meta.type !== 'evidence' || source.meta.immutable !== true) throw new AgentMemoryError('VALIDATION_FAILED', `Provenance is not immutable evidence: ${path}`);
+      assertOrdinaryEvidence(source as unknown as MarkdownDocument<EvidenceMeta>);
       normalizedEvidence.push(rootPath);
       evidenceRestrictions.push({ scope: scopeOf(source.meta), sensitivity: sensitivityOf(source.meta) });
     }
@@ -676,7 +1063,9 @@ export class MemoryVault {
     this.assertInitialized();
     const config = await this.config();
     authorize(this.principal, 'read', { tenantId: config.tenantId });
-    for (const directory of ['wiki', 'candidates', 'evidence']) {
+    // A canonical evidence ID is inspectable without first reading unrelated invalid derived records.
+    const directories = /^ev-[a-f0-9]{12,64}$/.test(id) ? ['evidence', 'wiki', 'candidates'] : ['wiki', 'candidates', 'evidence'];
+    for (const directory of directories) {
       const found = await this.findById<Record<string, unknown>>(directory, id);
       if (found?.meta.type === 'wiki-page') return this.wikiEngine().get(id);
       if (found && found.meta.type !== 'memory-erased') return found;
@@ -719,41 +1108,121 @@ export class MemoryVault {
     });
   }
 
-  async recall(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<RecallResult> {
-    authorize(this.principal, 'read');
+  async recall(query: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<RecallResult> {
     const requested = options.maxCharacters ?? 12_000;
     if (!Number.isSafeInteger(requested) || requested < 1) throw new AgentMemoryError('VALIDATION_FAILED', 'Recall character budget must be a positive integer');
     return this.settledRead(async () => {
       const config = await this.config();
-      const maximum = Math.min(requested, config.limits.maxContextCharacters);
+      const records = await this.recallRecords(query, options);
+      const packed = packContext(records.map(({ record }) => ({ id: record.id, section: 'retrieved', text: JSON.stringify(record) })),
+        { ...options, maxCharacters: Math.min(requested, config.limits.maxContextCharacters) });
+      const selected = new Set(packed.selected.map(block => block.id));
+      return { text: packed.text, truncated: packed.truncated, budget: packed.budget,
+        memories: records.filter(item => selected.has(item.record.id) && item.ordinary).map(({ hit, record }) => ({ ...hit, snippet: record.body })),
+        wikiPages: records.filter(item => selected.has(item.record.id) && !item.ordinary).map(item => item.record) };
+    });
+  }
+
+  /** Caller owns a settled read, so every selected record uses the same canonical snapshot. */
+  private async recallRecords(query: string, options: SearchOptions) {
       const hits = await this.search(query, { ...options, includeCandidates: false, includeEvidence: false, expandLinks: false });
       const pages = new Map((await this.wikiEngine().recallPages(hits.filter(hit => hit.path.startsWith('wiki/pages/')).map(hit => hit.id), options)).map(page => [page.meta.id, page]));
       const memories = new Map((await Promise.all(hits.filter(hit => !hit.path.startsWith('wiki/pages/')).map(hit => this.readDocument<MemoryMeta>(hit.path))))
         .filter(page => page.meta.type === 'memory' && page.meta.status === 'active'
-          && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()))
+          && (!page.meta.expiresAt || Date.parse(page.meta.expiresAt) > Date.now()) && factEffectiveAt(page.meta))
         .map(page => [page.meta.id, page]));
-      const result: RecallResult = { text: '', memories: [], wikiPages: [], truncated: false };
+      const records: Array<{ hit: SearchHit; ordinary: boolean; record: RecallResult['wikiPages'][number]; document: MarkdownDocument<MemoryMeta | WikiPageMeta> }> = [];
       for (const hit of hits) {
         throwIfCancelled();
         const page = memories.get(hit.id) ?? pages.get(hit.id);
         if (!page) continue;
         const ordinary = page.meta.type === 'memory';
         const record = { key: page.meta.key, id: page.meta.id, path: page.path, revision: page.meta.revision,
-          body: page.body, conditions: [...page.meta.conditions], uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence] };
+          body: page.body, conditions: [...page.meta.conditions, ...(ordinary ? factValidityConditions(page.meta as MemoryMeta) : [])],
+          uncertainty: ordinary ? [] : [...(page.meta as WikiPageMeta).uncertainty], evidence: [...page.meta.evidence],
+          ...(ordinary ? factValidityFields(page.meta as MemoryMeta) : {}) };
         // Keep an entire record, including conditions and citations, or omit it.
         // JSON encoding also separates source text from the surrounding prompt.
-        const block = `${result.text ? '\n\n' : ''}${JSON.stringify(record)}`;
-        if (result.text.length + block.length > maximum) { result.truncated = true; continue; }
-        result.text += block;
-        if (ordinary) result.memories.push({ ...hit, snippet: page.body });
-        else result.wikiPages.push(record);
+        records.push({ hit, ordinary, record, document: page });
       }
-      return result;
-    });
+      return records;
   }
 
   async reindex(semantic = false): Promise<ReindexResult> {
     return this.refreshSearchIndex(semantic, 'maintain');
+  }
+
+  async sourceTimeline(sourceUri: string, options: SourceTimelineOptions = {}) {
+    return this.settledRead(async () => sourceTimeline(sourceUri,
+      await this.readDirectory<EvidenceMeta>('evidence', 'read', options),
+      await this.wikiEngine().referencePages(options), options));
+  }
+
+  async setMemoryValidity(id: string, options: MemoryValidityUpdate) {
+    const parsed = z.object({ validFrom: z.string().nullable(), validUntil: z.string().nullable(),
+      expectedRevision: z.number().int().min(1) }).strict().safeParse(options);
+    if (!parsed.success || typeof id !== 'string' || !/^mem-[a-f0-9]{12}$/.test(id)) {
+      throw new AgentMemoryError('VALIDATION_FAILED', 'A memory ID, both nullable time bounds and expectedRevision are required');
+    }
+    const bounds = { ...(parsed.data.validFrom === null ? {} : { validFrom: effectiveTimestamp(parsed.data.validFrom) }),
+      ...(parsed.data.validUntil === null ? {} : { validUntil: effectiveTimestamp(parsed.data.validUntil) }) };
+    assertFactValidity(bounds);
+    const changed = await this.withMutation('review', this.principal, 'memory-validity', 'memory: annotate effective interval', async () => {
+      const memory = await this.findOneMemory(id, 'review');
+      if (memory.meta.status === 'revoked') throw new AgentMemoryError('VALIDATION_FAILED', 'Revoked memories cannot be reactivated by time annotation');
+      if (memory.meta.revision !== parsed.data.expectedRevision) throw new AgentMemoryError('VALIDATION_FAILED', 'Memory revision changed; inspect it again before annotating');
+      await this.assertEvidenceReferences(memory.meta.evidence, 'review');
+      if (memory.meta.validFrom === bounds.validFrom && memory.meta.validUntil === bounds.validUntil) return memory.meta.revision;
+      delete memory.meta.validFrom;
+      delete memory.meta.validUntil;
+      Object.assign(memory.meta, bounds);
+      memory.meta.updatedAt = nowIso();
+      memory.meta.revision += 1;
+      await this.writeDocument(memory);
+      await this.appendLog('memory-validity', this.principal, memory.meta.id);
+      return memory.meta.revision;
+    });
+    return { memoryId: id, revision: changed.value, ...bounds, commit: changed.commit };
+  }
+
+  async memoriesAt(at: string, options: MemoriesAtOptions = {}) {
+    const instant = effectiveTimestamp(at);
+    const parsed = z.object({ key: z.string().trim().min(1).max(512).optional(), includeUnknown: z.boolean().default(false),
+      includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
+      offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30) }).strict().safeParse(options);
+    if (!parsed.success) throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid dated memory view options');
+    return this.settledRead(async () => {
+      const config = await this.config(), now = Date.now(), requested = Date.parse(instant);
+      const eligible: Array<MarkdownDocument<MemoryMeta>> = [];
+      for (const memory of await this.readDirectory<MemoryMeta>('wiki', 'read', parsed.data)) {
+        if (memory.meta.type !== 'memory' || !['active', 'conflicted', 'superseded'].includes(memory.meta.status)
+            || (memory.meta.expiresAt && Date.parse(memory.meta.expiresAt) <= now)) continue;
+        if (parsed.data.key !== undefined && normalizeKey(memory.meta.key) !== normalizeKey(parsed.data.key)) continue;
+        if (!parsed.data.includeUnknown && memory.meta.validFrom === undefined && memory.meta.validUntil === undefined) continue;
+        if (!factEffectiveAt(memory.meta, requested)) continue;
+        try { await this.assertEvidenceReferences(memory.meta.evidence, 'read'); }
+        catch { throwIfCancelled(); continue; }
+        eligible.push(memory);
+      }
+      eligible.sort((a, b) => (b.meta.validFrom === undefined ? -Infinity : Date.parse(b.meta.validFrom))
+        - (a.meta.validFrom === undefined ? -Infinity : Date.parse(a.meta.validFrom)) || a.path.localeCompare(b.path));
+      const limit = Math.min(parsed.data.limit, config.limits.maxResults);
+      const items = eligible.slice(parsed.data.offset, parsed.data.offset + limit).map(memory => ({
+        id: memory.meta.id, path: memory.path, key: memory.meta.key, kind: memory.meta.kind, revision: memory.meta.revision,
+        recordedAt: memory.meta.createdAt, updatedAt: memory.meta.updatedAt, validatedAt: memory.meta.validatedAt,
+        validFrom: memory.meta.validFrom ?? null, validUntil: memory.meta.validUntil ?? null,
+        scope: memory.meta.scope, sensitivity: memory.meta.sensitivity, status: memory.meta.status, body: memory.body,
+        evidence: [...memory.meta.evidence], conditions: [...memory.meta.conditions, ...factValidityConditions(memory.meta)],
+        uncertainty: [ ...(memory.meta.validFrom === undefined ? ['Effective start is unknown.'] : []),
+          ...(memory.meta.validUntil === undefined ? ['Effective end is unknown.'] : []),
+          ...(memory.meta.status === 'conflicted' ? ['Current record has unresolved conflicts.'] : []),
+          ...(memory.meta.status === 'superseded' ? ['Current record is superseded; this is retained context, not an active assertion.'] : []) ],
+      }));
+      return { at: instant, timeBasis: 'explicit-effective-interval' as const, reconstruction: false as const,
+        offset: parsed.data.offset, limit, total: eligible.length, items,
+        notes: ['Latest retained revisions and reviewer annotations, not what was known at the requested time.',
+          'Current authority, evidence access, expiry, revocation and erasure apply. This is not historical Wiki answering.'] };
+    });
   }
 
   private async refreshSearchIndex(semantic: boolean, permission: Permission): Promise<ReindexResult> {
@@ -766,27 +1235,68 @@ export class MemoryVault {
     return result;
   }
 
-  async context(query: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
+  async contextDetailed(query: string, options: SearchOptions & ContextBudgetOptions = {}) {
+    return (await this.prepareContext(query, options)).result;
+  }
+
+  private async prepareContext(query: string, options: SearchOptions & ContextBudgetOptions = {}) {
+    authorize(this.principal, 'read');
+    return this.settledRead(async () => {
     const config = await this.config();
-    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki'))
+    const recalled = await this.recallRecords(query, options);
+    const residentMemories = (await this.readDirectory<MemoryMeta>('wiki', 'read', options))
       .filter((memory) => memory.meta.type === 'memory' && memory.meta.status === 'active')
       .filter((memory) => !memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > Date.now())
+      .filter((memory) => factEffectiveAt(memory.meta))
       .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
       .filter((memory) => memory.meta.sensitivity !== 'sensitive' || options.includeSensitive === true)
       .filter((memory) => memory.meta.sensitivity !== 'secret' || options.includeSecret === true)
       .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
       .slice(0, config.residentBudget);
-    const residentLines = residentMemories.map((memory) => `- [${memory.meta.key}](${memory.path}): ${candidateStatement(memory.body)}`);
-    const resident = ['# Resident memory', '', ...(residentLines.length ? residentLines : ['_No authorized resident memories._'])].join('\n');
-    const hits = await this.search(query, options);
-    const sections = hits.map((hit) => `## [${hit.path}]\n${hit.snippet}`);
-    const context = `${resident.trim()}\n\n# Retrieved memory\n\n${sections.join('\n\n')}`;
-    const maximum = Math.max(500, Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters));
-    return context.slice(0, maximum);
+    const blocks: ContextBlock[] = residentMemories.map(memory => ({ id: memory.meta.id, section: 'resident',
+      text: JSON.stringify({ key: memory.meta.key, id: memory.meta.id, path: memory.path, revision: memory.meta.revision,
+        body: memory.body, conditions: [...memory.meta.conditions, ...factValidityConditions(memory.meta)], uncertainty: [],
+        evidence: memory.meta.evidence, ...factValidityFields(memory.meta) }) }));
+    for (const { record } of recalled) blocks.push({ id: record.id, section: 'retrieved', text: JSON.stringify(record) });
+    const packed = packContext(blocks, { ...options, maxCharacters: Math.min(options.maxCharacters ?? 12_000, config.limits.maxContextCharacters) });
+    const documents = new Map([...residentMemories, ...recalled.map(item => item.document)].map(document => [document.meta.id, document]));
+    const expected = packed.selected.map(({ id }) => documents.get(id)!);
+    const assertCurrentTime = () => {
+      if (expected.some(page => (page.meta.expiresAt && Date.parse(page.meta.expiresAt) <= Date.now())
+          || (page.meta.type === 'memory' && !factEffectiveAt(page.meta)))) {
+        throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context is no longer currently effective; ask again');
+      }
+    };
+    const validate = async () => {
+      await this.settledRead(async () => {
+        const pages = new Map((await this.wikiEngine().recallPages(expected.filter(page => page.meta.type === 'wiki-page').map(page => page.meta.id), options))
+          .map(page => [page.meta.id, page]));
+        for (const before of expected) {
+          const current = before.meta.type === 'memory' ? await this.readDocument<MemoryMeta>(before.path) : pages.get(before.meta.id);
+          if (!current || current.meta.status !== 'active' || (current.meta.expiresAt && Date.parse(current.meta.expiresAt) <= Date.now())
+              || (current.meta.type === 'memory' && !factEffectiveAt(current.meta))
+              || sha256(JSON.stringify({ meta: current.meta, body: current.body })) !== sha256(JSON.stringify({ meta: before.meta, body: before.body }))) {
+            throw new AgentMemoryError('VALIDATION_FAILED', 'Memory context changed or is no longer currently effective; ask again');
+          }
+        }
+        assertCurrentTime();
+      });
+      assertCurrentTime();
+    };
+    return { result: { text: packed.text, budget: packed.budget, truncated: packed.truncated,
+      records: packed.selected.map(({ id, section }) => ({ id, section })) }, validate };
+    });
   }
 
-  async answer(question: string, options: SearchOptions & { maxCharacters?: number } = {}): Promise<string> {
-    return this.llm.answer(question, await this.context(question, options));
+  async context(query: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<string> {
+    return (await this.contextDetailed(query, options)).text;
+  }
+
+  async answer(question: string, options: SearchOptions & ContextBudgetOptions = {}): Promise<string> {
+    const context = await this.prepareContext(question, options);
+    const answer = await this.llm.answer(question, context.result.text, context.validate);
+    await context.validate();
+    return answer;
   }
 
   async recover(): Promise<RecoveryResult> {
@@ -999,7 +1509,7 @@ export class MemoryVault {
     message: string,
     action: () => Promise<T>,
     resourceIds?: string[],
-    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean } = {},
+    options: { allowLegacyEvidence?: boolean; allowPlaintextRequiredEncryption?: boolean; rollbackOnCommitFailure?: boolean; revalidateBeforeCommit?: () => Promise<void>; validateBeforeCommit?: () => void; noCommitIf?: (value: T) => boolean } = {},
   ): Promise<{ value: T; commit: string | null }> {
     authorize(this.principal, permission);
     return this.telemetry.operation(operation, this.principal, async () => withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
@@ -1021,12 +1531,23 @@ export class MemoryVault {
       );
       this.activeTransaction = transaction;
       this.activePermission = permission;
-      let ready = false;
+      let ready = false, rolledBack = false;
       try {
         await migrateVaultConfig(this.root, (path, content) => this.writeManaged(path, content));
         await this.installRuntimeIgnore();
         const value = await action();
+        if (options.noCommitIf?.(value)) {
+          // A successful replay must not refresh unrelated time-dependent projections.
+          if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
+          options.validateBeforeCommit?.(); throwIfCancelled();
+          await withoutCancellation(() => transaction.rollback()); rolledBack = true;
+          this.activeTransaction = null; this.activePermission = null;
+          throwIfCancelled(); options.validateBeforeCommit?.();
+          return { value, commit: null };
+        }
         await this.rebuildGenerated(await this.config());
+        if (options.revalidateBeforeCommit) await options.revalidateBeforeCommit();
+        options.validateBeforeCommit?.();
         throwIfCancelled();
         ready = true;
         const commit = await withoutCancellation(() => transaction.commit());
@@ -1047,7 +1568,7 @@ export class MemoryVault {
       } catch (error) {
         this.activeTransaction = null;
         this.activePermission = null;
-        if (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit)) await withoutCancellation(() => transaction.rollback());
+        if (!rolledBack && (!ready || (options.rollbackOnCommitFailure && !transaction.isCommitted && !transaction.hasUncertainCommit))) await withoutCancellation(() => transaction.rollback());
         throw error;
       }
     }), resourceIds);
@@ -1061,7 +1582,8 @@ export class MemoryVault {
       tenantId: config.tenantId,
     });
     if (this.cachedSearchIndex?.signature === signature) return this.cachedSearchIndex.value;
-    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path));
+    const value = new PersistentSearchIndex(this.root, config, this.llm, (path) => this.readDocument<Record<string, unknown>>(path),
+      (permission, action) => this.settledRead(action, permission));
     this.cachedSearchIndex = { signature, value };
     return value;
   }
@@ -1159,6 +1681,7 @@ export class MemoryVault {
   }
 
   private async completeErasureIntentLocked(intent: ErasureIntent): Promise<string | null> {
+    await invalidateWikiJobPlans(this.root, this.encryption);
     await this.encryption.erase(intent.id);
     if (await this.encryption.hasKey(intent.id)) {
       throw new AgentMemoryError('ENCRYPTION_FAILED', `Unable to destroy the wrapped key for ${intent.id}`);
@@ -1242,10 +1765,11 @@ export class MemoryVault {
       try {
         const document = await this.readDocument<Record<string, unknown>>(path, permission);
         if (document.meta.type !== 'evidence' || document.meta.immutable !== true) throw new Error('not immutable evidence');
+        assertOrdinaryEvidence(document as unknown as MarkdownDocument<EvidenceMeta>);
       } catch (error) {
         throwIfCancelled();
         if (error instanceof AgentMemoryError && error.code === 'AUTHORIZATION_DENIED') throw error;
-        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is invalid: ${path}`);
+        throw new AgentMemoryError('VALIDATION_FAILED', `Candidate evidence reference is missing or invalid: ${path}`);
       }
     }
   }
@@ -1351,12 +1875,12 @@ export class MemoryVault {
     const now = Date.now();
     const safeMemories = memories.filter((memory) =>
       !isEncryptedEnvelope(memory.meta) && !config.policy.requireEncryptionFor.includes(memory.meta.sensitivity));
-    const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now));
+    const active = safeMemories.filter((memory) => memory.meta.status === 'active' && (!memory.meta.expiresAt || Date.parse(memory.meta.expiresAt) > now) && factEffectiveAt(memory.meta, now));
     const resident = active
       .filter((memory) => config.policy.residentSensitivities.includes(memory.meta.sensitivity))
       .sort((a, b) => residentRank(a) - residentRank(b) || b.meta.confidence - a.meta.confidence || b.meta.updatedAt.localeCompare(a.meta.updatedAt))
       .slice(0, config.residentBudget);
-    const memoryLines = resident.map((memory) => `- [${memory.meta.key}](./${memory.path}): ${candidateStatement(memory.body)}`);
+    const memoryLines = resident.map((memory) => `- [${memory.meta.key}](./${memory.path}): ${candidateStatement(memory.body)}${factValidityConditions(memory.meta).length ? ` — ${factValidityConditions(memory.meta).join(' ')}` : ''}`);
     await this.writeManaged('MEMORY.md', ['# Resident memory', '', '> Auto-generated. Stable, frequently useful facts only; confidential entries are excluded.', '', ...(memoryLines.length ? memoryLines : ['_No approved resident memories yet._']), ''].join('\n'));
 
     const rows = safeMemories
@@ -1458,7 +1982,7 @@ export class MemoryVault {
     await this.writeManaged(document.path, serialized);
   }
 
-  private async readDocument<T extends object>(rootPath: string, permission: Permission = 'read'): Promise<MarkdownDocument<T>> {
+  private async readDocument<T extends object>(rootPath: string, permission: Permission = 'read', selection?: ExperienceSelection): Promise<MarkdownDocument<T>> {
     throwIfCancelled();
     const config = await readVaultConfig(this.root);
     authorize(this.principal, permission, { tenantId: config.tenantId });
@@ -1467,9 +1991,13 @@ export class MemoryVault {
     const scope = scopeOf(parsed.meta);
     const sensitivity = sensitivityOf(parsed.meta);
     authorize(this.principal, permission, { scope, sensitivity, tenantId: config.tenantId });
+    if (selection && (sensitivity === 'sensitive' && selection.includeSensitive !== true || sensitivity === 'secret' && selection.includeSecret !== true)) {
+      throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Explicit confidential document selection is required');
+    }
     const document = await this.materializeDocument<T>(normalized, parsed, { config });
     const logicalMeta = document.meta as Record<string, unknown>;
     authorize(this.principal, permission, { scope: scopeOf(logicalMeta), sensitivity: sensitivityOf(logicalMeta), tenantId: config.tenantId });
+    if (logicalMeta.type === 'memory' || logicalMeta.type === 'memory-candidate') await this.assertEvidenceReferences(logicalMeta.evidence as string[], permission);
     return document;
   }
 
@@ -1500,6 +2028,8 @@ export class MemoryVault {
 
   private async readProjectionDirectory<T extends object>(directory: string): Promise<Array<MarkdownDocument<T>>> {
     const documents: Array<MarkdownDocument<T>> = [];
+    const sources = directory === 'wiki' || directory === 'candidates'
+      ? new Map((await this.readProjectionDirectory<Record<string, unknown>>('evidence')).map(source => [source.path, source])) : undefined;
     for (const file of await listMarkdown(resolveInside(this.root, directory))) {
       const path = toPosix(relative(this.root, file));
       const parsed = parseMarkdown<Record<string, unknown>>(await readFile(file, 'utf8'));
@@ -1507,6 +2037,13 @@ export class MemoryVault {
       // projections, so the minimal envelope is sufficient and needs no key.
       const document = { path, meta: parsed.meta, body: parsed.body };
       if (!isEncryptedEnvelope(parsed.meta)) assertManagedDocument(document);
+      if (!isEncryptedEnvelope(parsed.meta) && (parsed.meta.type === 'memory' || parsed.meta.type === 'memory-candidate')) {
+        // Global projections use only already-public outer metadata, never the
+        // current operator's authority to decrypt unrelated source records.
+        const references = (parsed.meta.evidence as string[]).flatMap(path => sources?.get(path) ?? []);
+        if (references.some(source => isEncryptedEnvelope(source.meta))) continue;
+        for (const source of references) assertOrdinaryEvidence(source as unknown as MarkdownDocument<EvidenceMeta>);
+      }
       documents.push(document as unknown as MarkdownDocument<T>);
     }
     return documents;
@@ -1534,15 +2071,35 @@ export class MemoryVault {
     return documents;
   }
 
-  private async settledRead<T>(action: () => Promise<T>): Promise<T> {
-    authorize(this.principal, 'read');
-    await this.config(); // Reject absent vaults and foreign tenants before creating a lock.
-    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
-      await this.config();
-      if (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json'))) {
+  /** @internal Read-only adapter boundary; never wrap a canonical mutation. */
+  async withReadSnapshot<T>(action: () => Promise<T>, permission: Permission, diagnostics = false): Promise<T> {
+    return this.settledRead(action, permission, diagnostics);
+  }
+
+  private async settledRead<T>(action: () => Promise<T>, permission: Permission = 'read', diagnostics = false): Promise<T> {
+    authorize(this.principal, permission);
+    // Diagnostic actions perform their own config/tenant checks and can report
+    // malformed configuration instead of failing before healthReport runs.
+    if (diagnostics) this.assertInitialized();
+    else await this.config();
+    const checked = async () => {
+      throwIfCancelled();
+      if (!diagnostics) await this.config();
+      if (!diagnostics && (await pendingTransactionCount(this.root) > 0 || existsSync(join(this.root, '.amem', 'sync-intent.json')))) {
         throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
       }
       return action();
+    };
+    const existing = this.readSnapshots.getStore();
+    if (existing?.active) {
+      const result = await checked();
+      if (!existing.active) throw new AgentMemoryError('VALIDATION_FAILED', 'The enclosing read snapshot ended; retry the operation');
+      return result;
+    }
+    return withFileLock(join(this.root, '.amem', 'write.lock'), async () => {
+      const lease = { active: true };
+      try { return await this.readSnapshots.run(lease, checked); }
+      finally { lease.active = false; }
     });
   }
 
@@ -1594,6 +2151,10 @@ async function listMarkdown(root: string): Promise<string[]> {
     else if (entry.isFile() && entry.name.endsWith('.md')) output.push(path);
   }
   return output;
+}
+
+function assertOrdinaryEvidence(document: MarkdownDocument<EvidenceMeta>): void {
+  if (readWikiImportArtifact(document)) throw new AgentMemoryError('VALIDATION_FAILED', 'Compiled Wiki imports support the separate Wiki workflow, not ordinary memories');
 }
 
 function validateProposal(proposal: ProposedMemory, maximum: number): void {

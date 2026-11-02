@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { promisify } from 'node:util';
+import { applyPdfImport, previewPdfImport, readPdfOriginal } from '../src/pdf-import.js';
+import { MemoryVault } from '../src/vault.js';
+import { syntheticPdf } from './pdf-fixture.js';
+
+test('PDF: encrypted original survives Git backup and validated remote pull without admitting binary paths', async t => {
+  await mkdir(join(process.cwd(), '.scratch'), { recursive: true });
+  const root = await mkdtemp(join(process.cwd(), '.scratch/pdf-sync-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = new MemoryVault(join(root, 'source'), { masterKey: '63'.repeat(32) });
+  await source.initialize('PDF sync fixture');
+  const file = join(root, 'source.pdf'), bytes = syntheticPdf(['First encrypted source version.']);
+  await writeFile(file, bytes);
+  const first = await applyPdfImport(source, await previewPdfImport(file), { sensitivity: 'secret' });
+  const exec = promisify(execFile), remote = join(root, 'remote.git');
+  await exec('git', ['init', '--bare', remote]);
+  const branch = await source.git.run(['branch', '--show-current']);
+  await source.configureRemote({ name: 'origin', url: remote, branch, push: true });
+  assert.equal((await source.sync({ push: true })).pushed, true);
+  await exec('git', ['--git-dir', remote, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+  const target = new MemoryVault(join(root, 'restored'), { masterKey: '63'.repeat(32) });
+  await mkdir(join(target.root, '.amem'), { recursive: true });
+  await exec('git', ['clone', '--bare', remote, target.git.gitDir]);
+  await target.git.run(['config', 'core.bare', 'false']);
+  await target.git.run(['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*']);
+  // Only this newly created, empty synthetic worktree is restored.
+  await target.git.run(['reset', '--hard', 'HEAD']);
+  await assert.rejects(readPdfOriginal(target, first.evidenceId));
+  await copyFile(join(source.root, '.amem/keys.json'), join(target.root, '.amem/keys.json'));
+  assert.deepEqual(await readPdfOriginal(target, first.evidenceId), bytes);
+  await target.reindex(false);
+  assert.doesNotMatch(await readFile(join(target.root, first.evidencePath), 'utf8'), /JVBER|First encrypted/);
+  const secondBytes = syntheticPdf(['Second encrypted source version.']); await writeFile(file, secondBytes);
+  const second = await applyPdfImport(source, await previewPdfImport(file), { sensitivity: 'secret' });
+  await source.sync({ push: true });
+  await copyFile(join(source.root, '.amem/keys.json'), join(target.root, '.amem/keys.json'));
+  await target.sync({ push: false });
+  assert.deepEqual(await readPdfOriginal(target, second.evidenceId), secondBytes);
+  assert.deepEqual(await readPdfOriginal(target, first.evidenceId), bytes);
+  const paths = (await target.git.run(['ls-tree', '-r', '--name-only', 'HEAD'])).split('\n');
+  assert.ok(paths.every(path => !path.endsWith('.pdf')));
+});

@@ -14,6 +14,8 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 try {
   if (process.argv.length > 3) throw new Error('Usage: npm run test:package -- [tarball]');
   const supplied = process.argv[2] ? resolve(process.argv[2]) : undefined;
+  console.log('Consumer execution configuration:', JSON.stringify({ node: process.version, executable: process.execPath,
+    package: supplied ?? 'fresh local pack', gitDefaultBranchOverride: process.env.GIT_CONFIG_VALUE_0 ?? null }));
   const packed = await exec(npm, supplied ? ['pack', supplied, '--dry-run', '--json', '--ignore-scripts']
     : ['pack', '--json', '--pack-destination', temporary], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
   const [{ filename, files }] = JSON.parse(packed.stdout);
@@ -31,6 +33,34 @@ try {
     'dist/wiki-links.js', 'dist/wiki-links.d.ts', 'docs/wiki.md',
     'dist/review-diff.js', 'dist/onboarding.js', 'dist/integration-cli.js', 'dist/harness-memory.js',
     'docs/memory-adoption.md', 'docs/integrations.md', 'evaluation/README.md', 'evaluation/cases.mjs',
+    'dist/context-budget.js', 'dist/directory-import.js', 'dist/source-timeline.js', 'docs/knowledge-workflows.md',
+    'dist/web-source.js', 'dist/web-import.js', 'dist/web-import.d.ts', 'docs/public-web-import.md',
+    'dist/wiki-jobs.js', 'dist/wiki-jobs.d.ts', 'dist/wiki-job-store.js', 'docs/wiki-jobs.md',
+    'dist/effective-time.js', 'dist/effective-time.d.ts', 'docs/effective-time.md',
+    'docs/web-effective-time.md',
+    'dist/pdf-import.js', 'dist/pdf-import.d.ts', 'dist/pdf-worker.js', 'dist/pdf-evidence.js', 'docs/pdf-import.md',
+    'dist/pdf-processing.js', 'dist/pdf-processing.d.ts', 'dist/pdf-processing-schema.js', 'dist/pdf-processing-schema.d.ts',
+    'dist/pdf-supervisor.js', 'dist/pdf-supervisor.d.ts', 'dist/pdf-windows.js', 'dist/pdf-windows.d.ts',
+    'assets/windows-pdf-host.cs', 'docs/windows-pdf-host.md', 'docs/windows-pdf-host_CN.md',
+    'docs/local-pdf-processing.md', 'docs/local-pdf-processing_CN.md',
+    'dist/wiki-snapshot.js', 'dist/wiki-snapshot.d.ts', 'docs/wiki-revision-views.md',
+    'dist/wiki-merge.js', 'dist/wiki-merge.d.ts', 'docs/manual-wiki-merge.md',
+    'docs/web-manual-merge.md', 'dist/wiki-tool.js', 'dist/wiki-tool.d.ts', 'docs/agent-manual-merge.md', 'docs/dated-wiki-views.md', 'docs/web-dated-wiki-views.md',
+    'dist/experience.js', 'dist/experience.d.ts', 'docs/validated-experience.md', 'docs/validated-experience_CN.md',
+    'dist/experience-tool.js', 'dist/experience-tool.d.ts',
+    'dist/web-experience-ui.js', 'dist/web-experience-ui.d.ts',
+    'dist/knowledge-availability.js', 'dist/knowledge-availability.d.ts', 'docs/knowledge-availability.md', 'docs/knowledge-availability_CN.md',
+    'dist/web-availability-ui.js', 'dist/web-availability-ui.d.ts',
+    'dist/shared-wiki.js', 'dist/shared-wiki.d.ts', 'docs/pinned-shared-wiki.md', 'docs/pinned-shared-wiki_CN.md',
+    'dist/web-shared-wiki-ui.js', 'dist/web-shared-wiki-ui.d.ts',
+    'dist/shared-wiki-cloud-config.js', 'dist/shared-wiki-cloud-config.d.ts',
+    'dist/shared-wiki-cloud-server.js', 'dist/shared-wiki-cloud-server.d.ts', 'docs/cloud-sharing.md', 'docs/cloud-sharing_CN.md',
+    'dist/shared-wiki-cloud-client.js', 'dist/shared-wiki-cloud-client.d.ts', 'dist/shared-wiki-cloud-wire.js', 'dist/shared-wiki-cloud-wire.d.ts',
+    'dist/shared-wiki-cloud-host.js', 'dist/shared-wiki-cloud-host.d.ts',
+    'dist/shared-wiki-git.js', 'dist/shared-wiki-git.d.ts',
+    'dist/shared-wiki-import.js', 'dist/shared-wiki-import.d.ts', 'dist/wiki-import-artifact.js', 'dist/wiki-import-artifact.d.ts',
+    'dist/wiki-integration.js', 'dist/wiki-integration.d.ts', 'dist/web-wiki-import-ui.js', 'dist/web-wiki-import-ui.d.ts',
+    'docs/shared-wiki-import.md', 'docs/shared-wiki-import_CN.md',
   ]) {
     assert.ok(files.some(file => file.path === expected), `package is missing ${expected}`);
   }
@@ -104,7 +134,104 @@ try {
   await writeFile(join(consumer, 'wiki-public-types.ts'), `
     import { MemoryVault, type WikiCatalogEntry, type WikiCitation, type WikiLintResult,
       type WikiPageDraft, type WikiPageMeta, type WikiPageType, type WikiPlan,
-      type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult } from 'memobranch';
+      type WikiQueryResult, type WikiRulesMeta, type WikiPreview, type RecallResult,
+      type TokenCounter, type ContextBudgetReport, type DirectoryImportPlan, type DirectoryImportOptions,
+      previewDirectoryImport, applyDirectoryImport, type WebImportPlan, type WebImportOptions, type WebPreviewOptions,
+      previewWebImport, applyWebImport, readWebImportPlan, serializeWebImportPlan,
+      type WikiJobStatus, type WikiJobInput, type WikiJobRunOptions,
+      type FactValidity, type MemoryValidityUpdate, type MemoriesAtOptions,
+      previewPdfImport, applyPdfImport, readPdfOriginal, readPdfPage, type PdfImportPlan, type PdfImportOptions, type PdfOriginal,
+      type PdfProcessedImportPlan, type PdfProcessorConfig, type PdfProcessingSelection, type PdfProcessedOriginal,
+      type WikiSnapshot, type WikiSnapshotOptions, type WikiDatedSnapshotOptions, type WikiMergeOptions, type WikiMergeOrigin,
+      type ExperienceTraceInput, type ExperiencePrepareOptions, type ExperiencePlan, type ExperienceSuite,
+      startWebServer, type WebOptions, type AvailabilityObserveOptions, type AvailabilityAtOptions,
+      SharedWikiReader, type SharedWikiReaderOptions, type SharedWikiSnapshotOptions, type SharedWikiView,
+      startCloudWikiServer, type CloudWikiServerOptions, type CloudWikiServerHandle,
+      SharedWikiImporter, type SharedWikiImportPrepareOptions, type SharedWikiImportPlan,
+      type WikiIntegrationOptions, type WikiIntegrationOrigin,
+      type ExperienceRunner, type ExperienceSelection, type ExperienceValidation } from 'memobranch';
+    export async function publicCloudWiki(options: CloudWikiServerOptions) {
+      const handle: CloudWikiServerHandle = await startCloudWikiServer(options);
+      await handle.stop(); return handle.url;
+    }
+    export const boundedCloudHost: CloudWikiServerOptions = { configPath: '/absolute/host/accounts.json', operator: {
+      id: 'native-operator', name: 'Native operator', permissions: ['admin'], scopes: ['project'], maxSensitivity: 'internal', tenantId: 'tenant',
+    } };
+    export async function publicSharedWiki(vault: MemoryVault, options: SharedWikiReaderOptions, selection: SharedWikiSnapshotOptions) {
+      const reader = new SharedWikiReader(vault, options);
+      const view: SharedWikiView = await reader.snapshot({ ...selection, signal: new AbortController().signal });
+      return { sources: await reader.catalog(), view, pin: view.source.commit };
+    }
+    export async function publicSharedImport(vault: MemoryVault, options: SharedWikiReaderOptions, selection: SharedWikiImportPrepareOptions) {
+      const importer = new SharedWikiImporter(vault, options);
+      const plan: SharedWikiImportPlan = (await importer.prepare(selection)).plan;
+      return importer.apply(plan, { confirm: true, signal: new AbortController().signal });
+    }
+    export async function publicWikiIntegration(vault: MemoryVault, options: WikiIntegrationOptions) {
+      const prepared = await vault.wikiIntegrationPrepare({ ...options, signal: new AbortController().signal });
+      const origin: WikiIntegrationOrigin | undefined = prepared.plan.integration;
+      return { prepared, origin, preview: await vault.wikiPreview(prepared.plan) };
+    }
+    export async function publicAvailability(vault: MemoryVault, observe: AvailabilityObserveOptions, query: AvailabilityAtOptions) {
+      const recorded = await vault.wikiObserveAvailability(observe);
+      const view = await vault.wikiAsKnownAt({ ...query, signal: new AbortController().signal });
+      return { recorded, view, coverage: view.coverage.mode };
+    }
+    export async function publicExperience(vault: MemoryVault, trace: ExperienceTraceInput,
+      options: ExperiencePrepareOptions, suite: ExperienceSuite, runner: ExperienceRunner) {
+      const selection: ExperienceSelection = { includeSensitive: false, includeSecret: false };
+      const webOptions: WebOptions = { port: 0, experienceRunner: runner, sharedWikiConfig: '/absolute/host/shared-wiki.json' };
+      const web = await startWebServer(vault.root, webOptions); await web.stop();
+      const recorded = await vault.experienceCapture(trace, { scope: 'project', sensitivity: 'internal' });
+      const plan: ExperiencePlan = await vault.experiencePrepare({ ...options, traceIds: [recorded.evidenceId] });
+      const result = await vault.experienceValidate(plan, suite, runner, { ...selection, timeoutMs: 30000, signal: new AbortController().signal });
+      const report: ExperienceValidation = result.report;
+      const exported = await vault.experienceExport(result.evidenceId, { ...selection, confirm: true });
+      return { report, skill: exported.files['SKILL.md'] };
+    }
+    export async function publicManualMerge(vault: MemoryVault, options: WikiMergeOptions) {
+      const prepared = await vault.wikiMergePrepare(options);
+      const origin: WikiMergeOrigin | undefined = prepared.plan.merge;
+      const preview = await vault.wikiPreview(prepared.plan);
+      const approve = (signal: AbortSignal) => vault.wikiApply(prepared.plan, { signal });
+      return { prepared, origin, preview, approve };
+    }
+    export async function publicRevisionView(vault: MemoryVault, commit: string) {
+      const options: WikiSnapshotOptions = { commit, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
+      const result: WikiSnapshot = await vault.wikiSnapshot(options);
+      return result;
+    }
+    export async function publicDatedRevisionView(vault: MemoryVault, at: string) {
+      const options: WikiDatedSnapshotOptions = { at, pageKeys: ['entity:atlas'], signal: new AbortController().signal };
+      const result: WikiSnapshot = await vault.wikiSnapshot(options);
+      // @ts-expect-error Commit and recorded time are mutually exclusive public inputs.
+      const ambiguous: WikiSnapshotOptions | WikiDatedSnapshotOptions = { commit: 'a'.repeat(40), at, pageKeys: ['entity:atlas'] };
+      return { result, selection: result.selection, ambiguous };
+    }
+    export async function publicPdfWorkflow(vault: MemoryVault, path: string) {
+      const plan: PdfImportPlan = await previewPdfImport(path);
+      const options: PdfImportOptions = { scope: 'project', signal: new AbortController().signal };
+      const saved = await applyPdfImport(vault, plan, options);
+      const original: Buffer = await readPdfOriginal(vault, saved.evidenceId);
+      return { saved, original };
+    }
+    export async function publicProcessedPdfWorkflow(vault: MemoryVault, path: string, processor: PdfProcessorConfig) {
+      const processing: PdfProcessingSelection = { pages: [2], languages: ['eng'] };
+      const plan: PdfImportPlan = await previewPdfImport(path, { processor, processing });
+      if (plan.version !== 2) throw new Error('Missing processed plan');
+      const processed: PdfProcessedImportPlan = plan;
+      const saved = await applyPdfImport(vault, processed, { processor, scope: 'project' });
+      const page: Buffer = await readPdfPage(vault, saved.evidenceId, 2);
+      const original: PdfOriginal | undefined = undefined;
+      const assertOriginal = (value: PdfProcessedOriginal) => value.processing.pages[0]?.sha256;
+      return { page, original, assertOriginal };
+    }
+    export async function publicEffectiveTime(vault: MemoryVault, id: string) {
+      const interval: FactValidity = { validFrom: '2026-01-01T00:00:00Z' };
+      const change: MemoryValidityUpdate = { validFrom: interval.validFrom!, validUntil: null, expectedRevision: 1 };
+      const options: MemoriesAtOptions = { key: 'Atlas', includeUnknown: false, limit: 10 };
+      return { updated: await vault.setMemoryValidity(id, change), view: await vault.memoriesAt(change.validFrom!, options) };
+    }
     export async function publicWikiWorkflow(vault: MemoryVault, evidenceId: string) {
       const prepared = await vault.wikiIngest({ evidenceIds: [evidenceId] });
       const plan: WikiPlan | null = prepared.plan;
@@ -124,6 +251,30 @@ try {
         ? { id: catalog[0].id, pageType: catalog[0].pageType } : undefined;
       return { plan, preview, recalled, catalog, citations, pageType, lint, rules, page };
     }
+    export async function publicKnowledgeWorkflow(vault: MemoryVault, directory: string) {
+      const counter: TokenCounter = { name: 'fixture-bytes', estimated: true, count: text => Buffer.byteLength(text) };
+      const packed = await vault.contextDetailed('Atlas', { maxTokens: 100, tokenCounter: counter });
+      const budget: ContextBudgetReport = packed.budget;
+      const preview: DirectoryImportPlan = await previewDirectoryImport(directory);
+      const options: DirectoryImportOptions = { signal: new AbortController().signal, scope: 'project' };
+      const imported = await applyDirectoryImport(vault, preview, options);
+      return { budget, imported, timeline: await vault.sourceTimeline('fixture:types') };
+    }
+    export async function publicWebWorkflow(vault: MemoryVault, urls: string[], path: string) {
+      const previewOptions: WebPreviewOptions = { timeoutMs: 10000, signal: new AbortController().signal };
+      const plan: WebImportPlan = await previewWebImport(urls, previewOptions);
+      const options: WebImportOptions = { ...previewOptions, scope: 'project', onProgress: async progress => { void progress.result.evidenceId; } };
+      return { result: await applyWebImport(vault, plan, options), saved: await readWebImportPlan(path), json: serializeWebImportPlan(plan) };
+    }
+    export async function publicJobWorkflow(vault: MemoryVault, evidenceId: string) {
+      const input: WikiJobInput = { evidenceIds: [evidenceId], maxPages: 20 };
+      const job: WikiJobStatus = await vault.wikiEnqueue(input);
+      const options: WikiJobRunOptions = { id: job.id, signal: new AbortController().signal, timeoutMs: 1000 };
+      return { run: await vault.wikiRunJob(options), state: await vault.wikiJob(job.id), jobs: await vault.wikiJobs(),
+        plan: await vault.wikiJobPlan(job.id), preview: await vault.wikiPreviewJob(job.id), review: await vault.wikiReviewJob(job.id),
+        applied: await vault.wikiApplyJob(job.id, (await vault.wikiReviewJob(job.id)).plan.proof), cancelled: await vault.wikiCancelJob(job.id),
+        retried: await vault.wikiRetryJob(job.id), removed: await vault.wikiRemoveJob(job.id) };
+    }
   `);
   await exec(process.execPath, [join(consumer, 'node_modules/typescript/bin/tsc'),
     '--ignoreConfig', '--noEmit', '--strict', '--types', 'node', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
@@ -139,6 +290,83 @@ try {
     cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
   });
   process.stdout.write(adoption.stdout);
+  await writeFile(join(consumer, 'verify-installed-knowledge.mjs'), await readFile(join(root, 'scripts/verify-installed-knowledge.mjs')));
+  const knowledge = await exec(process.execPath, ['verify-installed-knowledge.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(knowledge.stdout);
+  await writeFile(join(consumer, 'verify-installed-web-import.mjs'), await readFile(join(root, 'scripts/verify-installed-web-import.mjs')));
+  const webImport = await exec(process.execPath, ['verify-installed-web-import.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(webImport.stdout);
+  await writeFile(join(consumer, 'verify-installed-wiki-jobs.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki-jobs.mjs')));
+  const wikiJobs = await exec(process.execPath, ['verify-installed-wiki-jobs.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(wikiJobs.stdout);
+  await writeFile(join(consumer, 'verify-installed-pdf.mjs'), await readFile(join(root, 'scripts/verify-installed-pdf.mjs')));
+  await writeFile(join(consumer, 'pdf-fixture.base64'), await readFile(join(root, 'test/fixtures/pdf-text.base64')));
+  const pdf = await exec(process.execPath, ['verify-installed-pdf.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(pdf.stdout);
+  await writeFile(join(consumer, 'verify-installed-pdf-processing.mjs'), await readFile(join(root, 'scripts/verify-installed-pdf-processing.mjs')));
+  const processedPdf = await exec(process.execPath, ['verify-installed-pdf-processing.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(processedPdf.stdout);
+  await writeFile(join(consumer, 'verify-installed-snapshot.mjs'), await readFile(join(root, 'scripts/verify-installed-snapshot.mjs')));
+  const snapshot = await exec(process.execPath, ['verify-installed-snapshot.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(snapshot.stdout);
+  await writeFile(join(consumer, 'verify-installed-merge.mjs'), await readFile(join(root, 'scripts/verify-installed-merge.mjs')));
+  const merge = await exec(process.execPath, ['verify-installed-merge.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(merge.stdout);
+  await writeFile(join(consumer, 'verify-installed-web-dated-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-web-dated-wiki.mjs')));
+  await writeFile(join(consumer, 'verify-installed-dated-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-dated-wiki.mjs')));
+  const datedWiki = await exec(process.execPath, ['verify-installed-dated-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(datedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-experience.mjs'), await readFile(join(root, 'scripts/verify-installed-experience.mjs')));
+  const experience = await exec(process.execPath, ['verify-installed-experience.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(experience.stdout);
+  await writeFile(join(consumer, 'verify-installed-availability.mjs'), await readFile(join(root, 'scripts/verify-installed-availability.mjs')));
+  const availability = await exec(process.execPath, ['verify-installed-availability.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(availability.stdout);
+  await writeFile(join(consumer, 'verify-installed-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-shared-wiki.mjs')));
+  const sharedWiki = await exec(process.execPath, ['verify-installed-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(sharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-cloud-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-cloud-shared-wiki.mjs')));
+  const cloudSharedWiki = await exec(process.execPath, ['verify-installed-cloud-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(cloudSharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-cloud-host.mjs'), await readFile(join(root, 'scripts/verify-installed-cloud-host.mjs')));
+  const cloudHost = await exec(process.execPath, ['verify-installed-cloud-host.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(cloudHost.stdout);
+  await writeFile(join(consumer, 'verify-installed-git-shared-wiki.mjs'), await readFile(join(root, 'scripts/verify-installed-git-shared-wiki.mjs')));
+  const gitSharedWiki = await exec(process.execPath, ['verify-installed-git-shared-wiki.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(gitSharedWiki.stdout);
+  await writeFile(join(consumer, 'verify-installed-wiki-import.mjs'), await readFile(join(root, 'scripts/verify-installed-wiki-import.mjs')));
+  const wikiImport = await exec(process.execPath, ['verify-installed-wiki-import.mjs'], {
+    cwd: consumer, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000,
+  });
+  process.stdout.write(wikiImport.stdout);
   console.log(`Package verification passed (${files.length} packed entries).`);
 } finally {
   await rm(temporary, { recursive: true, force: true });

@@ -1,0 +1,9 @@
+# Design
+
+Expose existing `wikiSnapshot` and `wikiMergePrepare` on the fixed local vault only. Strict JSON schemas do not accept filesystem roots, credentials, signals or auto-apply options. Keep each core operation's own snapshot ownership: wrapping it in another HTTP read lock would move cleanup after its final lifecycle check. Enforce the existing 16 MiB review budget on complete revision/preparation responses and on resubmittable plan envelopes.
+
+The UI explicitly reads the old commit, then that result's authority HEAD through the same revision reader. Refuse mismatched heads or current revisions and ask for a reload. The editor uses the current authored portion, not the reserved generated-links suffix. Preparation re-reads both versions and returns a signed proposal; display its fresh comparison and separately revalidate its full preview before showing approval. Content or selection edits discard old approval. The read-only identity may compare; preparing additionally needs write and applying separately needs review.
+
+Use the existing dark knowledge-workbench typography and cobalt/violet/teal tokens, a three-step strip and responsive full-text panels. Render source text as text, never HTML. Keep inputs and plan only in this page's memory; session/navigation cleanup aborts owned requests and clears text. Disable editing during approval and report uncertain outcomes without automatic retries. A successful original plan is safe to retry but a newly prepared plan is not the same operation. Expiry, withdrawal and stale-input checks remain core responsibilities.
+
+Use synthetic vaults and DOM event tests, then a real local browser review without real private data or external models. Retain regressions, test both Git defaults and installed Node20/22 JavaScript, and independently review committed candidates.

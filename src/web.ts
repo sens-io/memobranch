@@ -1,18 +1,21 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { withOperation } from './operation.js';
 import { authorize, type Permission } from './policy.js';
 import { settingsSchema } from './settings.js';
-import { pendingTransactionCount } from './transaction.js';
 import { memoryKinds, scopes, sensitivities } from './types.js';
-import { withFileLock } from './utils.js';
 import { MemoryVault, type MemoryVaultOptions } from './vault.js';
 import { webHtml, webCss, webScript } from './web-ui.js';
+import { mergeOptionsSchema } from './wiki-merge.js';
+import { wikiIntegrationToolSchema, wikiSnapshotToolSchema } from './wiki-tool.js';
+import { experiencePlanSchema, experienceSuiteSchema, type ExperienceRunner } from './experience.js';
+import { experienceCaptureToolSchema, experiencePrepareToolSchema, experienceExportToolSchema } from './experience-tool.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
+import { SharedWikiReader, sharedWikiSnapshotSchema } from './shared-wiki.js';
+import { SharedWikiImporter, sharedWikiImportApplySchema, sharedWikiImportPrepareSchema } from './shared-wiki-import.js';
 
 const text = z.string().trim().min(1).max(100_000);
 // HTTP bytes bound allocation; the core owns configurable content characters.
@@ -22,6 +25,8 @@ const empty = z.object({}).strict();
 const classified = { scope: z.enum(scopes), sensitivity: z.enum(sensitivities) };
 const confirmed = { confirm: z.literal(true) };
 const reason = { id, reason: text, ...confirmed };
+const jobId = z.string().regex(/^wj-[a-f0-9]{32}$/);
+const jobReference = z.object({ id: jobId }).strict();
 const smallRequestBytes = 1_048_576;
 const reviewRequestBytes = 16 * smallRequestBytes;
 
@@ -36,12 +41,38 @@ function route<T>(permission: Permission, schema: z.ZodType<T>, action: (vault: 
 }
 
 const routes: Record<string, Route> = {
+  'experience-capture': route('write', experienceCaptureToolSchema, (vault, { trace, scope, sensitivity }) => vault.experienceCapture(trace, {
+    ...(scope === undefined ? {} : { scope }), ...(sensitivity === undefined ? {} : { sensitivity }),
+  })),
+  'experience-prepare': route('write', experiencePrepareToolSchema, (vault, { proposal }) => vault.experiencePrepare(proposal)),
+  'experience-export': route('review', experienceExportToolSchema, (vault, { validationId, ...selection }) => vault.experienceExport(validationId, selection)),
+  'experience-records': route('read', z.object({ kind: z.enum(['trace', 'validation']),
+    offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(20),
+    includeSensitive: z.boolean().default(false), includeSecret: z.boolean().default(false),
+  }).strict(), async (vault, { kind, offset, limit, ...selection }) => {
+    const identity = JSON.stringify(vault.principal); let tenantId = '';
+    const result = await settledRead(vault, async () => {
+      tenantId = (await vault.config()).tenantId;
+      return vault.listRecords({ collection: 'evidence', offset, limit, selection,
+        query: kind === 'trace' ? 'MEMOBRANCH_EXPERIENCE_TRACE_V1' : 'MEMOBRANCH_EXPERIENCE_VALIDATION_V1' });
+    });
+    authorize(vault.principal, 'read', { tenantId });
+    if (JSON.stringify(vault.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Experience listing authority changed');
+    for (const item of result.items) authorize(vault.principal, 'read', { tenantId,
+      scope: item.scope as typeof scopes[number], sensitivity: item.sensitivity as typeof sensitivities[number] });
+    return result;
+  }),
   session: route('read', empty, async vault => ({ principal: vault.principal, name: (await vault.settings()).values.name })),
   records: route('read', z.object({ collection: z.enum(['evidence', 'candidates', 'memories']),
     offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(100).default(30),
     query: z.string().max(200).default(''), status: z.string().max(30).default(''),
   }).strict(), (vault, data) => vault.listRecords(data)),
   get: route('read', z.object({ id }).strict(), (vault, data) => vault.get(data.id)),
+  'memories-at': route('read', z.object({ at: z.string().min(1).max(64), key: z.string().min(1).max(512).optional(),
+    includeUnknown: z.boolean().optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(),
+  }).strict(), (vault, { at, ...options }) => vault.memoriesAt(at, options)),
+  'memory-validity': route('review', z.object({ id, validFrom: z.string().max(64).nullable(), validUntil: z.string().max(64).nullable(),
+    expectedRevision: z.number().int().min(1), ...confirmed }).strict(), (vault, { id, confirm: _confirm, ...options }) => vault.setMemoryValidity(id, options)),
   capture: route('write', z.object({ content, ...classified }).strict(), (vault, data) => vault.capture({ ...data, extract: false })),
   propose: route('write', z.object({ key: id, statement: content, kind: z.enum(memoryKinds), ...classified,
     confidence: z.number().min(0).max(1), explicit: z.boolean(), evidence: z.array(id).max(100),
@@ -53,6 +84,22 @@ const routes: Record<string, Route> = {
   'settings-save': route('admin', z.object({ values: settingsSchema, revision: z.string().regex(/^[a-f0-9]{64}$/), ...confirmed }).strict(),
     (vault, data) => vault.updateSettings(data.values, data.revision)),
   catalog: route('read', empty, vault => vault.wikiCatalog()),
+  'wiki-snapshot': route('read', wikiSnapshotToolSchema, (vault, data) => vault.wikiSnapshot(data)),
+  'wiki-observe': route('write', availabilityObserveSchema, (vault, data) => vault.wikiObserveAvailability(data)),
+  'wiki-as-known-at': route('read', availabilityAtSchema, (vault, data) => vault.wikiAsKnownAt(data)),
+  'merge-prepare': route('write', mergeOptionsSchema.omit({ signal: true }), (vault, data) => vault.wikiMergePrepare(data)),
+  'integration-prepare': route('write', wikiIntegrationToolSchema, (vault, data) => vault.wikiIntegrationPrepare(data)),
+  'jobs-list': route('read', empty, vault => vault.wikiJobs()),
+  'jobs-show': route('read', jobReference, (vault, data) => vault.wikiJob(data.id)),
+  'jobs-enqueue': route('write', z.object({ evidenceIds: z.array(z.string().regex(/^ev-[a-f0-9]{12,64}$/)).min(1).max(40),
+    maxPages: z.number().int().min(1).max(40).optional(), ...confirmed }).strict(),
+    (vault, data) => vault.wikiEnqueue({ evidenceIds: data.evidenceIds, ...(data.maxPages === undefined ? {} : { maxPages: data.maxPages }) })),
+  'jobs-cancel': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiCancelJob(data.id)),
+  'jobs-retry': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiRetryJob(data.id)),
+  'jobs-remove': route('write', z.object({ id: jobId, ...confirmed }).strict(), (vault, data) => vault.wikiRemoveJob(data.id)),
+  'jobs-review': route('read', jobReference, (vault, data) => vault.wikiReviewJob(data.id)),
+  'jobs-apply': route('review', z.object({ id: jobId, proof: z.string().regex(/^[a-f0-9]{64}$/), ...confirmed }).strict(),
+    (vault, data) => vault.wikiApplyJob(data.id, data.proof)),
   rules: route('read', empty, vault => vault.wikiRules()),
   'rules-save': route('maintain', z.object({ purpose: text, instructions: text, ...classified,
     expectedRevision: z.number().int().min(0), ...confirmed }).strict(),
@@ -81,14 +128,8 @@ const routes: Record<string, Route> = {
 const snapshotRoutes = new Set(['session', 'records', 'get', 'settings', 'catalog', 'rules',
   'ingest', 'query', 'file', 'lint', 'history', 'doctor', 'reindex', 'remote-status']);
 
-async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false): Promise<T> {
-  return withFileLock(join(vault.root, '.amem', 'write.lock'), async () => {
-    if (!diagnostics && (await pendingTransactionCount(vault.root) > 0
-        || existsSync(join(vault.root, '.amem', 'sync-intent.json')))) {
-      throw new AgentMemoryError('TRANSACTION_RECOVERY_FAILED', 'Recover pending transactions before reading canonical data');
-    }
-    return action();
-  });
+async function settledRead<T>(vault: MemoryVault, action: () => Promise<T>, diagnostics = false, permission: Permission = 'read'): Promise<T> {
+  return vault.withReadSnapshot(action, permission, diagnostics);
 }
 
 export interface WebHandle {
@@ -98,17 +139,76 @@ export interface WebHandle {
 }
 
 /** Local single-operator adapter. Credentials are never accepted through request bodies. */
-export async function startWebServer(root: string, options: MemoryVaultOptions & { port?: number } = {}): Promise<WebHandle> {
+export interface WebOptions extends MemoryVaultOptions { port?: number; experienceRunner?: ExperienceRunner; sharedWikiConfig?: string }
+export async function startWebServer(root: string, options: WebOptions = {}): Promise<WebHandle> {
   const port = options.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new AgentMemoryError('CONFIG_INVALID', 'Web port must be between 0 and 65535');
-  const { port: _port, ...vaultOptions } = options;
+  const { port: _port, experienceRunner, sharedWikiConfig: configuredSharedWiki, ...vaultOptions } = options;
+  const sharedWikiConfig = configuredSharedWiki === undefined ? process.env.AMEM_SHARED_WIKI_CONFIG ?? '' : configuredSharedWiki;
+  if (typeof sharedWikiConfig !== 'string') throw new AgentMemoryError('CONFIG_INVALID', 'Shared Wiki configuration requires a host-owned path');
+  if (experienceRunner !== undefined && typeof experienceRunner !== 'function') throw new AgentMemoryError('CONFIG_INVALID', 'Experience evaluator must be trusted application code');
   const initial = new MemoryVault(root, vaultOptions);
+  if (sharedWikiConfig) new SharedWikiReader(initial, { configPath: sharedWikiConfig }); // Validate host path, not grants; no file read yet.
   await settledRead(initial, () => initial.settings(), true); // Recovery diagnostics remain reachable.
   const logo = await readFile(new URL('../assets/logo.png', import.meta.url));
   const token = randomBytes(32).toString('hex');
   const tokenBytes = Buffer.from(`Bearer ${token}`);
   const active = new Set<AbortController>();
   const pending = new Set<Promise<void>>();
+  const workers = new Set<AbortController>();
+  const operations: Record<string, Route> = { ...routes,
+    'shared-catalog': route('read', empty, async vault => {
+      if (sharedWikiConfig) return { configured: true, ...await new SharedWikiReader(vault, { configPath: sharedWikiConfig }).catalog() };
+      const identity = JSON.stringify(vault.principal), config = await settledRead(vault, () => vault.config());
+      authorize(vault.principal, 'read', { tenantId: config.tenantId });
+      if (JSON.stringify(vault.principal) !== identity) throw new AgentMemoryError('AUTHORIZATION_DENIED', 'Shared reader authority changed');
+      return { configured: false, sources: [], warnings: ['Shared Wiki sources are not configured by the host.'] };
+    }),
+    'shared-snapshot': route('read', sharedWikiSnapshotSchema, async (vault, input) => {
+      if (!sharedWikiConfig) {
+        await settledRead(vault, () => vault.config());
+        throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      }
+      return new SharedWikiReader(vault, { configPath: sharedWikiConfig }).snapshot(input);
+    }),
+    'shared-import-prepare': route('write', sharedWikiImportPrepareSchema, async (vault, input) => {
+      if (!sharedWikiConfig) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      return new SharedWikiImporter(vault, { configPath: sharedWikiConfig }).prepare(input);
+    }),
+    'shared-import-apply': route('review', sharedWikiImportApplySchema, async (vault, input) => {
+      if (!sharedWikiConfig) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      return new SharedWikiImporter(vault, { configPath: sharedWikiConfig }).apply(input.plan, { confirm: input.confirm });
+    }),
+    'experience-status': route('read', empty, async () => ({ evaluatorAvailable: typeof experienceRunner === 'function' })),
+    'experience-validate': route('review', z.object({ plan: experiencePlanSchema, suite: experienceSuiteSchema,
+      includeSensitive: z.boolean().optional(), includeSecret: z.boolean().optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(), ...confirmed,
+    }).strict(), (vault, { plan, suite, confirm: _confirm, timeoutMs, ...selection }) => {
+      if (!experienceRunner) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'No trusted experience evaluator is configured');
+      return vault.experienceValidate(plan, suite, experienceRunner, { ...selection, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    }),
+    'jobs-run': route('write', z.object({ id: jobId, ...confirmed }).strict(), async (vault, data) => {
+      if (stopping || workers.size) throw new AgentMemoryError('LOCK_TIMEOUT', 'A Web attempt is active or stopping');
+      // Reserve before awaiting, including preflight, so simultaneous requests
+      // cannot start unbounded background work. The core still owns the claim.
+      const controller = new AbortController();
+      workers.add(controller);
+      let launched = false;
+      try {
+        const state = await vault.wikiJob(data.id);
+        if (state.status !== 'queued') throw new AgentMemoryError('VALIDATION_FAILED', 'Only queued Wiki jobs can be started');
+        if (stopping || controller.signal.aborted) throw new AgentMemoryError('OPERATION_CANCELLED', 'Web server is stopping');
+        // A fresh context deliberately does not inherit the HTTP disconnect
+        // signal. Persisted status, not this acknowledgement, is authoritative.
+        const task = withOperation(controller.signal, () => vault.wikiRunJob({ id: data.id, signal: controller.signal }))
+          .then(() => {}, () => {})
+          .finally(() => { workers.delete(controller); pending.delete(task); });
+        pending.add(task);
+        launched = true;
+        return { id: data.id, accepted: true };
+      } finally { if (!launched) workers.delete(controller); }
+    }),
+  };
   let authority = '';
   let stopping = false;
   const server = createServer((req, res) => {
@@ -147,7 +247,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     }
     if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') return send(res, 415, { error: { code: 'VALIDATION_FAILED', message: 'JSON required' } });
     const name = path.slice(5);
-    const operation = Object.hasOwn(routes, name) ? routes[name] : undefined;
+    const operation = Object.hasOwn(operations, name) ? operations[name] : undefined;
     if (!operation) return send(res, 404, { error: { code: 'NOT_FOUND', message: 'Route not found' } });
     if (active.size >= 8) return send(res, 429, { error: { code: 'BUSY', message: 'Too many active operations' } });
     const controller = new AbortController();
@@ -159,7 +259,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     try {
       const chunks: Buffer[] = [];
       let size = 0;
-      const maximum = name === 'apply' || name === 'file' || name === 'preview' ? reviewRequestBytes : smallRequestBytes;
+      const maximum = ['apply', 'file', 'preview', 'experience-validate', 'shared-import-apply', 'integration-prepare'].includes(name) ? reviewRequestBytes : smallRequestBytes;
       for await (const chunk of req) {
         size += Buffer.byteLength(chunk);
         if (size > maximum) {
@@ -174,18 +274,22 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       const result = await withOperation(controller.signal, () => {
         const vault = new MemoryVault(root, vaultOptions);
         const action = () => operation.run(vault, input);
-        return snapshotRoutes.has(name) ? settledRead(vault, action, name === 'doctor' || name === 'session') : action();
+        return snapshotRoutes.has(name) ? settledRead(vault, action, name === 'doctor' || name === 'session', operation.permission) : action();
       });
       // A successful preview must be resubmittable through the same adapter.
       // Fail closed before showing a plan that can never pass its approval route.
-      if (name === 'ingest' || name === 'file' || name === 'lint' || name === 'correct') {
+      if (['ingest', 'file', 'lint', 'correct', 'merge-prepare', 'shared-import-prepare', 'integration-prepare'].includes(name)) {
         const preview = result as { plan?: unknown; plans?: unknown[] };
         for (const plan of preview.plan ? [preview.plan] : preview.plans ?? []) {
           assertReviewBytes({ plan, confirm: true });
         }
       }
       if (name === 'preview') assertReviewBytes(result);
+      if (name === 'jobs-review') assertReviewBytes(result);
+      if (['wiki-snapshot', 'merge-prepare', 'wiki-as-known-at', 'shared-snapshot', 'shared-import-prepare', 'integration-prepare'].includes(name)) assertReviewBytes({ result });
       if (name === 'query') assertReviewBytes({ result, title: '界'.repeat(300), pageType: 'comparison' });
+      if (name === 'experience-prepare') assertReviewBytes({ plan: result, suite: { name: '', cases: [] }, confirm: true });
+      if (name === 'experience-export' || name === 'experience-validate') assertReviewBytes(result);
       send(res, 200, { result });
     } catch (error) {
       const normalized = toAgentMemoryError(error);
@@ -194,6 +298,9 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
       send(res, status, { error: { code: normalized.code,
         message: normalized.code === 'VALIDATION_FAILED' ? 'Invalid input or stale state; reload and check the form' : normalized.code,
         ...(normalized.code === 'OPERATION_CANCELLED' && normalized.safeDetails?.committed ? { committed: normalized.safeDetails.committed } : {}),
+        ...(name === 'experience-validate' ? safeCompletedValidation(normalized.safeDetails?.completedValidation) : {}),
+        ...(name === 'wiki-observe' ? safeCompletedAvailability(normalized.safeDetails?.completedAvailability) : {}),
+        ...(name === 'shared-import-apply' ? safeCompletedImport(normalized.safeDetails?.completedImport) : {}),
       } });
     } finally {
       clearTimeout(timeout);
@@ -217,6 +324,7 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     stopped ??= (async () => {
       stopping = true;
       for (const controller of active) controller.abort();
+      for (const controller of workers) controller.abort();
       const closed = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       // Close unfinished request bodies too, then await safe vault transaction cleanup.
       server.closeAllConnections();
@@ -225,6 +333,22 @@ export async function startWebServer(root: string, options: MemoryVaultOptions &
     })();
     return stopped;
   } };
+}
+
+function safeCompletedValidation(value: unknown): { completedValidation?: { evidenceId: string; commit: string | null } } {
+  const parsed = z.object({ evidenceId: z.string().regex(/^ev-[a-f0-9]{12}$/), commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable() }).strict().safeParse(value);
+  return parsed.success ? { completedValidation: parsed.data } : {};
+}
+
+function safeCompletedAvailability(value: unknown): { completedAvailability?: { evidenceId: string; commit: string | null } } {
+  const result = safeCompletedValidation(value).completedValidation;
+  return result ? { completedAvailability: result } : {};
+}
+
+function safeCompletedImport(value: unknown): { completedImport?: { evidenceId: string; commit: string | null; duplicate: boolean } } {
+  const parsed = z.object({ evidenceId: z.string().regex(/^ev-[a-f0-9]{12,64}$/),
+    commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable(), duplicate: z.boolean() }).strict().safeParse(value);
+  return parsed.success ? { completedImport: parsed.data } : {};
 }
 
 function assertReviewBytes(value: unknown): void {

@@ -1,0 +1,28 @@
+# Optional local PDF OCR and page images
+
+## Why
+The accepted text-layer PDF importer explicitly refuses image-only documents and
+does not retain rendered pages. Roadmap batch 5 adds an optional local workflow
+without changing the default importer or sending documents to a model service.
+
+## What changes
+- Add explicit page selection for bounded local page rendering and optional OCR.
+- Preserve the exact original PDF, selected page images, recognized text and
+  processor/model-data provenance in immutable evidence under existing encryption.
+- Show extraction coverage and limitations; a rendered page or OCR result is not
+  independent verification, table reconstruction or factual understanding.
+- Add local library/CLI controls, public declarations, installed consumers and
+  bilingual instructions. No server-side request-selected file paths or uploads.
+
+## Boundaries
+No automatic OCR, dependency/model download, remote vision/model request, password
+handling, automatic Wiki approval, cloud grant change, push, publication or
+deployment. The host explicitly provisions local processors and language data.
+All named verification and independent-review tasks below remain required.
+
+Status: the [local evidence/save/read/CLI workflow](../../../docs/pdf-processing-import-verification-2026-10-29.md)
+is implemented under verification, with related runtime checks and real synthetic
+native save/read evidence. [Fresh combined verification](../../../docs/pdf-processing-combined-verification-2026-10-29.md)
+records full/package/Linux checks and source reviews. Windows ownership, macOS
+minimum-runtime waiter failures and final acceptance remain open; this directory
+does not claim batch acceptance.

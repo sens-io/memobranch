@@ -9,7 +9,7 @@ import { apply, inject, name, type Config } from '../src/deepseek-harness.js';
 import { MemoryVault } from '../src/vault.js';
 
 const roots: string[] = [];
-const environmentKeys = ['AMEM_VAULT', 'AMEM_ACTOR_ID', 'AMEM_ACTOR_NAME', 'AMEM_PERMISSIONS', 'AMEM_ALLOWED_SCOPES', 'AMEM_MAX_SENSITIVITY', 'AMEM_TENANT_ID'] as const;
+const environmentKeys = ['AMEM_VAULT', 'AMEM_ACTOR_ID', 'AMEM_ACTOR_NAME', 'AMEM_PERMISSIONS', 'AMEM_ALLOWED_SCOPES', 'AMEM_MAX_SENSITIVITY', 'AMEM_TENANT_ID', 'AMEM_SHARED_WIKI_CONFIG'] as const;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -39,11 +39,12 @@ test('plugin exposes only principal-granted categories and executes real vault c
     const disposers: Array<() => unknown> = [];
     const tools = loadPlugin(defaultConfig(''), disposers);
     assert.deepEqual([...tools.keys()].sort(), [
-      'memory_capture', 'memory_config', 'memory_consolidate', 'memory_context', 'memory_doctor',
+      'memory_at', 'memory_capture', 'memory_config', 'memory_consolidate', 'memory_context', 'memory_doctor',
+      'memory_experience_capture', 'memory_experience_export', 'memory_experience_prepare',
       'memory_explain', 'memory_forget', 'memory_get', 'memory_history', 'memory_maintenance', 'memory_policy',
-      'memory_propose', 'memory_recall', 'memory_recover', 'memory_reindex', 'memory_review', 'memory_search', 'memory_version',
-      'memory_wiki_apply', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_lint',
-      'memory_wiki_migrate', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_revoke', 'memory_wiki_rules', 'memory_wiki_set_rules',
+      'memory_propose', 'memory_recall', 'memory_recover', 'memory_reindex', 'memory_review', 'memory_search', 'memory_source_timeline', 'memory_version',
+      'memory_wiki_apply', 'memory_wiki_as_known_at', 'memory_wiki_catalog', 'memory_wiki_correct', 'memory_wiki_file', 'memory_wiki_ingest', 'memory_wiki_integration_prepare', 'memory_wiki_lint',
+      'memory_wiki_merge_prepare', 'memory_wiki_migrate', 'memory_wiki_observe', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_revoke', 'memory_wiki_rules', 'memory_wiki_set_rules', 'memory_wiki_snapshot',
     ]);
     assert.equal(tools.has('memory_erase'), false);
     assert.equal(tools.has('memory_remote_sync'), false);
@@ -86,8 +87,8 @@ test('read-only visibility, argument bounds, and pre-dispatch cancellation fail 
   }, async () => {
     const tools = loadPlugin(defaultConfig(root));
     assert.deepEqual([...tools.keys()].sort(), [
-      'memory_config', 'memory_context', 'memory_explain', 'memory_get', 'memory_history', 'memory_policy', 'memory_recall', 'memory_search', 'memory_version',
-      'memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules',
+      'memory_at', 'memory_config', 'memory_context', 'memory_explain', 'memory_get', 'memory_history', 'memory_policy', 'memory_recall', 'memory_search', 'memory_source_timeline', 'memory_version',
+      'memory_wiki_as_known_at', 'memory_wiki_catalog', 'memory_wiki_preview', 'memory_wiki_query', 'memory_wiki_rules', 'memory_wiki_snapshot',
     ]);
     await assert.rejects(execute(tools, 'memory_search', { query: 'x', limit: 51 }), /VALIDATION_FAILED/);
     const controller = new AbortController();

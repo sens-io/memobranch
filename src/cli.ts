@@ -1,15 +1,28 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { resolve } from 'node:path';
-import { toAgentMemoryError } from './errors.js';
+import { AgentMemoryError, toAgentMemoryError } from './errors.js';
 import { MaintenanceService } from './maintenance.js';
-import { authorize, localAdminPrincipal, principalFromEnv } from './policy.js';
+import { authorize, localAdminPrincipal, principalFromEnv, type Principal } from './policy.js';
 import { memoryKinds, scopes, sensitivities, type Actor, type MemoryKind, type Scope, type Sensitivity } from './types.js';
 import { MemoryVault } from './vault.js';
 import { startWebServer } from './web.js';
 
 import { VERSION } from './version.js';
 import { runIntegrationSetup } from './integration-cli.js';
+import { applyDirectoryImport, previewDirectoryImport, readDirectoryImportPlan, readImportPreview, serializeDirectoryImportPlan } from './directory-import.js';
+import { withOperation } from './operation.js';
+import { applyWebImport, previewWebImport, readWebImportPlan, serializeWebImportPlan } from './web-import.js';
+import { applyPdfImport, previewPdfImport, readPdfImportPlan, serializePdfImportPlan, readPdfOriginal, readPdfPage } from './pdf-import.js';
+import { pdfProcessorConfigSchema, pdfProcessingSelectionSchema } from './pdf-processing-schema.js';
+import { mergeOptionsSchema } from './wiki-merge.js';
+import { availabilityAtSchema, availabilityObserveSchema } from './knowledge-availability.js';
+import { SharedWikiReader } from './shared-wiki.js';
+import { SharedWikiImporter, sharedWikiImportPrepareSchema } from './shared-wiki-import.js';
+import { wikiIntegrationToolSchema, wikiToolResult } from './wiki-tool.js';
+import { createCloudWikiCredential, cloudWikiAccountTemplate, inspectCloudWikiAccounts } from './shared-wiki-cloud-host.js';
+import { startCloudWikiServer, type CloudWikiServerHandle } from './shared-wiki-cloud-server.js';
 
 interface ParsedArgs {
   command: string;
@@ -33,6 +46,89 @@ async function main(): Promise<void> {
   const vault = new MemoryVault(root, { principal });
 
   switch (parsed.command) {
+    case 'cloud':
+      await cloudCommand(principal, parsed);
+      return;
+    case 'memory': {
+      const action = requiredPositional(parsed, 0, 'at or validity');
+      if (action === 'at') {
+        const key = flagString(parsed, 'key');
+        print(await vault.memoriesAt(requiredPositional(parsed, 1, 'ISO timestamp'), {
+          ...(key === undefined ? {} : { key }), includeUnknown: flagBoolean(parsed, 'include-unknown'),
+          includeSensitive: flagBoolean(parsed, 'include-sensitive'), includeSecret: flagBoolean(parsed, 'include-secret'),
+          offset: numberFlag(parsed, 'offset', 0), limit: numberFlag(parsed, 'limit', 30),
+        }));
+      } else if (action === 'validity') {
+        if (!flagBoolean(parsed, 'confirm')) throw new Error('Time annotation requires --confirm');
+        const from = requiredFlag(parsed, 'from'), until = requiredFlag(parsed, 'until');
+        print(await vault.setMemoryValidity(requiredPositional(parsed, 1, 'memory ID'), {
+          validFrom: from === 'unknown' ? null : from, validUntil: until === 'unknown' ? null : until,
+          expectedRevision: numberFlag(parsed, 'expected-revision', 0),
+        }));
+      } else throw new Error('Memory action must be at or validity');
+      return;
+    }
+    case 'import': {
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const action = requiredPositional(parsed, 0, 'preview or apply');
+          if (action === 'preview') {
+            process.stdout.write(serializeDirectoryImportPlan(await previewDirectoryImport(requiredPositional(parsed, 1, 'source directory'))));
+          } else if (action === 'apply') {
+            const plan = await readDirectoryImportPlan(requiredFlag(parsed, 'plan'));
+            const result = await applyDirectoryImport(vault, plan, {
+              scope: enumFlag(parsed, 'scope', scopes, 'project'), sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+              ...(flagBoolean(parsed, 'progress') ? { onProgress: progress => process.stderr.write(`${JSON.stringify({ completed: progress.completed,
+                total: progress.total, evidenceId: progress.result.evidenceId, commit: progress.result.commit })}\n`) } : {}),
+            });
+            print(result);
+            if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
+          } else if (action === 'web-preview') {
+            const plan = await previewWebImport(parsed.positionals.slice(1), { timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000) });
+            process.stdout.write(serializeWebImportPlan(plan));
+          } else if (action === 'web-apply') {
+            const result = await applyWebImport(vault, await readWebImportPlan(requiredFlag(parsed, 'plan')), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000),
+              scope: enumFlag(parsed, 'scope', scopes, 'project'), sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'),
+              ...(flagBoolean(parsed, 'progress') ? { onProgress: progress => { process.stderr.write(`${JSON.stringify({ completed: progress.completed,
+                total: progress.total, evidenceId: progress.result.evidenceId, commit: progress.result.commit })}\n`); } } : {}),
+            });
+            print(result);
+            if (result.status !== 'completed') process.exitCode = result.status === 'cancelled' ? 130 : 2;
+          } else if (action === 'pdf-preview') {
+            process.stdout.write(serializePdfImportPlan(await previewPdfImport(requiredPositional(parsed, 1, 'PDF file'), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000), ...await pdfProcessingOptions(parsed, true),
+            })));
+          } else if (action === 'pdf-apply') {
+            print(await applyPdfImport(vault, await readPdfImportPlan(requiredFlag(parsed, 'plan')), {
+              timeoutMs: numberFlag(parsed, 'timeout-ms', 10_000), scope: enumFlag(parsed, 'scope', scopes, 'project'),
+              sensitivity: enumFlag(parsed, 'sensitivity', sensitivities, 'internal'), ...await pdfProcessingOptions(parsed, false),
+            }));
+          } else if (action === 'pdf-original' || action === 'pdf-page') {
+            const id = requiredPositional(parsed, 1, 'evidence ID');
+            const bytes = action === 'pdf-original' ? await readPdfOriginal(vault, id) : await readPdfPage(vault, id, numberFlag(parsed, 'page', NaN));
+            const output = resolve(requiredFlag(parsed, 'output'));
+            await writeFile(output, bytes, { flag: 'wx', mode: 0o600 });
+            print({ path: output, bytes: bytes.length });
+          } else throw new Error('Import action must be preview, apply, web-preview, web-apply, pdf-preview or pdf-apply');
+        });
+      } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
+    case 'source': {
+      if (requiredPositional(parsed, 0, 'timeline') !== 'timeline') throw new Error('Source action must be timeline');
+      print(await vault.sourceTimeline(requiredPositional(parsed, 1, 'source URI'), {
+        ...(parsed.flags.has('from') ? { from: requiredFlag(parsed, 'from') } : {}),
+        ...(parsed.flags.has('to') ? { to: requiredFlag(parsed, 'to') } : {}),
+        offset: numberFlag(parsed, 'offset', 0), limit: numberFlag(parsed, 'limit', 30),
+        includeSensitive: flagBoolean(parsed, 'include-sensitive'), includeSecret: flagBoolean(parsed, 'include-secret'),
+      }));
+      return;
+    }
     case 'setup': {
       const action = parsed.positionals[0] ?? 'preview';
       if (!['preview', 'apply', 'verify', 'remove'].includes(action)) throw new Error('Setup action must be preview, apply, verify, or remove');
@@ -122,19 +218,19 @@ async function main(): Promise<void> {
       return;
     case 'recall':
       print(await vault.recall(requiredText(parsed.positionals.join(' '), 'A recall query is required'), {
-        ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000),
+        ...searchOptions(parsed), ...contextBudget(parsed),
       }));
       return;
     case 'context': {
       const query = requiredText(parsed.positionals.join(' '), 'A context query is required');
-      const context = await vault.context(query, { ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000) });
-      if (parsed.flags.has('json')) print({ context });
-      else process.stdout.write(`${context}\n`);
+      const context = await vault.contextDetailed(query, { ...searchOptions(parsed), ...contextBudget(parsed) });
+      if (parsed.flags.has('json')) print({ context: context.text, ...context });
+      else process.stdout.write(`${context.text}\n`);
       return;
     }
     case 'ask': {
       const question = requiredText(parsed.positionals.join(' '), 'A question is required');
-      const answer = await vault.answer(question, { ...searchOptions(parsed), maxCharacters: numberFlag(parsed, 'max-chars', 12_000) });
+      const answer = await vault.answer(question, { ...searchOptions(parsed), ...contextBudget(parsed) });
       if (parsed.flags.has('json')) print({ answer });
       else process.stdout.write(`${answer}\n`);
       return;
@@ -157,6 +253,43 @@ async function main(): Promise<void> {
     case 'remote':
       await remoteCommand(vault, parsed);
       return;
+    case 'experience': {
+      const args = parsed;
+      const action = args.positionals[0];
+      if (!['capture', 'prepare', 'export'].includes(action ?? '')) {
+        throw new Error('Experience actions: capture, prepare, export. Validation requires a trusted host callback through the library; no executable/module path is accepted.');
+      }
+      authorize(vault.principal, action === 'export' ? 'review' : 'write');
+      await vault.config();
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const selection = { includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') };
+          if (action === 'export') {
+            print(await vault.experienceExport(requiredPositional(args, 1, 'validation evidence ID'), {
+              ...selection, confirm: flagBoolean(args, 'confirm'),
+            }));
+          } else {
+            authorize(vault.principal, 'read');
+            const file = requiredFlag(args, 'file');
+            if (file === '-') throw new Error('Experience input requires a bounded local JSON file, not stdin');
+            const value = await readImportPreview(file);
+            if (action === 'capture') {
+              print(await vault.experienceCapture(value as never, {
+                scope: enumFlag<Scope>(args, 'scope', ['user', 'project', 'team', 'public'], 'user'),
+                sensitivity: enumFlag<Sensitivity>(args, 'sensitivity', ['public', 'internal', 'sensitive', 'secret'], 'internal'),
+              }));
+            } else {
+              if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Experience proposal input must be an object');
+              print(await vault.experiencePrepare({ ...value, ...selection } as never));
+            }
+          }
+        });
+      } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
     case 'wiki':
       await wikiCommand(vault, parsed);
       return;
@@ -182,9 +315,68 @@ async function main(): Promise<void> {
   }
 }
 
+async function cloudCommand(principal: Principal, args: ParsedArgs): Promise<void> {
+  authorize(principal, 'admin');
+  const action = args.positionals[0] ?? '', common = ['actor', 'actor-name', 'actor-email'];
+  const allowed: Record<string, string[]> = {
+    credentials: [],
+    'account-template': ['id', 'broker-root', 'sources-config', 'token-sha256', 'scopes', 'max-sensitivity'],
+    check: ['accounts'],
+    serve: ['accounts', 'host', 'port', 'public-origin', 'tls-certificate', 'tls-key', 'request-timeout-ms',
+      'max-concurrent', 'per-account-concurrent', 'requests-per-minute', 'per-account-requests-per-minute'],
+  };
+  const invalid = (): never => { throw new AgentMemoryError('VALIDATION_FAILED', 'Invalid cloud command arguments'); };
+  if (!action || !Object.hasOwn(allowed, action) || args.positionals.length !== 1) invalid();
+  const names = new Set([...common, ...allowed[action]!]), seen = new Set<string>();
+  for (const value of process.argv.slice(3)) {
+    if (!value.startsWith('--')) continue;
+    const name = value.slice(2).split('=')[0]!;
+    if (seen.has(name)) invalid(); seen.add(name);
+  }
+  for (const [name, value] of args.flags) if (!names.has(name) || typeof value !== 'string' || !value.length) invalid();
+  const number = (name: string, fallback: number): number => {
+    const value = flagString(args, name); if (value === undefined) return fallback;
+    if (!/^\d+$/.test(value)) invalid(); const result = Number(value); if (!Number.isSafeInteger(result)) invalid(); return result;
+  };
+  const controller = new AbortController(), stop = () => controller.abort();
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  let service: CloudWikiServerHandle | undefined;
+  try {
+    await withOperation(controller.signal, async () => {
+      if (action === 'credentials') { print(createCloudWikiCredential(principal)); return; }
+      if (action === 'account-template') {
+        print(await cloudWikiAccountTemplate(principal, { id: requiredFlag(args, 'id'), root: resolve(requiredFlag(args, 'broker-root')),
+          sharedWikiConfig: resolve(requiredFlag(args, 'sources-config')), tokenSha256: requiredFlag(args, 'token-sha256'),
+          scopes: (flagString(args, 'scopes') ?? 'project').split(',').map(value => value.trim()) as Scope[],
+          maxSensitivity: enumFlag(args, 'max-sensitivity', sensitivities, 'internal'),
+        })); return;
+      }
+      const configPath = resolve(requiredFlag(args, 'accounts'));
+      const checked = await inspectCloudWikiAccounts(principal, configPath);
+      if (action === 'check') { print(checked); return; }
+      const certificate = flagString(args, 'tls-certificate'), key = flagString(args, 'tls-key');
+      if (Boolean(certificate) !== Boolean(key)) invalid();
+      const stopped = new Promise<void>(resolveStop => { controller.signal.addEventListener('abort', () => resolveStop(), { once: true }); });
+      service = await startCloudWikiServer({ configPath, operator: principal, host: flagString(args, 'host') ?? '127.0.0.1', port: number('port', 0),
+        ...(args.flags.has('public-origin') ? { publicOrigin: requiredFlag(args, 'public-origin') } : {}),
+        ...(certificate && key ? { tls: { certificatePath: resolve(certificate), keyPath: resolve(key) } } : {}),
+        limits: { requestTimeoutMs: number('request-timeout-ms', 30000), maxConcurrent: number('max-concurrent', 16),
+          perAccountConcurrent: number('per-account-concurrent', 2), requestsPerMinute: number('requests-per-minute', 120),
+          perAccountRequestsPerMinute: number('per-account-requests-per-minute', 60) },
+      });
+      if (!controller.signal.aborted) { print({ status: 'cloud-serving', url: service.url }); await stopped; }
+    });
+  } finally {
+    controller.abort();
+    try { await service?.stop(); }
+    finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+  }
+}
+
 async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
   const action = args.positionals[0] ?? 'catalog';
   const input = { ...args, positionals: args.positionals.slice(1) };
+  if (action === 'jobs') return wikiJobsCommand(vault, input);
   const maxPages = args.flags.has('max-pages') ? Number(requiredFlag(args, 'max-pages')) : undefined;
   if (maxPages !== undefined && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50)) {
     throw new Error('--max-pages must be an integer between 1 and 50');
@@ -193,6 +385,133 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
   if ((action === 'ingest' || action === 'file') && flagBoolean(args, 'apply')) authorize(vault.principal, 'review');
   switch (action) {
     case 'catalog': print(await vault.wikiCatalog()); return;
+    case 'import-prepare':
+    case 'import-apply':
+    case 'integration-prepare': {
+      const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
+        ...(action === 'import-prepare' ? ['expected-commit', 'scope', 'sensitivity', 'include-sensitive', 'include-secret']
+          : action === 'import-apply' ? ['file', 'confirm'] : ['file', 'include-sensitive', 'include-secret'])]);
+      for (const flag of args.flags.keys()) if (!allowed.has(flag)) throw new Error(`Unsupported Wiki import/integration flag: --${flag}`);
+      for (const flag of ['confirm', 'include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      authorize(vault.principal, 'read'); authorize(vault.principal, 'write');
+      if (action === 'import-apply') {
+        authorize(vault.principal, 'review');
+        if (!flagBoolean(args, 'confirm')) throw new Error('Copy approval requires --confirm after reviewing the complete plan');
+      }
+      if (action !== 'import-prepare' && input.positionals.length) throw new Error('This operation takes a JSON file without positional arguments');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        if (action === 'integration-prepare') {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Integration input requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file, 9 * 1_048_576);
+          if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('An integration object is required');
+          const parsed = wikiIntegrationToolSchema.safeParse({ ...document,
+            ...(args.flags.has('include-sensitive') ? { includeSensitive: flagBoolean(args, 'include-sensitive') } : {}),
+            ...(args.flags.has('include-secret') ? { includeSecret: flagBoolean(args, 'include-secret') } : {}) });
+          if (!parsed.success) throw new Error('Invalid bounded human-authored Wiki integration input');
+          const prepared = await vault.wikiIntegrationPrepare(parsed.data);
+          print(wikiToolResult(prepared, prepared.plan)); return;
+        }
+        const configPath = process.env.AMEM_SHARED_WIKI_CONFIG;
+        if (!configPath) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+        const importer = new SharedWikiImporter(vault, { configPath });
+        if (action === 'import-apply') {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Copy approval requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file, 9 * 1_048_576);
+          const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
+          print(await importer.apply(plan, { confirm: true })); return;
+        }
+        const parsed = sharedWikiImportPrepareSchema.safeParse({ sourceId: requiredPositional(input, 0, 'configured shared source ID'),
+          pageKeys: input.positionals.slice(1), expectedCommit: requiredFlag(args, 'expected-commit'),
+          ...(args.flags.has('scope') ? { scope: requiredFlag(args, 'scope') } : {}),
+          ...(args.flags.has('sensitivity') ? { sensitivity: requiredFlag(args, 'sensitivity') } : {}),
+          includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') });
+        if (!parsed.success) throw new Error('Invalid fixed-version Wiki import selection');
+        const prepared = await importer.prepare(parsed.data);
+        print(wikiToolResult(prepared, prepared.plan, 'memory_shared_wiki_import_apply'));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
+    case 'shared-list':
+    case 'shared-snapshot': {
+      const allowed = new Set(['root', 'actor', 'actor-name', 'actor-email',
+        ...(action === 'shared-snapshot' ? ['include-sensitive', 'include-secret', 'expected-commit'] : [])]);
+      for (const flag of args.flags.keys()) if (!allowed.has(flag)) throw new Error(`Unsupported shared Wiki flag: --${flag}`);
+      for (const flag of ['include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      if (action === 'shared-list' && input.positionals.length) throw new Error('Shared catalog takes no positional arguments');
+      const configPath = process.env.AMEM_SHARED_WIKI_CONFIG;
+      if (!configPath) throw new AgentMemoryError('DEPENDENCY_UNAVAILABLE', 'Shared Wiki sources are not configured by the host');
+      const reader = new SharedWikiReader(vault, { configPath }), controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        print(action === 'shared-list' ? await reader.catalog() : await reader.snapshot({
+          sourceId: requiredPositional(input, 0, 'configured shared source ID'), pageKeys: input.positionals.slice(1),
+          ...(args.flags.has('expected-commit') ? { expectedCommit: requiredFlag(args, 'expected-commit') } : {}),
+          includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
+        }));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
+    case 'observe':
+    case 'as-known-at': {
+      const flags = new Set(['root', 'actor', 'actor-name', 'actor-email', 'include-sensitive', 'include-secret',
+        ...(action === 'observe' ? ['confirm'] : ['at', 'observations'])]);
+      for (const flag of args.flags.keys()) if (!flags.has(flag)) throw new Error(`Unsupported availability flag: --${flag}`);
+      for (const flag of ['confirm', 'include-sensitive', 'include-secret']) {
+        const value = args.flags.get(flag);
+        if (value !== undefined && value !== true && !['true', 'false', '1', '0'].includes(String(value))) throw new Error(`--${flag} must be a boolean`);
+      }
+      const selection = { pageKeys: input.positionals,
+        includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') };
+      const value = action === 'observe' ? availabilityObserveSchema.safeParse({ ...selection, confirm: flagBoolean(args, 'confirm') })
+        : availabilityAtSchema.safeParse({ ...selection, at: requiredFlag(args, 'at'),
+          ...(args.flags.has('observations') ? { observationIds: requiredFlag(args, 'observations').split(',').map(id => id.trim()) } : {}) });
+      if (!value.success) throw new Error('Invalid availability selection; observing requires --confirm');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => {
+        print('confirm' in value.data ? await vault.wikiObserveAvailability(value.data) : await vault.wikiAsKnownAt(value.data));
+      }); } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
+      return;
+    }
+    case 'snapshot': {
+      if (args.flags.has('commit') === args.flags.has('at')) throw new Error('Use exactly one of --commit or --at');
+      const selector = args.flags.has('at') ? { at: requiredFlag(args, 'at') } : { commit: requiredFlag(args, 'commit') };
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { await withOperation(controller.signal, async () => print(await vault.wikiSnapshot({
+        ...selector, pageKeys: input.positionals,
+        includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret'),
+      }))); } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
+    case 'merge-prepare': {
+      authorize(vault.principal, 'read'); authorize(vault.principal, 'write'); await vault.config();
+      if (args.flags.has('apply')) throw new Error('Manual merges never auto-apply; inspect the proposal and use wiki apply explicitly');
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try {
+        await withOperation(controller.signal, async () => {
+          const file = requiredFlag(args, 'file');
+          if (file === '-') throw new Error('Manual merge input requires a bounded local JSON file, not stdin');
+          const document = await readImportPreview(file);
+          if (!document || typeof document !== 'object' || Array.isArray(document)) throw new Error('A manual merge object is required');
+          const input = mergeOptionsSchema.safeParse({ ...document, includeSensitive: flagBoolean(args, 'include-sensitive'), includeSecret: flagBoolean(args, 'include-secret') });
+          if (!input.success) throw new Error('Invalid bounded manual Wiki merge input');
+          print(await vault.wikiMergePrepare(input.data));
+        });
+      } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+      return;
+    }
     case 'rules': print(await vault.wikiRules()); return;
     case 'migrate': print(await vault.wikiMigrate()); return;
     case 'set-rules': {
@@ -219,7 +538,12 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
     case 'apply': {
       const document = await jsonFileFrom(args);
       const plan = document !== null && typeof document === 'object' && 'plan' in document ? document.plan : document;
-      print(await vault.wikiApply(plan));
+      // Keep normal stdin cancellation until input is complete; the write itself
+      // needs cooperative cancellation so ready transactions can finish safely.
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      try { print(await vault.wikiApply(plan, { signal: controller.signal })); }
+      finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
       return;
     }
     case 'preview': {
@@ -255,6 +579,49 @@ async function wikiCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> 
       print(await vault.wikiRevoke(requiredPositional(input, 0, 'Wiki page key'), requiredFlag(args, 'reason')));
       return;
     default: throw new Error(`Unknown wiki action: ${action}`);
+  }
+}
+
+async function wikiJobsCommand(vault: MemoryVault, args: ParsedArgs): Promise<void> {
+  const action = args.positionals[0] ?? 'list';
+  const id = () => requiredPositional(args, 1, 'job ID');
+  if (args.flags.has('apply')) throw new Error('Jobs do not auto-apply; use wiki jobs preview and wiki jobs apply explicitly');
+  switch (action) {
+    case 'enqueue': print(await vault.wikiEnqueue({ evidenceIds: [...args.positionals.slice(1), ...csvFlag(args, 'evidence')],
+      ...(args.flags.has('max-pages') ? { maxPages: numberFlag(args, 'max-pages', 20) } : {}) })); return;
+    case 'list': print(await vault.wikiJobs()); return;
+    case 'show': print(await vault.wikiJob(id())); return;
+    case 'plan': print(await vault.wikiJobPlan(id())); return;
+    case 'preview': print(await vault.wikiPreviewJob(id())); return;
+    case 'apply': authorize(vault.principal, 'review'); print(await vault.wikiApplyJob(id())); return;
+    case 'cancel': print(await vault.wikiCancelJob(id())); return;
+    case 'retry': print(await vault.wikiRetryJob(id())); return;
+    case 'remove': print(await vault.wikiRemoveJob(id())); return;
+    case 'run': case 'work': break;
+    default: throw new Error('Wiki jobs action must be enqueue, list, show, plan, preview, apply, cancel, retry, remove, run or work');
+  }
+  const pollMs = numberFlag(args, 'poll-ms', 1000);
+  if (!Number.isSafeInteger(pollMs) || pollMs < 100 || pollMs > 10000) throw new Error('--poll-ms must be 100–10000');
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  try {
+    await withOperation(controller.signal, async () => {
+      do {
+        const job = await vault.wikiRunJob({ ...(action === 'run' ? { id: id() } : {}), timeoutMs: numberFlag(args, 'timeout-ms', 120000) });
+        if (job || action === 'run' || flagBoolean(args, 'once')) print(job);
+        if (action === 'run' || flagBoolean(args, 'once')) {
+          if (job?.status === 'failed') process.exitCode = 2;
+          if (job?.status === 'cancelled') process.exitCode = 130;
+          return;
+        }
+        if (!job) await delay(pollMs, undefined, { signal: controller.signal });
+      } while (!controller.signal.aborted);
+    });
+  } catch (error) { if (controller.signal.aborted) process.exitCode = 130; else throw error; }
+  finally {
+    process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+    if (controller.signal.aborted) process.exitCode = 130;
   }
 }
 
@@ -303,7 +670,9 @@ function parseArgs(args: string[]): ParsedArgs {
       positionals.push(value);
       continue;
     }
-    const [rawName = '', inline] = value.slice(2).split('=', 2);
+    const option = value.slice(2), separator = option.indexOf('=');
+    const rawName = separator === -1 ? option : option.slice(0, separator);
+    const inline = separator === -1 ? undefined : option.slice(separator + 1);
     if (inline !== undefined) flags.set(rawName, inline);
     else {
       const next = args[index + 1];
@@ -377,8 +746,26 @@ function numberFlag(args: ParsedArgs, name: string, fallback: number): number {
   return parsed;
 }
 
+function contextBudget(args: ParsedArgs) {
+  return { maxCharacters: numberFlag(args, 'max-chars', 12_000),
+    ...(args.flags.has('max-tokens') ? { maxTokens: numberFlag(args, 'max-tokens', 1) } : {}),
+    ...(args.flags.has('resident-share') ? { residentShare: numberFlag(args, 'resident-share', 0.25) } : {}) };
+}
+
 function csvFlag(args: ParsedArgs, name: string): string[] {
   return (flagString(args, name) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+}
+
+async function pdfProcessingOptions(args: ParsedArgs, preview: boolean) {
+  if (!args.flags.has('processor-config') && !args.flags.has('pages') && !args.flags.has('ocr-languages')) return {};
+  const processor = pdfProcessorConfigSchema.parse(await readImportPreview(requiredFlag(args, 'processor-config'), 64_000));
+  if (!preview) {
+    if (args.flags.has('pages') || args.flags.has('ocr-languages')) throw new Error('PDF apply uses the reviewed selection in --plan; create a new preview to change pages or OCR languages');
+    return { processor };
+  }
+  const processing = pdfProcessingSelectionSchema.parse({ pages: requiredFlag(args, 'pages').split(',').map(value => Number(value.trim())),
+    ...(args.flags.has('ocr-languages') ? { languages: requiredFlag(args, 'ocr-languages').split(',').map(value => value.trim()) } : {}) });
+  return { processor, processing };
 }
 
 function enumFlag<T extends string>(args: ParsedArgs, name: string, values: readonly T[], fallback: T): T {
@@ -418,14 +805,46 @@ Usage:
   amem forget <memory-id|key> --reason TEXT
   amem erase <memory-id|key> --reason TEXT
   amem search <query> [--semantic] [--include-sensitive] [--include-secret]
-  amem recall <query> [--max-chars N] | explain <query> [--semantic]
-  amem context <query> | ask <question> | get <id> | history
+  amem recall <query> [--max-chars N] [--max-tokens N] | explain <query> [--semantic]
+  amem context <query> [--max-tokens N] [--resident-share 0.25] [--json] | ask <question> | get <id> | history
+  amem import preview <directory> > import-plan.json
+  amem import apply --plan import-plan.json [--scope project] [--sensitivity internal] [--progress]
+  amem import web-preview <https-url...> [--timeout-ms 10000] > web-plan.json
+  amem import web-apply --plan web-plan.json [--scope project] [--sensitivity internal] [--progress]
+  amem import pdf-preview <file.pdf> [--timeout-ms 10000] > pdf-plan.json
+  amem import pdf-apply --plan pdf-plan.json [--scope project] [--sensitivity internal] [--timeout-ms 10000]
+  amem import pdf-preview <file.pdf> --processor-config host.json --pages 1,3 [--ocr-languages eng]
+  amem import pdf-apply --plan pdf-plan.json --processor-config host.json [--scope project] [--sensitivity internal]
+  amem import pdf-original <evidence-id> --output <new-file.pdf>
+  amem import pdf-page <evidence-id> --page 1 --output <new-file.png>
+  amem source timeline <source-uri> [--from ISO] [--to ISO] [--offset N] [--limit N]
+  amem experience capture --file TRACE.json [--scope project] [--sensitivity internal]
+  amem experience prepare --file PROPOSAL.json [--include-sensitive] [--include-secret]
+  amem experience export <validation-evidence-id> --confirm [--include-sensitive] [--include-secret]
+    Validation requires a trusted host library callback; export returns files as JSON, never installs or executes.
+  amem memory at <ISO> [--key KEY] [--include-unknown] [--offset N] [--limit N]
+  amem memory validity <memory-id> --from ISO|unknown --until ISO|unknown --expected-revision N --confirm
   amem doctor | recover | reindex [--semantic] | maintenance
   amem remote set <url> [--name origin] [--branch main] [--push]
   amem remote status | remote sync [--push] | remote remove
   amem wiki catalog | rules | migrate
+  amem wiki snapshot <page-key...> (--commit FULL_HASH | --at ISO_TIMESTAMP) [--include-sensitive] [--include-secret]
+  amem wiki observe <page-key...> --confirm [--include-sensitive] [--include-secret]
+  amem wiki as-known-at <page-key...> --at ISO_TIMESTAMP [--observations ev-ID,ev-ID] [--include-sensitive] [--include-secret]
+  amem wiki shared-list --root CALLER_VAULT
+  amem wiki shared-snapshot <configured-source-id> <page-key...> --root CALLER_VAULT [--expected-commit CATALOG_PIN] [--include-sensitive] [--include-secret]
+  amem wiki merge-prepare --file MERGE.json [--include-sensitive] [--include-secret]
+  amem wiki import-prepare <configured-source-id> <page-key...> --expected-commit CATALOG_PIN [--scope SCOPE] [--sensitivity LEVEL] [--include-sensitive] [--include-secret]
+  amem wiki import-apply --file COPY.json --confirm  (retains evidence only)
+  amem wiki integration-prepare --file INTEGRATION.json [--include-sensitive] [--include-secret]
   amem wiki set-rules <instructions|-> --purpose TEXT [--file PATH] [--expected-revision N]
   amem wiki ingest <evidence-id...> [--evidence id,...] [--apply] [--max-pages N]
+  amem wiki jobs enqueue <evidence-id...> [--max-pages N]
+  amem wiki jobs list | show <job-id> | plan <job-id> | preview <job-id>
+  amem wiki jobs apply <job-id>  (explicit review; never automatic)
+  amem wiki jobs run <job-id> [--timeout-ms N]
+  amem wiki jobs work [--once] [--poll-ms N] [--timeout-ms N]
+  amem wiki jobs cancel | retry | remove <job-id>
   amem wiki apply --file <plan.json|->
   amem wiki preview --file <plan.json|->
   amem wiki correct <page-key> <instruction|-> [--file PATH] [--expected-revision N]
@@ -435,6 +854,11 @@ Usage:
   amem wiki revoke <page-key> --reason TEXT
   amem serve [--host 127.0.0.1] [--port 0]
   amem web [--port 0] --root PATH
+  amem cloud credentials
+  amem cloud account-template --id ACCOUNT --broker-root VAULT --sources-config FILE --token-sha256 HASH [--scopes project] [--max-sensitivity internal]
+  amem cloud check --accounts FILE
+  amem cloud serve --accounts FILE [--host 127.0.0.1] [--port 0] [--public-origin HTTPS_ORIGIN] [--tls-certificate FILE --tls-key FILE]
+    Cloud host commands require admin; templates/credentials only print data. Service runs in the foreground; public listeners require TLS.
 
 Common options: --root PATH, --actor ID, --actor-name NAME, --actor-email EMAIL.
 LLM: AMEM_LLM_API_KEY, AMEM_LLM_MODEL, AMEM_LLM_BASE_URL, AMEM_EMBEDDING_MODEL.
