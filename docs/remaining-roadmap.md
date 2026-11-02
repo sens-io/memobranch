@@ -71,6 +71,8 @@ Read-only metadata still shows the same running PID and no service exit. No
 post-restart test matrix was started because no restart succeeded. Both samples
 and the single restart attempt are consumed. Complete acceptance requirements
 remain unchanged; no broader system action is authorized.
+The user chose not to restart the Mac for now. This keeps the macOS gate open;
+it is not a platform-verification waiver or permission for another intervention.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

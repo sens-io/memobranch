@@ -77,6 +77,10 @@ unchanged. No FIFO contents were opened or hashed. Artifact counts are not tests
 | --- | --- | --- |
 | `kevin/knowledge-expansion` | Complete macOS Node 20 checks still fail; the captured child waits in OS execution validation and the approved service restart was refused. | A further host-state intervention requires a separate user decision; preserve the unchanged full gates and final independent acceptance review. |
 
+The user subsequently chose **“暂不重启 Mac”**. No computer restart is planned
+at this checkpoint. This is not a waiver of the macOS gate or authorization for
+another system intervention; the existing complete checks remain pending.
+
 Both sampling operations and the single service-restart attempt are consumed;
 no additional live sample or service attempt is authorized. The computer has
 not been restarted by this task. Batch 4–6 acceptance and **12+1** combined
