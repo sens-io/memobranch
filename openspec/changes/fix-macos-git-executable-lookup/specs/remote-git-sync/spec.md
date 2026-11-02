@@ -29,3 +29,7 @@ Other platforms MUST retain their existing invocation behavior.
 #### Scenario: Discovery is interrupted before a push starts
 - **WHEN** executable discovery is cancelled or reaches the configured deadline
 - **THEN** no Git command starts, the original cancellation/timeout and commit evidence is preserved, and a push reports that it did not start
+
+#### Scenario: Caller reuses an argument array
+- **WHEN** the caller changes its argument array while executable discovery is pending
+- **THEN** the invocation executes and classifies errors using the original argument values

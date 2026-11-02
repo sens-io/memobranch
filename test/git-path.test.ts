@@ -130,3 +130,14 @@ test('macOS Git never retries an executed command that exits unsuccessfully', ma
     assert.equal(await readFile(join(root, 'calls'), 'utf8'), 'x');
   });
 });
+
+test('Git retains invocation arguments when the caller reuses its array', { skip: process.platform === 'win32' }, async () => {
+  const root = await temporaryRoot();
+  await writeFile(join(root, 'git'), '#!/bin/sh\nprintf "%s\\n" "$1"\n', { mode: 0o755 });
+  await withPath(root, async () => {
+    const args = ['--version'];
+    const pending = new GitStore(root).run(args);
+    args[0] = 'push';
+    assert.equal(await pending, '--version');
+  });
+});

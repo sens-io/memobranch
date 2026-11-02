@@ -68,6 +68,8 @@ export class GitStore {
     const actor = options.actor;
     const email = actor?.email ?? `${safeIdentity(actor?.id ?? 'system')}@agent-memory.local`;
     try {
+      // Discovery awaits filesystem reads; retain the command chosen at invocation.
+      args = [...args];
       const stdout = await executeGit(args, {
         cwd: this.root,
         env: {
