@@ -158,7 +158,11 @@ A local diagnostic driver is ready at
 Node 20 binary and unchanged compiled collections, verifies the fixed inventory
 and all **763** input/build hashes first, probes both actual Git defaults using
 subprocess-only configuration, and runs the complete current/original collections
-serially. Each invocation writes new uniquely named logs under `.scratch/`.
+serially. Each invocation writes new uniquely named driver logs under `.scratch/`.
+Some original tests also use the existing system temporary directory. That
+directory is within this task's explicitly permitted temporary roots; neither
+the driver nor the wrapper changes `TMPDIR`. Thus “only writes `.scratch`” was
+too broad a description and has been corrected without changing test behavior.
 It does not install anything, change tests, write canonical project knowledge,
 change global configuration, push or publish. This is a diagnostic comparison,
 not a newly added acceptance gate or proof that the application caused the delay.
@@ -172,22 +176,52 @@ interrupted run is not acceptance. Sources/results:
 `macos-terminal-script-interrupt-control-{1,2}.mjs`, their logs, and
 `macos-terminal-script-interrupt-control-2-result.json` under `.scratch/`.
 
-The driver has **not** been run outside this application. To make that comparison,
-the user can run this exact command in the macOS system Terminal; the existing
-Node 22 executable only drives the unchanged Node 20 test commands:
+Independent review found that inaccurate directory description after a Terminal
+draft was started. The exact owned driver **52851** was stopped using `SIGINT`;
+its record is `.scratch/macos-terminal-draft-stop-2026-10-30.json`. That interrupted
+draft is not a completed outside-application result or acceptance.
+
+A guarded Terminal wrapper is now prepared. Before importing the driver,
+`.scratch/macos-terminal-temp-guard-2.mjs` first selects the same project directory
+as the driver, then resolves the existing temporary directory
+and refuses unless its real path is exactly `/private/tmp` or this task's
+explicitly writable per-user temporary root. It records only its own ancestor
+process paths and that directory, with new files under `.scratch/`. It makes no
+environment, permission or security-setting change. The new `.command` wrapper
+only selects the project directory and executes that guard using existing Node 22.
+Existing Node 22 only drives the unchanged Node 20 test commands:
 
 ```sh
-/Users/imac/.nvm/versions/node/v22.17.0/bin/node /Users/imac/code/memobranch/.scratch/macos-node20-terminal-comparison-2.mjs
+/Users/imac/.nvm/versions/node/v22.17.0/bin/node /Users/imac/code/memobranch/.scratch/macos-terminal-temp-guard-2.mjs
 ```
 
 ## Acceptance remains open
 
-All **72** new diagnostic/control/source/result artifacts are frozen in
+The initial **72** diagnostic/control/source/result artifacts are frozen in
 `.scratch/macos-process-entry-inventory-2026-10-30.json`, SHA-256
 `caf5cbbc2b1b349807bd96565aeda47ba0cf88d2fbdeae5d9aa9275e49d8cde9`.
 The prior four diagnosis inventories and nine-file LLDB inventory were rechecked
 without changing their files or hashes. All **763** earlier input/build snapshot
 hashes also still match. These file counts are not acceptance-test counts.
+
+The November 2 correction has a separate **12-artifact** inventory at
+`.scratch/macos-terminal-guard-inventory-2026-11-02.json`, SHA-256
+`5a1fdf5fd5dbdfb416a24ee5b9cc4b5ad46d424542c6d62f51a8e3b34fa5637b`.
+It retains the stopped Terminal draft, both guard versions and the exact wrappers.
+The initial inventory was not rewritten.
+
+Independent read-only review covered the `26367a23` candidate in full (3/3
+documentation files, zero skipped), with a separate native-evidence review of
+the new report and all 72 hashes. That native review found the inaccurate
+temporary-directory description. Follow-up review found a second boundary:
+the guard and driver could resolve a relative `TMPDIR` from different current
+directories. Guard version 2 now selects the project directory before validation;
+neither version changes `TMPDIR`. Actual rejection controls for an unlisted
+absolute directory and a relative directory from another working directory both
+exited 1 without starting the driver or creating launch logs. The final read-only
+correction review covered **12/12** files/records, zero skipped, and closed both
+P2 findings without another confirmed P1/P2. This review accepts the correction
+only; it does not accept the outstanding macOS or roadmap gates.
 
 The scoped process check in
 `.scratch/macos-process-entry-cleanup-2026-10-30.json` found no remaining matching
