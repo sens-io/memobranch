@@ -90,8 +90,9 @@ that launch. The five-setting control additionally removed `TERM`, `TERM_PROGRAM
 run; there was no persistent environment or configuration edit.
 
 A separate shorter diagnostic ran three real SDK operations followed by a
-version-only child. It completed in **7656 ms** and did not reproduce the complete
-collection's failure. The script's outer TAP 1/1 is not another 38-case acceptance.
+version-only child. That final child completed in **7656 ms**; the entire outer
+TAP script took **11452.511625 ms**. It did not reproduce the complete collection's
+failure. The script's outer TAP 1/1 is not another 38-case acceptance.
 Its inherited `cancelledAndRetried` label retains the old limitation: cancelled
 apply is followed by prepare, not another apply. It is not new apply-retry proof.
 
@@ -153,6 +154,21 @@ another context does not establish that the known failure was corrected.
 The current runtime's earlier Linux, Node 22, installed-package and native PDF
 evidence retains its recorded scope. Windows execution is still skipped by the
 user's explicit request. No original failure or interrupted draft was overwritten.
+
+## Independent review of the comparison candidate
+
+Fixed candidate `9a9dd97a4b4c7fbd78c6c043a466f32b0c8bf7a7`, source branch
+`kevin/knowledge-expansion`, received two independent read-only reviews. The scope
+review covered all **3/3** changed documents, zero skipped; the native review
+covered this complete new report **1/1** and its evidence, zero skipped. Both
+verified the 59-artifact inventory and its bytes/hashes. The native review also
+rehashed the prior 72/12 artifacts, all 763 inputs and Node executable, and
+independently streamed both system-log counts. Neither confirmed a new P1/P2.
+The native review's minor timing-wording observation is clarified above: 7656 ms
+belongs to the final child, not the whole three-operation diagnostic.
+Reviewers did not run tests, new diagnostics, networking, installation or mutations.
+These reviews verify the comparison record; they do not accept the remaining
+known application-launched failure or the unfinished whole roadmap.
 
 Database changes: none. Data migration: none. Persistent configuration changes:
 none. Diagnostic environment changes were limited to the specified owned launch
