@@ -183,9 +183,10 @@ The separate **22-artifact**, **229,065-byte** supplement is frozen in
 `cab714180a7d4992e6a43a76ae66ddd9241c57adc3a29b1864dc6de795903754`.
 The original signal comparison and its 50-artifact inventory remain separate and
 unchanged. The recorded failure still prevents final acceptance. No supported
-product correction follows from these measured flags; a fresh host-application
-launch is the next proposed external-state comparison, retaining the complete
-original matrices and requirements.
+product correction follows from these measured flags. At this checkpoint a fresh
+host-application launch was proposed as the next comparison, retaining the complete
+original matrices and requirements. The [later verified restart](macos-postrestart-verification-2026-11-02.md)
+did not remove the complete failures.
 
 Fixed process-observation candidate `d64cb8b8802fe0e5225b96a0e580367e69387c65`,
 source branch `kevin/knowledge-expansion`, then received two independent read-only

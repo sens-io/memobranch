@@ -57,6 +57,11 @@ Measured native states matched around all 24 selected CLI spawns, including the
 failed prepare case. The same exact-PID system notification occurred for both
 corresponding children. Neither observation identifies a correction or closes
 the known failure; complete-collection requirements remain unchanged.
+The [verified application-restart result](macos-postrestart-verification-2026-11-02.md)
+still fails all four complete collection/default combinations. Direct child thread
+inspection was unavailable in its bounded control; the installed system sampler
+explicitly requires administrator authority. Its bounded administrator control is
+prepared but unexecuted, awaiting a user decision. No acceptance requirement changed.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

@@ -219,6 +219,12 @@ compared the actual original 19-case file with a diagnostic preload: application
 CLI spawns. Both actual corresponding CLI PIDs also received the same system
 notification. This is a bounded diagnostic pair, not a replacement complete gate,
 an established root cause, a product correction or final acceptance.
+The [post-restart verification](macos-postrestart-verification-2026-11-02.md)
+confirms a new actual application process and still-failed complete collections
+under both defaults. Child-thread inspection did not obtain a task port, and the
+ordinary-user system sampler explicitly requires root. A bounded administrator
+control is prepared only; it has not been authorized or executed. Final acceptance
+and the original requirements remain open.
 
 Database changes: none. Data migration: none. Real configuration changes: none.
 Optional source-level processor setup remains documented; no real host setting,
