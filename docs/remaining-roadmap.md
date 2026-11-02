@@ -78,6 +78,11 @@ checks execution-assessment output and reads owned process signature fields
 before/after SDK activity, retaining an incomplete first comparison. A persistent
 reader observes matching fields while a version-only child still takes 8162 ms.
 No correction follows; restarting the computer is not an acceptance prerequisite.
+The [next path-search controls](macos-git-path-diagnosis-2026-11-02.md) reproduce
+7.7-second launches in the original environment and 17 ms with the same Git
+invoked directly, retaining its environment. All four original collections pass
+under a temporary short-PATH control. The bounded executable-lookup repair is
+specified but not accepted; final verification must use the original environment.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
