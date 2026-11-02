@@ -141,6 +141,13 @@ tasks and batches 4–6. Batches 1–3b keep their previous local acceptance. No
 agreed implementation item remains identified as missing; this conclusion is
 limited to the agreed roadmap and reviewed scenarios, not unknown future defects.
 
+Both reviewers subsequently read the complete acceptance-status diff at
+`dca4d75af08e44f13cf559a0a3313fa657a62431`: 11/11 files each, zero skipped,
+no confirmed issue. This covers the bilingual notices, roadmap and task closures.
+Strict OpenSpec passed 33/33 after those status edits. A final read-only check
+confirmed that the 96 frozen artifacts and 578 runtime inputs still matched,
+no product input changed after `9321a4cd`, and no unchecked change task remained.
+
 Actual Windows execution/ACL verification is **skipped by the user's request**,
 never passed. There is no new GitHub CI, external model quality, amd64 or arbitrary
 PDF fidelity claim. No push, publish, deployment, real service/account/grant,
