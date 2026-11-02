@@ -225,7 +225,8 @@ under both defaults. Child-thread inspection did not obtain a task port, and the
 ordinary-user system sampler explicitly requires root. A bounded administrator
 control was prepared but not authorized or executed at that checkpoint. The user
 subsequently authorized two bounded samples; the [administrator sampling record](macos-administrator-sampling-2026-11-02.md)
-records the first actual control and the remaining operation. Final acceptance
+records both actual samples, including the failing child's OS validation wait.
+No correction or separate service action has been verified. Final acceptance
 and the original requirements remain open.
 
 Database changes: none. Data migration: none. Real configuration changes: none.

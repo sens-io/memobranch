@@ -1,4 +1,4 @@
-# Authorized macOS sampling: control and prepared failure capture
+# Authorized macOS sampling: control and actual failure capture
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Starting documentation candidate: `88553c665276380d58829783d2ef0d21aa77771a`.
@@ -32,7 +32,8 @@ sampled or explain its cause.
 
 Raw report, target/client logs and observations are preserved in
 `.scratch/macos-owned-spindump-admin-control-ff7965a9-1d1b-404f-9d8e-1dae64edfb1e/`.
-**One authorized sample has completed; one remains available.**
+At this first checkpoint, **one sample had completed and one remained**. Both
+authorized samples have now completed; see the second-capture result below.
 
 ## Prepared second operation, still unexecuted at this checkpoint
 
@@ -156,6 +157,97 @@ The active controller / group-controller / guard SHA-256 values are:
 The authorized count remains **1 used, 1 remaining**; the second operation is
 still unexecuted at this correction checkpoint.
 
+## Second authorized sample: actual execution-validation wait
+
+Two independent read-only reviews of correction candidate
+`3a9e6c959f521e4ec82a9d62633204ab5c8115d6`, source branch
+`kevin/knowledge-expansion`, covered both **2/2** document diffs and the designated
+active sources, with zero skipped. Both verified the 24-file correction supplement
+and prior 29 artifacts. The native review closed the identified ordinary-user
+group-cleanup P2 within its stated boundary, without accepting native root
+cancellation or product functionality. The remaining authorized operation then
+used the exact frozen v6 controller and corrected guard sources.
+
+Actual runner **66551**, worker **66552** and CLI prepare child **96392** were
+recorded from this invocation's real process relationships. At the fresh 1500 ms
+sample, that child still had **32,768 resident bytes**, **one thread**, zero
+Unix/Mach calls and unchanged birth identity. The controller submitted this one
+verified child to the already prepared root receiver. No second target or retry
+was submitted.
+
+The sampler client exited **0** and produced a **53,929-byte** report identifying
+only target **96392**, parent **66552**, UID **501**. It records **1.00 seconds**,
+**100 samples at 10 ms** and **one thread**. Its interval is **07:51:04.848–
+07:51:05.843 UTC**, or **15:51:04.848–15:51:05.843 Asia/Shanghai**. All 100 samples
+retain saved user PC `_dyld_start + 0`; named kernel frames include:
+
+```text
+AppleSystemPolicy::procNotifyExecComplete
+AppleSystemPolicy::blockProcessBasedOnValidationCategory
+handle_blocked_exec
+```
+
+The final recorded wait says it is blocked by a turnstile waiting for
+`UNKNOWN [309]`, send-port name `com.apple.security.AppleSystemPolicy.mig`, after
+two hops. Unresolved intermediate kernel-offset frames remain in the raw report;
+the list above is not a complete symbolicated kernel stack.
+
+This directly locates the captured child's wait in macOS's execution-validation
+path, before Node/project JavaScript begins. It adds evidence that the older
+generic warning messages alone did not provide. It does not reveal the daemon's
+policy decision, why its response is delayed, or establish the same exact wait
+for every other failed child. No verified correction follows from the capture.
+
+Ordinary-user process/service metadata identifies PID **309** as
+`/usr/libexec/syspolicyd`, started before this capture. The installed plist and
+actual launchd metadata identify **`system/com.apple.security.syspolicy`**, state
+running, PID 309, one run and no prior exit. The first guessed label
+`com.apple.syspolicyd` was absent; that failed metadata lookup remains retained.
+Two target-filtered existing-log queries, including an unambiguous Unix-time
+window, returned empty arrays with empty stderr. Those empty queries do not
+negate the direct kernel stack or prove absence of policy activity.
+
+The original complete 19-case diagnostic file still ended **17/19**, exit **1**,
+zero cancelled/skipped. Both CLI prepare/apply waiter observations failed. This
+is not a passing functional gate. Actual test/client exits and both ordinary
+guards' `SIGKILL` terminal states were recorded with no ownership loss. A later
+specific PID-slot query found none of those recorded processes present.
+
+Raw report, test/client logs, root-command text and observations are under
+`.scratch/macos-owned-spindump-failure-33f6a203-2825-46e6-ae4e-da94a08ea517/`;
+the private trace is
+`.scratch/macos-node20-spindump-fc0070c1-8991-47a9-9389-9ac56f6939b0.jsonl`.
+The report SHA-256 is
+`3735de8462d937c98a5b8f000ae8ea268661bc4af37cc625b1681dd3c6ea6f23`.
+
+The second supplement freezes **18 regular artifacts**, **158,735 bytes**, in
+`.scratch/macos-authorized-sampling-inventory-stage2-2026-11-02.json`, SHA-256
+`22d6135859b54a1944aceaf120baaee82e47ccbe6048d075a5de9b2f71845ec9`.
+Its FIFO is metadata only and was not content-read or hashed. Prior 29/24 hashes
+were reverified unchanged. **All two authorized live samples are used; none
+remain.** No additional live sample is authorized by the earlier grant.
+
+## Separate proposed service action — not authorized or performed
+
+The next proposed diagnostic intervention is one restart of the identified
+launch-validation service, followed by the unchanged uninstrumented complete
+matrices under both actual Git defaults. The installed `launchctl` help confirms
+that `-k` terminates an already-running service and `-p` reports its started PID.
+The precise proposed command is:
+
+```text
+/bin/launchctl kickstart -k -p system/com.apple.security.syspolicy
+```
+
+This changes system service runtime state and can briefly affect program-launch
+validation beyond the test process. It requires a new explicit user decision;
+the completed sampling grant does not authorize it. The plan is saved in
+`.scratch/macos-syspolicy-restart-proposal-2026-11-02.json`. No restart, service
+configuration/policy edit, runtime replacement or further administrator action
+has been performed. If separately authorized, the command's actual result and
+service identity/state must be checked before rerunning the original gates; any
+command failure must be recorded without expanding to other management actions.
+
 ## Frozen evidence and remaining acceptance
 
 The **29 regular artifacts**, **130,003 bytes**, are frozen in
@@ -173,11 +265,11 @@ At candidate `180397b`, the initial controller, builder and hook SHA-256 values 
 
 | Source branch | Confirmed remaining issue | Next operation |
 | --- | --- | --- |
-| `kevin/knowledge-expansion` | Complete minimum-runtime failures remain unexplained and uncorrected; batch 4–6 and combined OpenSpec acceptance remain open. | Independently review the fixed second-operation sources, then use at most the single remaining authorized sample. Keep any diagnostic result separate from unchanged complete acceptance gates. |
+| `kevin/knowledge-expansion` | The captured failure is now located in an OS execution-validation wait, but its delayed response/correction remains unverified. Complete gates and batch 4–6/OpenSpec acceptance remain open. | Review the exact capture/conclusion, obtain a separate decision on the identified service action, then verify any correction with the unchanged complete gates. |
 
 Actual Windows execution remains skipped by request. Database changes: none.
-Data migration: none. Persistent configuration changes: none. One specifically
-authorized administrator sample was performed; no host security-policy change,
+Data migration: none. Persistent configuration changes: none. Two specifically
+authorized administrator samples were performed; no host security-policy change,
 tracked runtime/test/dependency change, push, publication, deployment, account,
 service or grant change occurred. Passwords were handled only by the native OS
 dialog, not this program.

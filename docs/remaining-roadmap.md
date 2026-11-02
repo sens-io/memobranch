@@ -62,8 +62,11 @@ still fails all four complete collection/default combinations. Direct child thre
 inspection was unavailable in its bounded control; the installed system sampler
 explicitly requires administrator authority. Its bounded administrator control
 was prepared without execution at that checkpoint. The user subsequently
-authorized at most two scoped samples; [one actual control has completed](macos-administrator-sampling-2026-11-02.md),
-with the failing-child capture still pending. No acceptance requirement changed.
+authorized at most two scoped samples; [both have now completed](macos-administrator-sampling-2026-11-02.md).
+The captured failing child waits in the OS execution-validation path for
+`syspolicyd` before project JavaScript. Its delayed response/correction remains
+unverified; a proposed service restart needs a separate user decision and has
+not been performed. Complete acceptance requirements remain unchanged.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
