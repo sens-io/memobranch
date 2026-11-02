@@ -567,7 +567,9 @@ function discoverGitExecutable(
     void (async () => {
       for (const entry of options.env.PATH!.split(':')) {
         if (finished) return;
-        const candidate = entry ? `${isAbsolute(entry) ? entry : `${cwd}/${entry}`}/git` : `${cwd}/git`;
+        let directory = cwd;
+        if (entry) directory = isAbsolute(entry) ? entry : `${cwd}/${entry}`;
+        const candidate = `${directory}/git`;
         try {
           const info = await stat(candidate);
           if (finished) return;
