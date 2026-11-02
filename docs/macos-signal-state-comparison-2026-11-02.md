@@ -42,9 +42,11 @@ these are diagnostic results, not uninstrumented acceptance runs.
 
 Two fresh initial diagnostic-worker comparisons found no difference in the
 reported user limits or visible signal/process handles. The later initial control
-also compared 11 native signal dispositions/current-thread masks and the other
-listed native fields, before and after the filtered process-report call; no
-measured difference was found. Those initial controls do not describe later SDK
+also compared 11 native signal dispositions/current-thread masks, requested QoS,
+nice value and task category. It did not read descriptors.
+It called the complete `process.report.getReport()` and saved only selected report
+fields; native snapshots before and after that call showed no measured change.
+Those initial controls do not describe later SDK
 activity, and their TAP 1/1 results are not feature acceptance checks.
 
 The original-file pair then captured the state before and after **24** actual
@@ -121,6 +123,21 @@ retain their own recorded scope; this supplement does not replace them.
 | Source branch | Confirmed remaining issue | Acceptance status |
 | --- | --- | --- |
 | `kevin/knowledge-expansion` | The application-launched minimum-runtime waiter failure still reproduces. No supported product correction or complete explanation has been identified. | Keep batch 4–6 and combined OpenSpec acceptance open; retain the complete original collections under both actual defaults and review the final corrected candidate. |
+
+## Independent review of the observation record
+
+Fixed candidate `4794af2f9935489ef2ce970d786f98768154cf82`, source branch
+`kevin/knowledge-expansion`, received two independent read-only reviews. The
+requirements review covered all **3/3** changed document diffs; the native review
+read this complete new report **1/1** plus its designated sources and evidence.
+Both had zero skipped files and independently verified all 50 artifact hashes
+and their byte total. Both checked the two original TAP results, origins and
+actual child-PID bindings; neither confirmed a new P1/P2. The native review's two
+minor wording observations are clarified above: the initial helper did not read
+descriptors, and the full process report was called before selected fields were
+saved. No reviewer ran tests, new diagnostics, analysis scripts, networking,
+installation or mutations. These reviews concern the accuracy and boundaries of
+this record; they do not accept the known failure or the whole roadmap.
 
 Database changes: none. Data migration: none. Persistent configuration changes:
 none. There is no tracked runtime/test/dependency change, push, npm publication,
