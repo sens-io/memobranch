@@ -124,7 +124,70 @@ retain their own recorded scope; this supplement does not replace them.
 | --- | --- | --- |
 | `kevin/knowledge-expansion` | The application-launched minimum-runtime waiter failure still reproduces. No supported product correction or complete explanation has been identified. | Keep batch 4–6 and combined OpenSpec acceptance open; retain the complete original collections under both actual defaults and review the final corrected candidate. |
 
-## Independent review of the observation record
+## Later observation: actual child process flags and startup progress
+
+At documentation checkpoint `472d0a5c9f0c7fc725be9f3fef6235651594acfd`, a
+separate ignored Node-API helper read BSD/task information for its own process
+and direct children only. It checks user, parent, executable and process start
+identity, rejects other targets, and preserves `errno`. A synthetic owned-child
+control verified reads and refusal, then terminated that child. No debugger,
+process-policy setter or signal-resume operation was used in the real runs.
+
+The same original Node 20 executable, original 19-case file and actual implicit
+`main` were then observed again, retaining every assertion and waiter deadline.
+There were 24 selected CLI calls per worker and no reported probe errors. New
+logs contain **82 rows** for the application and **77** for Terminal; unequal row
+counts reflect scheduled child samples stopping after the child exits.
+
+| Actual origin | Original single-file result / exit | Corresponding prepare child | Samples / observed span | Child state at last sample |
+| --- | --- | --- | --- | --- |
+| Application | **18/19**, case 14 failed, exit 1 | 80707, parent 51168 | 7 / **6001 ms** | 32,768 resident bytes, 1 thread, 0 Unix/Mach calls |
+| Terminal | **19/19**, exit 0 | 12628, parent 86229 | 2 / **52 ms** | 51,281,920 resident bytes, 11 threads, 1343 Unix / 180 Mach calls |
+
+Both runs had zero cancelled/skipped tests. Every available parent/child snapshot
+reported the five measured flags as false: internal/external Darwin background,
+suppression, resource throttling and resource suspension. Both corresponding
+children had raw flags **20987920**, priority **31**, successful task reads and
+task suspension count **0** at each sample. The application's seven samples
+retained the same child start identity and the state shown above. Terminal's
+initial sample also had 32,768 bytes, one thread and zero calls; that initial
+state alone therefore does not distinguish a stalled launch from an ordinary
+new child. The later samples provide the measured startup-progress difference.
+
+Bit names come from the installed public SDK. Apple's published XNU tag matches
+the version reported by this host's `uname` (`11417.121.6`): its
+[BSD information mapping](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/bsd/kern/proc_info.c)
+and [task-policy mapping](https://github.com/apple-oss-distributions/xnu/blob/xnu-11417.121.6/osfmk/kern/task_policy.c#L2115)
+provide a reference for interpreting these fields. In that reference the Darwin
+background bits reflect requested policy, while the suppression bit reflects
+effective suppression. The source reference is not a trace of this running
+kernel or proof of every scheduling/launch condition.
+
+These negative flag observations do not exclude all application policy, kernel
+wait conditions, code validation, scheduler effects or changes between samples.
+No kernel wait reason or continuous execution trace was obtained. The read-only
+addon, preload and periodic observations can themselves affect timing. This pair
+does not replace either complete 38/37-case collection or establish a correction.
+
+New result prefixes under `.scratch/` are
+`macos-node20-process-run-d78bdf9f-2e40-4e93-b6e0-980aafb67a63` and
+`macos-node20-process-run-c9d2302c-17d6-4247-b107-db55f4713691`, each with JSONL,
+TAP and terminal result files. Analysis is
+`analyze-macos-node20-processes-2026-11-02.mjs`; its output also retains the actual
+origins and public-header hashes. All 763 input/build hashes, original Node bytes
+and preceding 50 artifacts were reverified unchanged. No matching owned driver
+or compiled test command remained running at the final scoped check.
+
+The separate **22-artifact**, **229,065-byte** supplement is frozen in
+`.scratch/macos-owned-process-inventory-2026-11-02.json`, SHA-256
+`cab714180a7d4992e6a43a76ae66ddd9241c57adc3a29b1864dc6de795903754`.
+The original signal comparison and its 50-artifact inventory remain separate and
+unchanged. The recorded failure still prevents final acceptance. No supported
+product correction follows from these measured flags; a fresh host-application
+launch is the next proposed external-state comparison, retaining the complete
+original matrices and requirements.
+
+## Independent review of the original signal observation record
 
 Fixed candidate `4794af2f9935489ef2ce970d786f98768154cf82`, source branch
 `kevin/knowledge-expansion`, received two independent read-only reviews. The
