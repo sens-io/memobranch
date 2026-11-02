@@ -1,12 +1,12 @@
 # Selected local PDF pages and OCR
 
-Development source only; not published to npm. The import/save/read integration
-is under verification. The batch is not accepted: remaining macOS/final checks
-are open. The [Windows ownership correction](pdf-windows-host-verification-2026-10-29.md)
-has portable regression coverage and independent source review.
-Actual Windows platform verification is skipped by the user's request; this is
-not a passing Windows result.
-Use [the roadmap](remaining-roadmap.md) for acceptance status.
+Development source only; not published to npm. Import/save/read passed
+[local verification and independent review](git-executable-lookup-verification-2026-11-02.md),
+including the original complete macOS Node 20 collections. The
+[Windows ownership correction](pdf-windows-host-verification-2026-10-29.md)
+has portable regression coverage and independent source review. Actual Windows
+platform verification is skipped by the user's request, not passed.
+Use [the roadmap](remaining-roadmap.md) for the accepted scope.
 
 The existing [text-layer PDF import](pdf-import.md) remains the default. Optional
 processing renders exact selected pages and can recognize text with locally
@@ -118,4 +118,6 @@ treating OCR as the old format. Keep compatible readers together when sharing.
 
 The [core checkpoint](pdf-processing-core-verification-2026-10-28.md) retains real
 native successes and recognition failures; [independent review](pdf-processing-review-2026-10-29.md)
-retains corrections and open platform work. Neither record is full-batch acceptance.
+retains corrections and the platform work open at that checkpoint. The later
+[combined acceptance record](git-executable-lookup-verification-2026-11-02.md)
+closes the remaining macOS checks and records the Windows verification waiver.

@@ -21,6 +21,25 @@ identified process-ownership defect from implementation and independent review;
 its correction and review are recorded below.
 This waiver does not skip macOS/Linux checks or authorize pushing/deployment.
 
+## Current local acceptance
+
+All agreed batches 1–6 are accepted locally after the
+[final Git lookup repair and verification](git-executable-lookup-verification-2026-11-02.md).
+The original complete macOS Node 20 collections now pass under both implicit
+Git defaults in the inherited application environment, without rebooting.
+Node 22 full checks pass 1102 cases per default; Linux Node 20, the same archive
+on Node 20/22, strict OpenSpec and current dependency audits also passed.
+Independent source and final evidence reviews found no remaining confirmed issue
+within this scope. Windows actual execution remains skipped by request.
+This accepts development source locally; no push, npm publication or deployment
+was performed. Database changes, data migration and persistent configuration
+changes: none.
+
+## Historical investigation before the accepted repair
+
+The following paragraphs retain the earlier checkpoint states and unsuccessful
+attempts. Their open-gate descriptions are historical; current acceptance is above.
+
 The [macOS minimum-runtime investigation](macos-minimum-runtime-diagnosis-2026-10-29.md)
 retains complete failures and directly observes an unstarted/suspended Node 20
 child after repeated SDK activity. Later controls also reproduce it without
@@ -90,9 +109,9 @@ specified but not accepted; final verification must use the original environment
 | 2 | As-known-at reconstruction with explicit availability evidence; never infer knowledge from mutable Git dates | Accepted locally, including CLI/MCP/Harness/Web: 35 agent/CLI checks, 93 Web checks, 846 retained checks under each Git default, strict OpenSpec 28/28, audit 0, same installed artifact on Node 20/22, native browser/375px, fixed-candidate fixes and final checkpoint-text independent review passed. See [core verification](knowledge-availability-verification-2026-10-24.md) and [adapter verification](knowledge-availability-adapters-verification-2026-10-24.md). |
 | 3 | Local / Git pinned, read-only sharing under explicitly configured identities, current access and source checks | Accepted locally: 45 core/agent checks, 104 related Web checks, 880 retained checks under each Git default, strict OpenSpec 29/29, audit 0, the same 401-entry installed package on Node 20.0/22.17, actual browser/375px and independent fixed-candidate review passed. No cloud accounts or grant editor. See [verification](pinned-shared-wiki-verification-2026-10-24.md). |
 | 3b | Cloud memory sharing, added by the user on 2026-10-24 | Accepted locally: both self-hosted service and Git remote sharing. [Combined verification](cloud-host-verification-2026-10-26.md): native credential/template/check/foreground commands, Git CLI/MCP/Harness tests, 57 compiled Node 20 checks, 987 full checks under each Git default, strict OpenSpec 31/31, audit 0 and the same 448-entry installed package on Node 20/22. Prior service/client/Git and actual browser evidence is linked there. Implementation review covered 15/15 files; final acceptance-text review covered 8/8 files at `3c22972`, zero skipped, no confirmed issue. No hosted SaaS dependency, real service, account or grant has been created. |
-| 4 | Cross-vault / branch import and merge preview, separate approval, preserved origin and classification | Implemented in library/CLI/MCP/Harness/Web with bilingual guides. [Recovery and full-check checkpoint](shared-wiki-import-recovery-verification-2026-10-28.md): actual crash/cancel/dual-capture tests, 36 related checks on both runtimes, final recovery 8/8 on both, full 1041 under each Git default, strict specs 32/32 and independent records review 7/7 passed. [Same 457-entry archive](shared-wiki-package-verification-2026-10-28.md) passed Node 20/22 consumers; unchanged dependencies retain audit 0. [Actual browser checks](shared-wiki-web-verification-2026-10-28.md) passed. [Linux Node 20.0.0 supplement](shared-wiki-import-linux-verification-2026-10-28.md): complete 37/37 under each actually probed default. The original macOS minimum-runtime collection still failed 35/37; earlier samples show waiting before JavaScript, without establishing cause. That failure is retained, so the combined final gate and batch acceptance remain open. Another branch requires an explicitly configured checkout; no Git merge or real grant changes. |
-| 5 | Optional bounded local OCR and visual-page processing, preserved original PDF and honest extraction limits | [Combined checkpoint](pdf-processing-combined-verification-2026-10-29.md): selected local rendering/OCR, immutable encrypted media, authorized API/CLI reads and bilingual guides implemented under verification; actual mixed-PDF save/read, full 1078 under each Git default, strict 32/32, audit 0 and the same 477-entry archive on Node 20/22 passed. Source reviews covered 19/19 and 6/6 files; packaging review 7/7 plus follow-up 2/2 closed a direct-encryption verification gap. Linux Node 20 current 38/38 and original 37/37 passed under each actual default. [Windows ownership correction](pdf-windows-host-verification-2026-10-29.md) has 71/71 related checks on both runtimes, fresh 1094 complete checks under each actual Git default, strict 32/32, production audit 0 and the same 488-entry archive verified on Node 20/22. Independent review closed both cleanup findings; actual Windows platform verification is skipped by request. macOS waiter failures and final checks remain open, so no batch acceptance is claimed. No real service/account/host configuration change. |
-| 6 | Complete management/adapters, bilingual instructions, retained package/runtime checks and final independent review | Pending |
+| 4 | Cross-vault / branch import and merge preview, separate approval, preserved origin and classification | Accepted locally. [Recovery](shared-wiki-import-recovery-verification-2026-10-28.md), [browser](shared-wiki-web-verification-2026-10-28.md) and [final combined verification](git-executable-lookup-verification-2026-11-02.md) cover library/CLI/MCP/Harness/Web and bilingual instructions. The original complete macOS 37-case collection now passes under both actual defaults; old failures remain preserved. Another branch requires an explicitly configured checkout; no automatic Git merge or real grant changes. |
+| 5 | Optional bounded local OCR and visual-page processing, preserved original PDF and honest extraction limits | Accepted locally. [Native implementation and observations](pdf-processing-combined-verification-2026-10-29.md), [ownership correction](pdf-windows-host-verification-2026-10-29.md) and [final combined verification](git-executable-lookup-verification-2026-11-02.md) retain exact-byte/encryption/recovery checks, original complete macOS current 38/38 and original 37/37 under both defaults, and independent review. Actual Windows verification is skipped by request; arbitrary OCR quality is not proven. No real host configuration was created. |
+| 6 | Complete management/adapters, bilingual instructions, retained package/runtime checks and final independent review | Accepted locally within the agreed scope. [Final verification](git-executable-lookup-verification-2026-11-02.md): 1102 full checks per actual default, 79 related macOS Node 20 checks, Linux Node 20, the same 502-entry archive on Node 20/22, strict OpenSpec 33/33, project/consumer audits 0 and independent fixed-candidate review. Existing browser/native evidence keeps its component scope. No publication, deployment or external model-quality claim. |
 
 ## Acceptance boundaries
 

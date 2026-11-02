@@ -1,8 +1,9 @@
 # 明确批准的 Wiki 复制与人工整合（开发源码）
 
-库、命令行、MCP、DeepSeek Harness 与网页的复制及人工整合功能已实现，接口正在验证。
-实际浏览器及同一安装包的 Node 20/22 消费者检查已通过各自范围；macOS 完整最低版本适配器
-集合仍有两项 CLI 等待观察失败，整批尚未验收，也未发布 npm。
+库、命令行、MCP、DeepSeek Harness 与网页的复制及人工整合已通过
+[本地验收与独立审查](git-executable-lookup-verification-2026-11-02.md)。实际浏览器和同一
+安装包的 Node 20/22 检查保留原有范围；修正 Git 查找方式后，原有 macOS Node 20
+完整集合也已通过。仍为开发源码，尚未发布 npm。
 [English](shared-wiki-import.md) · [路线图](remaining-roadmap.md) ·
 [核心验证记录](shared-wiki-integration-core-verification-2026-10-26.md)
 
@@ -149,7 +150,8 @@ amem wiki apply --root "$DESTINATION" --file "$PRIVATE_INTEGRATION_FILE"
 [HTTP、页面事件和实际浏览器检查](shared-wiki-web-verification-2026-10-28.md)已有记录，
 [同一安装包的 Node 20/22 消费者检查](shared-wiki-package-verification-2026-10-28.md)已通过；
 [Linux 的 Node 20.0.0 完整集合](shared-wiki-import-linux-verification-2026-10-28.md)在实际核验的
-两种默认分支下各通过 37/37；macOS 完整集合的两项失败和整批验收仍待完成。
+两种默认分支下各通过 37/37。后续[完整验收记录](git-executable-lookup-verification-2026-11-02.md)
+补齐了 macOS 两种默认分支下的原有完整集合，无需重启 Mac。
 
 数据库变更：无。数据迁移：无。资料库配置版本变更：无。
 不自动授予真实共享权限，不推送、不发布、不部署，也不安装导出的技能。

@@ -2,8 +2,8 @@
 
 Repository: `sens-io/memobranch`. Source branch: `kevin/knowledge-expansion`.
 Final tested runtime: `9321a4cdb41e2a12765d9c8a670fcc09f4ddb112`.
-All executable checks below have completed. Final independent review of this
-acceptance record is pending; roadmap/task acceptance has not yet been changed.
+All executable checks and independent evidence/scope reviews have completed.
+All agreed roadmap batches 1–6 are accepted locally within the boundaries below.
 
 ## What changed and why a restart is unnecessary
 
@@ -117,7 +117,7 @@ Only regular files were hashed; no filesystem FIFO was read. Counts of artifacts
 archive entries, repeated test runs and distinct tests are not interchangeable.
 Ignored scratch evidence is retained locally, not included in Git or npm.
 
-## Roadmap scope and remaining acceptance action
+## Roadmap scope and independent acceptance review
 
 The [scoped requirement mapping](roadmap-completion-audit-2026-10-29.md) already
 maps batches 1–6 and every PDF task to implementation, native observations,
@@ -128,11 +128,18 @@ those components are unchanged, and the fresh complete/package checks cover
 their integration with this Git repair. This does not claim new browser/native
 tool executions or general OCR/model quality.
 
-Final record review must confirm that this evidence supports closing the 12 PDF
-tasks, the one combined import gate, the eight Git-lookup tasks and batches 4–6.
-Until that review, their open status remains explicit. Batches 1–3b keep their
-previous local acceptance. No agreed implementation item has been identified as
-missing; that statement is limited to the agreed roadmap and reviewed scenarios.
+Two independent read-only reviews of committed record
+`fdba6c18bc9d70874156b2c6a7a66113ff782ff0` each read the report in full (1/1,
+zero skipped) and independently verified its 96 evidence hashes and original
+results. The technical review also verified all 578 current inputs, 763 baseline
+copies, 98 original test inputs and Linux/package identities. The scope review
+mapped every remaining task to the agreed implementation and retained evidence.
+Both supported acceptance and found no confirmed remaining issue in their scopes.
+
+This closes the 12 PDF tasks, the combined import gate, the eight Git-lookup
+tasks and batches 4–6. Batches 1–3b keep their previous local acceptance. No
+agreed implementation item remains identified as missing; this conclusion is
+limited to the agreed roadmap and reviewed scenarios, not unknown future defects.
 
 Actual Windows execution/ACL verification is **skipped by the user's request**,
 never passed. There is no new GitHub CI, external model quality, amd64 or arbitrary

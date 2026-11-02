@@ -114,7 +114,7 @@ flowchart LR
 
 > **本机 PDF 导入（开发源码）：** [先预览再导入有文字层的 PDF，保留原始字节及页码](docs/pdf-import.md)。解析有大小、页数和期限限制，可取消；只保存证据，不做 OCR、视觉还原或自动批准。本批尚未发布到 npm。
 
-> **可选 PDF 指定页面处理（验证中）：** [本机渲染与 OCR、不可变原件和页面保存、按权限本机读取](docs/local-pdf-processing_CN.md)。保留原有文字层默认行为；识别文字未经验证，macOS 最低运行版本及最终验收检查仍未完成。Windows 实机验证按要求跳过。尚未发布到 npm。
+> **可选 PDF 指定页面处理（开发源码）：** [本机渲染与 OCR、不可变原件和页面保存、按权限本机读取](docs/local-pdf-processing_CN.md)。导入、保存和读取已通过[本地验收](docs/git-executable-lookup-verification-2026-11-02.md)，包括 macOS 的 Node 20 完整检查；识别文字仍需审核。Windows 实机验证按要求跳过。尚未发布到 npm。
 
 > **指定提交的 Wiki 读取（开发源码）：** [读取完整本地提交中的页面及关联资料](docs/wiki-revision-views.md)，仍检查当前权限、撤回和密钥是否可用。本地只读查看，不是跨账号共享，也不证明历史事实。本批尚未发布到 npm。
 
@@ -132,7 +132,7 @@ flowchart LR
 
 > **固定版本的共享 Wiki（开发源码）：** [按明确配置的读者权限，读取本机／Git 来源的固定提交](docs/pinned-shared-wiki_CN.md)，继续检查来源、密钥、撤回和到期。库、命令行、MCP/Harness 及网页均已通过本地验收；不新增云端账号，不导入、合并或追回离线明文，尚未发布 npm。
 
-> **明确复制与人工整合 Wiki（开发源码）：** [复制和 Wiki 批准分别进行](docs/shared-wiki-import_CN.md)，保留已编译材料的来源、本机证据和继承限制。库核心已验证，命令行／MCP／Harness／网页接口正在验证；整批验收待完成，尚未发布 npm。
+> **明确复制与人工整合 Wiki（开发源码）：** [复制和 Wiki 批准分别进行](docs/shared-wiki-import_CN.md)，保留已编译材料的来源、本机证据和继承限制。库、命令行／MCP／Harness／网页接口及完整运行版本检查均已通过[本地验收与独立审查](docs/git-executable-lookup-verification-2026-11-02.md)。尚未发布 npm。
 
 > **云端与 Git 远端共享（开发源码）：** [自行运行读取服务，或先更新私有 Git 缓存再读取固定版本](docs/cloud-sharing_CN.md)。管理员命令可生成私有账号模板、检查已有授权并在前台启动服务，继续检查当前权限、撤回和到期。[本地验证和独立复核](docs/cloud-host-verification-2026-10-26.md)已通过，尚未发布到 npm。
 

@@ -1,9 +1,10 @@
-# Explicit compiled Wiki imports (development candidate)
+# Explicit compiled Wiki imports (development source)
 
-The library, CLI, MCP and Harness copy/integration operations are implemented.
-Installed consumers and actual browser checks have passed their recorded scopes.
-Two macOS minimum Node 20 CLI wait observations still fail in the complete adapter set.
-This is not batch acceptance, an npm release, Git branch merge or a cloud sharing service.
+Library, CLI, MCP, Harness and Web copy/integration operations passed
+[local acceptance and independent review](git-executable-lookup-verification-2026-11-02.md).
+Installed consumers and actual browser checks retain their recorded scopes;
+the previously failed complete macOS Node 20 collections now pass after the Git
+lookup repair. This development source has not been published to npm.
 
 Reuse the [host-owned pinned sharing configuration](pinned-shared-wiki.md). Do not
 give requests source paths, keys, identities or grants. Configuring real access
@@ -183,7 +184,9 @@ complete review/request allowance in addition to the core's lower canonical plan
 limit. [HTTP/DOM and actual-browser verification](shared-wiki-web-verification-2026-10-28.md)
 is recorded; the [same installed archive passed Node 20/22 consumers](shared-wiki-package-verification-2026-10-28.md).
 The [complete Linux Node 20.0.0 collection passed 37/37 under both actual Git defaults](shared-wiki-import-linux-verification-2026-10-28.md).
-The failed macOS minimum-runtime aggregate and whole-batch acceptance remain pending.
+The later [combined acceptance record](git-executable-lookup-verification-2026-11-02.md)
+also passes the original complete macOS collections under both actual defaults,
+closing the remaining whole-batch gate without rebooting the Mac.
 
 Bounds: 25 requested/50 dependent source pages; a complete import artifact, copy
 plan or signed manual integration plan is at most 1,000,000 UTF-8 bytes. Integration
