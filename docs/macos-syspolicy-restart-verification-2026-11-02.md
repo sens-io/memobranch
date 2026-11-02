@@ -42,8 +42,7 @@ Subsequent ordinary-user `launchctl print` and the specific PID query both exite
 the process start remains November 2 at **09:33:53 Asia/Shanghai**. Thus neither
 the command result nor service metadata supports a successful restart.
 
-The original Node 20 executable hash and all **763** retained regular source/build
-inputs were reverified unchanged while the command awaited its result. There was
+No tracked runtime, test or dependency files changed in this attempt. There was
 no successful intervention, so the planned post-restart four-matrix run was **not
 started**. The latest unchanged uninstrumented complete results remain those in
 the [application-restart report](macos-postrestart-verification-2026-11-02.md):
@@ -84,3 +83,24 @@ not been restarted by this task. Batch 4–6 acceptance and **12+1** combined
 OpenSpec items remain open. Actual Windows execution remains skipped by request.
 No tracked runtime/test/dependency changes, database changes, data migration or
 persistent configuration changes occurred. No push, publication or deployment.
+
+## Independent review and evidence wording correction
+
+Two isolated read-only reviewers examined committed candidate
+`ad41d7dd977fa45e287356c293905871199717ef`, source branch
+`kevin/knowledge-expansion`, against `6a2992761a26ee6ed4c91cb9d1ead0a0751f8bf0`.
+Both manually covered **5/5** changed documents, with zero skipped, and
+independently reverified all **10/10** regular artifacts and the preceding 18.
+The native reviewer found no required correction. The scope reviewer identified
+one evidence-wording improvement, addressed in this record:
+
+| Source branch | Review observation | Correction |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | The parent tool transcript recorded a 763-input check while the command was pending, but the ten frozen service artifacts did not retain that check or its timing. | Removed that timing statement from the state-verification section; it now states the directly reviewable absence of tracked runtime, test and dependency changes. No raw evidence was altered or new execution implied. |
+
+Both reviewers confirmed that a submitted command is not a successful restart,
+the refusal came from macOS rather than automatic approval review, and the
+post-restart tests were not run. They did not execute tests, diagnostics,
+sampling, administrator/service operations, network requests or writes.
+This review does not close the failing functional gates or authorize another
+system action.
