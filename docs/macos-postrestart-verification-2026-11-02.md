@@ -6,6 +6,9 @@ Runtime candidate remains `e44c096e4479f465f16e61ccd5d47d1243023a41`.
 **Restarting the application did not remove the known failure. No product
 correction or final acceptance is claimed.** This follows the
 [actual-child observations](macos-signal-state-comparison-2026-11-02.md).
+This report records the state before administrator authorization. The user later
+authorized two bounded samples; the [subsequent sampling record](macos-administrator-sampling-2026-11-02.md)
+records the first actual control result and the remaining operation.
 
 ## Verified restart and unchanged complete collections
 
