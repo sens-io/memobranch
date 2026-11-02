@@ -532,13 +532,13 @@ async function executeGit(
     throw notStarted(error);
   }
   try {
-    return await launchGit(executable, args, options, signal, remaining(), timeoutMs);
+    return await launchGit(executable, args, options, signal, remaining(), timeoutMs, started + timeoutMs);
   } catch (error) {
     const failure = error as NodeJS.ErrnoException & { gitNotStarted?: boolean };
     if (executable === 'git' || failure.gitNotStarted !== true || !['ENOENT', 'ENOTDIR', 'EACCES'].includes(failure.code ?? '')) throw error;
     // A missing interpreter or a file changed after discovery can invalidate
     // our selection. Delegate search once, only after confirmed spawn failure.
-    return launchGit('git', args, options, signal, remaining(), timeoutMs);
+    return launchGit('git', args, options, signal, remaining(), timeoutMs, started + timeoutMs);
   }
 }
 
@@ -599,6 +599,7 @@ function launchGit(
   signal: AbortSignal | undefined,
   timeoutMs: number,
   configuredTimeoutMs: number,
+  deadline?: number,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(cancellationError()); return; }
@@ -649,7 +650,7 @@ function launchGit(
     };
     // Abort may be dispatched outside the invoking operation's async context.
     const onAbort = AsyncResource.bind(() => stop(cancellationError()));
-    const timeout = setTimeout(() => stop(new AgentMemoryError(code, `Git operation timed out after ${configuredTimeoutMs} milliseconds`, { timedOut: true, timeoutMs: configuredTimeoutMs })), timeoutMs);
+    const timeout = setTimeout(() => stop(new AgentMemoryError(code, `Git operation timed out after ${configuredTimeoutMs} milliseconds`, { timedOut: true, timeoutMs: configuredTimeoutMs })), deadline === undefined ? timeoutMs : Math.max(0, deadline - performance.now()));
     const collect = (chunks: Buffer[], chunk: Buffer) => {
       outputBytes += chunk.length;
       if (outputBytes > maxBuffer) stop(new AgentMemoryError(code, 'Git operation exceeded the output limit'));
