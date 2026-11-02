@@ -65,8 +65,12 @@ was prepared without execution at that checkpoint. The user subsequently
 authorized at most two scoped samples; [both have now completed](macos-administrator-sampling-2026-11-02.md).
 The captured failing child waits in the OS execution-validation path for
 `syspolicyd` before project JavaScript. Its delayed response/correction remains
-unverified; a proposed service restart needs a separate user decision and has
-not been performed. Complete acceptance requirements remain unchanged.
+unverified. The user then separately authorized one service-restart attempt;
+[macOS refused it under System Integrity Protection](macos-syspolicy-restart-verification-2026-11-02.md).
+Read-only metadata still shows the same running PID and no service exit. No
+post-restart test matrix was started because no restart succeeded. Both samples
+and the single restart attempt are consumed. Complete acceptance requirements
+remain unchanged; no broader system action is authorized.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

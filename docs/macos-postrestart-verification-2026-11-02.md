@@ -9,6 +9,8 @@ correction or final acceptance is claimed.** This follows the
 This report records the state before administrator authorization. The user later
 authorized two bounded samples; the [subsequent sampling record](macos-administrator-sampling-2026-11-02.md)
 records both actual results and their remaining acceptance limits.
+The later separately authorized [service-restart attempt](macos-syspolicy-restart-verification-2026-11-02.md)
+was refused by System Integrity Protection; it did not change the retained results.
 
 ## Verified restart and unchanged complete collections
 

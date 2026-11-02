@@ -5,6 +5,10 @@ Starting documentation candidate: `88553c665276380d58829783d2ef0d21aa77771a`.
 Runtime remains `e44c096e4479f465f16e61ccd5d47d1243023a41`.
 The [complete post-restart failures](macos-postrestart-verification-2026-11-02.md)
 remain open. **This is diagnostic evidence, not a product correction or acceptance.**
+After this capture checkpoint, the user separately authorized the proposed
+service restart once. macOS refused it because System Integrity Protection is
+engaged; [the attempt and unchanged service state](macos-syspolicy-restart-verification-2026-11-02.md)
+are recorded separately. No correction or extra sampling authority follows.
 
 ## Exact authority and first actual result
 
@@ -227,7 +231,10 @@ Its FIFO is metadata only and was not content-read or hashed. Prior 29/24 hashes
 were reverified unchanged. **All two authorized live samples are used; none
 remain.** No additional live sample is authorized by the earlier grant.
 
-## Separate proposed service action — not authorized or performed
+## Separate proposed service action — state at the capture checkpoint
+
+The following records the proposal at candidate `b7d6e221`, before the separate
+authorization and refused attempt linked at the start of this report.
 
 The next proposed diagnostic intervention is one restart of the identified
 launch-validation service, followed by the unchanged uninstrumented complete

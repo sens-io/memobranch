@@ -226,7 +226,11 @@ ordinary-user system sampler explicitly requires root. A bounded administrator
 control was prepared but not authorized or executed at that checkpoint. The user
 subsequently authorized two bounded samples; the [administrator sampling record](macos-administrator-sampling-2026-11-02.md)
 records both actual samples, including the failing child's OS validation wait.
-No correction or separate service action has been verified. Final acceptance
+The user then separately authorized one service-restart attempt, which
+[macOS refused under System Integrity Protection](macos-syspolicy-restart-verification-2026-11-02.md).
+Read-only metadata still identifies the original running service PID, one run
+and no exit. No correction or successful service restart has been verified;
+the unchanged four-matrix post-restart run was not started. Final acceptance
 and the original requirements remain open.
 
 Database changes: none. Data migration: none. Real configuration changes: none.
