@@ -187,6 +187,19 @@ product correction follows from these measured flags; a fresh host-application
 launch is the next proposed external-state comparison, retaining the complete
 original matrices and requirements.
 
+Fixed process-observation candidate `d64cb8b8802fe0e5225b96a0e580367e69387c65`,
+source branch `kevin/knowledge-expansion`, then received two independent read-only
+reviews. Each covered the complete **1/1** document diff, zero skipped, checked
+all 22 artifact hashes/bytes, and independently validated raw TAP results,
+origins, actual child bindings and sample counts/values. The native review also
+read the complete helper/hook/driver/analyzer/control sources, checked the two
+public-header hashes and independently opened Apple's fixed-version references
+to verify the flag mapping. Neither review found a confirmed P1/P2 or required
+minor correction. Neither ran tests, new diagnostics, analysis scripts,
+installation or mutations. This validates the process-observation record within
+those scopes; it does not close the application-launched failure or accept the
+unfinished roadmap.
+
 ## Independent review of the original signal observation record
 
 Fixed candidate `4794af2f9935489ef2ce970d786f98768154cf82`, source branch
