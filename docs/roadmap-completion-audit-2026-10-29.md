@@ -213,6 +213,12 @@ the original complete Node 20 Terminal matrix passed both actual defaults,
 38/38 and 37/37. Application-launched complete failures still reproduce, including
 temporary environment and terminal-mode controls, so the known failure and final
 combined acceptance remain open. No task box was checked on that comparison alone.
+The [later signal-state observation](macos-signal-state-comparison-2026-11-02.md)
+compared the actual original 19-case file with a diagnostic preload: application
+18/19, Terminal 19/19, with measured native states identical around 24 selected
+CLI spawns. Both actual corresponding CLI PIDs also received the same system
+notification. This is a bounded diagnostic pair, not a replacement complete gate,
+an established root cause, a product correction or final acceptance.
 
 Database changes: none. Data migration: none. Real configuration changes: none.
 Optional source-level processor setup remains documented; no real host setting,

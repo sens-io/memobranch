@@ -51,6 +51,12 @@ actual defaults (38/38 and 37/37), while application-launched complete runs stil
 fail. Temporary startup-setting controls and the tool's terminal mode did not
 close that failure. Both contexts also emit the same system-policy warnings;
 their presence is not a proven cause. Combined acceptance remains withheld.
+The [signal-state supplement](macos-signal-state-comparison-2026-11-02.md) records
+an observed original single-file pair (application 18/19, Terminal 19/19).
+Measured native states matched around all 24 selected CLI spawns, including the
+failed prepare case. The same exact-PID system notification occurred for both
+corresponding children. Neither observation identifies a correction or closes
+the known failure; complete-collection requirements remain unchanged.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
