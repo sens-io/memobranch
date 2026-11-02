@@ -109,7 +109,9 @@ symlink is rejected. The sole profiling command is:
 Passwords are entered only in the OS dialog, not passed to this program. The
 command profiles only that target and saves locally under a private unique
 `.scratch/macos-owned-spindump-admin-control-UUID/` directory. Controller/target
-timeouts bound the pending dialog; sampler time limit bounds the tool itself.
+timeouts request termination of the owned processes; cancellation of the native
+dialog and privileged command has not been verified. The command requests the
+documented eight-second sampler limit; its privileged execution remains untested.
 If the target ends before authorization finishes, the identity guard rejects it.
 The controller propagates nonzero sampler exit and requires a nonempty readable
 report after a successful exit. The first source draft is retained separately;
@@ -119,6 +121,9 @@ This prepared synthetic control is not an actual failing-child capture. Any
 later, separately authorized capture of the reproduced failure must retain the
 same target-ownership checks and profiling scope. It cannot count as an
 uninstrumented acceptance run, and there is no guarantee it will establish cause.
+The proposed authorization is bounded to at most two one-second captures of this
+project's newly created Node 20 test children: the synthetic capability control,
+then, if useful, one reproduced failing child. No such authorization is assumed.
 
 ## Frozen evidence and outstanding acceptance
 
@@ -139,6 +144,22 @@ execution evidence.
 
 Actual Windows execution remains skipped by the user's separate instruction.
 Another Mac remains unavailable; no repeated application restart is requested.
+
+## Independent review
+
+Fixed candidate `5dfc347adc309be2b3bcf4f16e94b818e8eb3074`, source branch
+`kevin/knowledge-expansion`, received two independent read-only reviews. The
+scope review covered all **4/4** document diffs; the native review read this
+complete new report **1/1** and the designated native/controller/control sources.
+Both skipped zero files, independently verified all 27 artifact hashes/bytes,
+the original Node, 763 inputs and preceding 22 artifacts, and checked the complete
+raw results. Neither confirmed a new P1/P2 or required minor correction. The
+administrator scheme's limits are source-review findings; successful authority,
+capture, cancellation, timeout and report readback are still unverified. No
+reviewer ran tests, diagnostics, analysis scripts, administrator mode, networking,
+installation or mutations. These reviews do not close the known failure or accept
+the unfinished roadmap. The timeout wording above explicitly retains this limit.
+
 Database changes: none. Data migration: none. Persistent configuration changes:
 none. No tracked runtime/test/dependency change, push, npm publication,
 deployment, real account, service, grant or host security-policy change occurred.
