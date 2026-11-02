@@ -273,3 +273,28 @@ authorized administrator samples were performed; no host security-policy change,
 tracked runtime/test/dependency change, push, publication, deployment, account,
 service or grant change occurred. Passwords were handled only by the native OS
 dialog, not this program.
+
+## Independent review of the actual capture
+
+Two isolated read-only reviewers examined candidate
+`b7d6e221fcbde7e6295a5653ea5bd3d45fc98296`, source branch
+`kevin/knowledge-expansion`, against correction candidate
+`3a9e6c959f521e4ec82a9d62633204ab5c8115d6`. Both covered **4/4** changed documents,
+with zero skipped, and independently verified all **18/18** regular artifacts
+and the prior 29/24 inventories. FIFO entries were inspected as metadata only.
+
+The native-evidence reviewer read the complete 416-line report, 88-line trace,
+observations, logs, command, service records and restart proposal. The scope
+reviewer separately checked process identity, the exhausted two-sample grant,
+unchanged failing gates, and the **12+1** unaccepted OpenSpec items. Neither found
+a new confirmed issue or required correction in this candidate. Their agreement
+accepts the bounded evidence statement, not product functionality or a service
+restart. No reviewer ran tests, diagnostics, sampling, administrator operations,
+network requests or writes.
+
+| Source branch | Review result | Remaining work |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | No new confirmed issue in the reviewed capture and documentation. | The failure is not corrected; obtain a separate decision on the proposed service action and verify any correction with the unchanged full gates. |
+
+The service action remains **unapproved and unexecuted** at this review checkpoint;
+native root cancellation remains unverified and no live-sampling allowance remains.
