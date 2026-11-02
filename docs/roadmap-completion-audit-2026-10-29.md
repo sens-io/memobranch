@@ -207,6 +207,13 @@ No additional public operation is designated missing by this requirement map;
 that is a bounded implementation audit, not proof that all functionality is
 defect-free. No task box or whole-goal completion status changed on that basis.
 
+The [November 2 same-day supplement](macos-launch-context-comparison-2026-11-02.md)
+updates the launch-context evidence without erasing the checkpoint results above:
+the original complete Node 20 Terminal matrix passed both actual defaults,
+38/38 and 37/37. Application-launched complete failures still reproduce, including
+temporary environment and terminal-mode controls, so the known failure and final
+combined acceptance remain open. No task box was checked on that comparison alone.
+
 Database changes: none. Data migration: none. Real configuration changes: none.
 Optional source-level processor setup remains documented; no real host setting,
 service, account or grant was modified. No push, npm publication or deployment.

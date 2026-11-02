@@ -45,6 +45,12 @@ successful real-child capture at the loader's first instruction, and the same
 complete failure using a verified official executable copy. It preserves failed
 and interrupted attempts and prepares an outside-application comparison; the
 cause, correction and final acceptance remain open.
+The [November 2 same-day comparison](macos-launch-context-comparison-2026-11-02.md)
+now records the original complete Node 20 Terminal matrix passing under both
+actual defaults (38/38 and 37/37), while application-launched complete runs still
+fail. Temporary startup-setting controls and the tool's terminal mode did not
+close that failure. Both contexts also emit the same system-policy warnings;
+their presence is not a proven cause. Combined acceptance remains withheld.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |
