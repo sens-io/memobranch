@@ -73,6 +73,11 @@ and the single restart attempt are consumed. Complete acceptance requirements
 remain unchanged; no broader system action is authorized.
 The user chose not to restart the Mac for now. This keeps the macOS gate open;
 it is not a platform-verification waiver or permission for another intervention.
+The [ordinary-user follow-up](macos-readonly-launch-followup-2026-11-02.md)
+checks execution-assessment output and reads owned process signature fields
+before/after SDK activity, retaining an incomplete first comparison. A persistent
+reader observes matching fields while a version-only child still takes 8162 ms.
+No correction follows; restarting the computer is not an acceptance prerequisite.
 
 | Batch | Deliverable | State |
 | --- | --- | --- |

@@ -232,6 +232,10 @@ Read-only metadata still identifies the original running service PID, one run
 and no exit. No correction or successful service restart has been verified;
 the unchanged four-matrix post-restart run was not started. Final acceptance
 and the original requirements remain open.
+The [later ordinary-user comparison](macos-readonly-launch-followup-2026-11-02.md)
+does not require a computer restart or further administrator authority. It records
+matching signature metadata at four points and a slow 8162 ms version-only child,
+not an accepted complete gate or a correction.
 
 Database changes: none. Data migration: none. Real configuration changes: none.
 Optional source-level processor setup remains documented; no real host setting,
