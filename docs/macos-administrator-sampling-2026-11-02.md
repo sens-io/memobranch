@@ -36,7 +36,7 @@ Raw report, target/client logs and observations are preserved in
 
 ## Prepared second operation, still unexecuted at this checkpoint
 
-The remaining operation is prepared in three ignored files:
+At candidate `180397b`, the remaining operation was prepared in three ignored files:
 
 - `.scratch/macos-spindump-failure-capture-v4-2026-11-02.mjs` — ordinary-user controller.
 - `.scratch/macos-spindump-request-v2-2026-11-02.mjs` — fixed system command builder.
@@ -103,6 +103,59 @@ v4 guard and interrupt folders respectively:
 These verify diagnostic safety paths, not library functionality or privileged
 cancellation. No second administrator operation was run during these checks.
 
+## Review correction: keep the ordinary process group owned after command exit
+
+Independent review of fixed candidate `180397b658c857f80ff72043da937b9ededc0320`
+covered all **3/3** document diffs for scope and this complete new report **1/1**
+plus its designated sources for native safety; neither skipped a file. Both
+verified all 29 regular artifacts and their bytes, without reading FIFO contents.
+The native review identified a P2 in v4's cleanup. The scope review also found
+an older audit paragraph needed a historical qualification; that text is corrected.
+
+| Source branch | Confirmed diagnostic issue | Correction / current verification |
+| --- | --- | --- |
+| `kevin/knowledge-expansion` | v4 `stop()` skipped a process group once its command leader had exited. A still-live descendant could retain the output pipe, while cleanup then waited forever for close. | A separate ordinary Node 22 guard now remains the live group leader until cleanup. Command completion and guard/pipe completion are distinct; group signalling remains owned even after the command exits. The fixed descendant control is described below; independent re-review remains required before the second sample. |
+
+The active controller is now
+`.scratch/macos-spindump-failure-capture-v6-2026-11-02.mjs`, using
+`.scratch/macos-owned-group-controller-v2-2026-11-02.mjs` and
+`.scratch/macos-owned-group-guard-2026-11-02.mjs`. The fixed system command builder
+and CLI-observation hook remain unchanged. The extra ordinary guard is part of
+the diagnostic process tree, not a production change or an uninstrumented gate.
+
+The guard uses a private parent IPC channel, removes its transport variables from
+the actual command's environment, and does not exit merely because that command
+exits. Parent disconnection terminates its owned ordinary group; cleanup signals
+that group while the guard still reserves its identity. An unexpected lost guard
+or unconfirmed pipe close is recorded as uncertainty; the controller does not
+blindly signal a potentially reused group or wait indefinitely for that close.
+This does not establish cancellation of native administrator/root processes.
+
+Fresh v6 ordinary-user results are machine-recorded in
+`.scratch/macos-spindump-group-controls-2026-11-02.json`: plan **0**, wrong-child
+guard **0** with inner shell **65**, interrupt **130**, descendant control **0**.
+The interrupt observations themselves record interruption and actual process
+ends; the external control record separately saves the outer exit code. The
+earlier v4 outer 130 was observed in the parent tool result, not its private JSON.
+
+In the required descendant boundary, command **64165** exited **0** while child
+**64166** remained alive, held the output pipe and was verified in guard **64163**'s
+group. Cleanup then ended the guard and the child's PID was confirmed missing.
+Guard and interrupt checks also recorded the ordinary guards' terminal states,
+without ownership loss. These are diagnostic regressions, not library acceptance.
+
+The correction supplement contains **24 regular artifacts**, **46,477 bytes**, in
+`.scratch/macos-group-correction-inventory-2026-11-02.json`, SHA-256
+`b860493441c107d220e75461cc161413387e10e129b9e003074790a1a63b6df3`.
+Six FIFO entries are metadata only, never content-read. All earlier 29 artifact
+hashes still match. No matching ordinary group guard remained live at the check.
+The active controller / group-controller / guard SHA-256 values are:
+`50c1b706ad92c330c90ec0722fa7bbbf90972dcac26fef53a91907e490c5a528`,
+`ce13cae5eb36fdf6f22149d6f76b9ac5eaa07e816ba289940d360cc6363d5013`,
+`cbccd2d19cbb9131faec7a17c63bb388ef201e659e05d46a3524a1d0baf5e8e4`.
+The authorized count remains **1 used, 1 remaining**; the second operation is
+still unexecuted at this correction checkpoint.
+
 ## Frozen evidence and remaining acceptance
 
 The **29 regular artifacts**, **130,003 bytes**, are frozen in
@@ -113,7 +166,7 @@ their contents were not read or content-hashed. Artifact totals are not tests.
 The preceding 27 artifacts, original Node and all 763 inputs were reverified
 unchanged. A scoped read found no matching ordinary-user controls left running.
 
-The active controller, builder and hook SHA-256 values are respectively:
+At candidate `180397b`, the initial controller, builder and hook SHA-256 values were:
 `193b03e8247afc67f9fbe43c5495fd5673f8bfb9510187a9bc6eee4112a62629`,
 `cb6881d414d2cca3a5e4176170cb4275302ccbef22a0b4686ce2e9b1a1153702`,
 `64ea6d78fcb1ffb4fe71c4a32ccbd5fde700a5f9066171411f1b0c7a61637c89`.

@@ -223,7 +223,9 @@ The [post-restart verification](macos-postrestart-verification-2026-11-02.md)
 confirms a new actual application process and still-failed complete collections
 under both defaults. Child-thread inspection did not obtain a task port, and the
 ordinary-user system sampler explicitly requires root. A bounded administrator
-control is prepared only; it has not been authorized or executed. Final acceptance
+control was prepared but not authorized or executed at that checkpoint. The user
+subsequently authorized two bounded samples; the [administrator sampling record](macos-administrator-sampling-2026-11-02.md)
+records the first actual control and the remaining operation. Final acceptance
 and the original requirements remain open.
 
 Database changes: none. Data migration: none. Real configuration changes: none.
